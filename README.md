@@ -15,11 +15,14 @@ mesmo a um Client alterado.
   **Cancelar**) ou a mensagem da última tentativa.
 - Dois temas, **Sakura Dark** (padrão) e **Nekkora Light**, com os tokens e logos da Nekkora-lib
   ([origem e mapeamento](docs/design/tokens-e-ativos.md)). A troca é o botão de meio círculo na barra de título.
+- **Entrar** abre o navegador padrão na Platform; o aplicativo espera o retorno local e só abre a tela inicial depois
+  que a Platform confirma ([contrato da entrada](docs/login-pelo-navegador.md)).
 - Depois da entrada, uma tela inicial **vazia**.
 - Em disco, só a preferência de tema. Nenhum login é guardado: ao fechar e abrir de novo, **Entrar** volta a ser
   necessário.
 
 Senha e código de verificação nunca são digitados no aplicativo: a entrada acontece no navegador, na conta Nekkora.
+A sessão dura 15 minutos, sem renovação, e fica só em memória.
 
 ## Estrutura
 
