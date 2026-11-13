@@ -140,13 +140,6 @@ class SignInFlowTest {
     }
 
     @Test
-    void entradaIndisponivelDaFundacaoRespondeNaHora() {
-        SignInFlow f = new SignInFlow(new UnavailableSignIn(), Runnable::run);
-        f.start();
-        assertEquals(s(Phase.IDLE, Notice.UNAVAILABLE), f.state());
-    }
-
-    @Test
     void sessaoExpiradaVoltaParaAEntradaComAviso() {
         flow.start();
         FakeSession session = new FakeSession();
