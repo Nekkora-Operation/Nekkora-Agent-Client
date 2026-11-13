@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.nekkora</groupId>
+    <artifactId>nekkora-agent-client</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+    <name>Nekkora Agent (Client)</name>
+    <description>Aplicativo desktop do cliente Nekkora. Nao contem telas nem modulos administrativos.</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.build.outputTimestamp>2026-11-13T00:00:00Z</project.build.outputTimestamp>
+        <flatlaf.version>3.7.2</flatlaf.version>
+        <junit.version>5.11.4</junit.version>
+        <!-- testes que abrem janela ficam fora do padrao; -Pdesktop os inclui -->
+        <excluded.groups>desktop</excluded.groups>
+    </properties>
+
+    <dependencies>
+        <!-- UNICA dependencia de execucao. Inventario e licencas: THIRD-PARTY-NOTICES.md -->
+        <dependency>
+            <groupId>com.formdev</groupId>
+            <artifactId>flatlaf</artifactId>
+            <version>${flatlaf.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>nekkora-agent-client</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.14.0</version>
+                <configuration>
+                    <compilerArgs>
+                        <arg>-Xlint:all,-serial,-this-escape</arg>
+                        <arg>-Werror</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <excludedGroups>${excluded.groups}</excludedGroups>
+                    <systemPropertyVariables>
+                        <java.awt.headless>${surefire.headless}</java.awt.headless>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.nekkora.client.ClientMain</mainClass>
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <!-- bibliotecas de execucao em target/lib, para o empacotamento (tools/package-windows.ps1) -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.8.1</version>
+                <executions>
+                    <execution>
+                        <id>runtime-libs</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>headless-padrao</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <surefire.headless>true</surefire.headless>
+            </properties>
+        </profile>
+        <profile>
+            <!-- inclui os testes de janela (tag "desktop"): precisam de uma area de trabalho; nao enviam teclas ao sistema -->
+            <id>desktop</id>
+            <properties>
+                <excluded.groups>nenhum</excluded.groups>
+                <surefire.headless>false</surefire.headless>
+            </properties>
+        </profile>
+    </profiles>
+</project>

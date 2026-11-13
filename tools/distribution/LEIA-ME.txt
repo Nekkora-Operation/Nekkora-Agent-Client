@@ -1,0 +1,24 @@
+Nekkora Agent (Client) - pacote de TESTE para Windows x64
+=========================================================
+
+Este e um pacote de teste, sem assinatura digital. Nada e instalado: e uma pasta
+com o executavel e o Java proprio do aplicativo.
+
+Iniciar
+  Abra "Nekkora Agent Client.exe".
+  Na janela, clique em Entrar. O login acontece no navegador, na sua conta Nekkora.
+
+Parar
+  Feche a janela. O login nao fica guardado: na proxima abertura, Entrar volta a
+  ser necessario.
+
+O que o aplicativo guarda
+  Somente a preferencia de tema (Sakura Dark ou Nekkora Light), em
+  %LOCALAPPDATA%\Nekkora\AgentClient\preferencias.properties
+
+O que ele nao faz
+  Nao le nem altera o Nekkora Agent ja instalado, nao inicia automacoes e nao
+  pareia a maquina.
+
+Versao, commit e bibliotecas: VERSOES.txt
+Licencas: pasta legal\

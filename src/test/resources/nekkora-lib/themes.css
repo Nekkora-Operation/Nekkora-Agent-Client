@@ -1,0 +1,304 @@
+/* ==========================================================================
+   Nekkora — Temas de cor
+
+   Cada tema declara apenas sua PALETA (bg, surface, card, primary, secondary,
+   highlight, text, accent). Os tokens semânticos usados pelos componentes
+   (bordas, hover, sombras, badges, cards...) são DERIVADOS da paleta pelo
+   bloco de MODO (escuro ou claro), via color-mix().
+
+   Temas disponíveis (data-nk-theme="…"):
+     escuros: dark (Nekkora, padrão) · sakura-dark · midnight-blue
+     claros:  light (Nekkora)        · porcelain-light · sage-light
+
+   Para criar um tema novo: adicione o nome na lista do modo correspondente
+   e declare a paleta — nada mais é obrigatório.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. MODO ESCURO — derivações
+   -------------------------------------------------------------------------- */
+:root:not([data-nk-theme]),
+[data-nk-theme='dark'],
+[data-nk-theme='sakura-dark'],
+[data-nk-theme='midnight-blue'] {
+  --nk-color-surface-raised: var(--nk-color-surface);
+  --nk-color-surface-sunken: color-mix(in srgb, var(--nk-color-bg) 75%, #000);
+  --nk-color-surface-hover: color-mix(in srgb, var(--nk-color-highlight) 6%, transparent);
+  --nk-color-border: color-mix(in srgb, var(--nk-color-text) 9%, transparent);
+  --nk-color-border-strong: color-mix(in srgb, var(--nk-color-text) 18%, transparent);
+  --nk-color-text-secondary: color-mix(in srgb, var(--nk-color-text) 64%, var(--nk-color-bg));
+  /* 58%: placeholders, contadores e metadados com AA (4,5:1) sobre fundo, superfície e campo — P-LIB-02 */
+  --nk-color-text-muted: color-mix(in srgb, var(--nk-color-text) 58%, var(--nk-color-bg));
+  --nk-color-text-inverse: var(--nk-color-bg);
+  --nk-color-highlight-text: var(--nk-color-highlight);
+
+  --nk-color-accent-soft: color-mix(in srgb, var(--nk-color-accent) 14%, transparent);
+  --nk-color-accent-border: color-mix(in srgb, var(--nk-color-accent) 45%, transparent);
+  --nk-color-accent-border-soft: color-mix(in srgb, var(--nk-color-accent) 35%, transparent);
+
+  --nk-color-success: #4ade80;
+  --nk-color-success-soft: rgba(74, 222, 128, 0.14);
+  --nk-color-info: #8b8cf6;
+  --nk-color-info-soft: rgba(139, 140, 246, 0.18);
+  --nk-color-info-text: #a9aaff;
+  --nk-color-warning: #f5a86a;
+  --nk-color-warning-soft: rgba(245, 168, 106, 0.18);
+  --nk-color-danger: #f0506e;
+  --nk-color-danger-soft: rgba(240, 80, 110, 0.16);
+  --nk-color-danger-border: rgba(240, 80, 110, 0.35);
+  --nk-color-danger-text: #ff7d95;
+  --nk-color-neutral-soft: color-mix(in srgb, var(--nk-color-text) 8%, transparent);
+
+  --nk-color-icon-bg: color-mix(in srgb, var(--nk-color-primary) 55%, transparent);
+  --nk-color-stripe: color-mix(in srgb, var(--nk-color-highlight) 2.5%, transparent);
+  --nk-skeleton-base: color-mix(in srgb, var(--nk-color-highlight) 5%, transparent);
+  --nk-skeleton-shine: color-mix(in srgb, var(--nk-color-highlight) 12%, transparent);
+
+  --nk-button-secondary-bg: var(--nk-color-primary);
+  --nk-button-secondary-bg-hover: var(--nk-color-secondary);
+  --nk-button-secondary-fg: var(--nk-color-text);
+  --nk-button-secondary-border: color-mix(in srgb, var(--nk-color-highlight) 12%, transparent);
+  /* rótulo do Button de perigo: ≥ 4,5:1 sobre o fundo translúcido em fundo, superfície, card e superfície rebaixada */
+  --nk-button-danger-fg: #ff8fa3;
+
+  --nk-card-raised-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--nk-color-card) 55%, transparent) 0%,
+    color-mix(in srgb, var(--nk-color-surface-raised) 90%, transparent) 100%
+  );
+  --nk-card-raised-border: color-mix(in srgb, var(--nk-color-highlight) 10%, transparent);
+  --nk-card-glow-bg: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--nk-color-secondary) 55%, transparent),
+    color-mix(in srgb, var(--nk-color-card) 35%, transparent)
+  );
+  --nk-card-glow-border: color-mix(in srgb, var(--nk-color-accent) 50%, transparent);
+
+  --nk-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --nk-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --nk-shadow-glow: 0 0 0 1px color-mix(in srgb, var(--nk-color-accent) 35%, transparent),
+    0 8px 24px color-mix(in srgb, var(--nk-color-accent) 12%, transparent);
+  --nk-shadow-accent: 0 6px 18px color-mix(in srgb, var(--nk-color-accent) 22%, transparent);
+  --nk-focus-ring: 0 0 0 3px color-mix(in srgb, var(--nk-color-accent) 35%, transparent);
+  --nk-focus-ring-danger: 0 0 0 3px rgba(240, 80, 110, 0.3);
+
+  /* Fundos "sólidos" (tag preenchida com texto/ícone branco — contraste AA) */
+  --nk-solid-on: #ffffff;
+  --nk-solid-primary: var(--nk-color-primary);
+  --nk-solid-accent: color-mix(in srgb, var(--nk-color-accent) 62%, #000);
+  --nk-solid-neutral: color-mix(in srgb, var(--nk-color-text) 32%, var(--nk-color-bg));
+  --nk-solid-success: #15803d;
+  --nk-solid-info: #5b5bd6;
+  --nk-solid-warning: #b45309;
+  --nk-solid-danger: #d02c50;
+
+  /* Logo */
+  --nk-logo-lens: color-mix(in srgb, var(--nk-color-highlight) 22%, #ffffff);
+  --nk-logo-pupil: var(--nk-color-bg);
+  /* Redeclarados aqui para um tema escuro aninhado num claro não herdar os valores do claro */
+  --nk-color-success-text: var(--nk-color-success);
+  --nk-color-warning-text: var(--nk-color-warning);
+  --nk-color-primary-soft: color-mix(in srgb, var(--nk-color-primary) 30%, transparent);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------
+   2. MODO CLARO — derivações
+   -------------------------------------------------------------------------- */
+[data-nk-theme='light'],
+[data-nk-theme='porcelain-light'],
+[data-nk-theme='sage-light'] {
+  --nk-color-surface-raised: var(--nk-color-surface);
+  --nk-color-surface-sunken: var(--nk-color-surface);
+  --nk-color-surface-hover: color-mix(in srgb, var(--nk-color-primary) 6%, transparent);
+  --nk-color-border: color-mix(in srgb, var(--nk-color-text) 10%, transparent);
+  --nk-color-border-strong: color-mix(in srgb, var(--nk-color-text) 20%, transparent);
+  --nk-color-text-secondary: color-mix(in srgb, var(--nk-color-text) 68%, var(--nk-color-bg));
+  /* 65%: placeholders, contadores e metadados com AA (4,5:1) sobre fundo e superfície — P-LIB-02 */
+  --nk-color-text-muted: color-mix(in srgb, var(--nk-color-text) 65%, var(--nk-color-bg));
+  --nk-color-text-inverse: #ffffff;
+  --nk-color-highlight-text: var(--nk-color-primary);
+
+  --nk-color-accent-soft: color-mix(in srgb, var(--nk-color-accent) 10%, transparent);
+  --nk-color-accent-border: color-mix(in srgb, var(--nk-color-accent) 45%, transparent);
+  --nk-color-accent-border-soft: color-mix(in srgb, var(--nk-color-accent) 35%, transparent);
+
+  --nk-color-success: #15803d;
+  --nk-color-success-soft: rgba(21, 128, 61, 0.1);
+  /* Texto de status sobre o fundo suave (Badge soft/outline) com AA — P-LIB-07 */
+  --nk-color-success-text: #126f35;
+  --nk-color-info: #5b5bd6;
+  --nk-color-info-soft: rgba(91, 91, 214, 0.1);
+  --nk-color-info-text: #4b4bc4;
+  --nk-color-warning: #b45309;
+  --nk-color-warning-soft: rgba(217, 119, 6, 0.12);
+  --nk-color-warning-text: #9a4708;
+  --nk-color-danger: #d02c50;
+  --nk-color-danger-soft: rgba(208, 44, 80, 0.09);
+  --nk-color-danger-border: rgba(208, 44, 80, 0.35);
+  --nk-color-danger-text: #c0264a;
+  --nk-color-neutral-soft: color-mix(in srgb, var(--nk-color-text) 6%, transparent);
+  /* Fundo do Badge primary soft: 30% escurecia o fundo claro a ponto de o rótulo ficar abaixo de AA */
+  --nk-color-primary-soft: color-mix(in srgb, var(--nk-color-primary) 12%, transparent);
+
+  --nk-color-icon-bg: color-mix(in srgb, var(--nk-color-highlight) 55%, transparent);
+  --nk-color-stripe: color-mix(in srgb, var(--nk-color-primary) 3%, transparent);
+  --nk-skeleton-base: color-mix(in srgb, var(--nk-color-primary) 6%, transparent);
+  --nk-skeleton-shine: color-mix(in srgb, var(--nk-color-primary) 14%, transparent);
+
+  --nk-button-secondary-bg: var(--nk-color-card);
+  --nk-button-secondary-bg-hover: color-mix(in srgb, var(--nk-color-card) 88%, var(--nk-color-primary));
+  --nk-button-secondary-fg: var(--nk-color-primary);
+  --nk-button-secondary-border: color-mix(in srgb, var(--nk-color-primary) 12%, transparent);
+  /* rótulo do Button de perigo: ≥ 4,5:1 sobre o fundo translúcido em fundo, superfície e card */
+  --nk-button-danger-fg: #ad2042;
+
+  --nk-card-raised-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--nk-color-card) 55%, var(--nk-color-surface)) 0%,
+    var(--nk-color-surface) 100%
+  );
+  --nk-card-raised-border: color-mix(in srgb, var(--nk-color-primary) 14%, transparent);
+  --nk-card-glow-bg: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--nk-color-accent) 12%, transparent),
+    color-mix(in srgb, var(--nk-color-accent) 4%, transparent)
+  );
+  --nk-card-glow-border: color-mix(in srgb, var(--nk-color-accent) 45%, transparent);
+
+  --nk-shadow-sm: 0 1px 2px color-mix(in srgb, var(--nk-color-text) 8%, transparent);
+  --nk-shadow-md: 0 8px 24px color-mix(in srgb, var(--nk-color-text) 8%, transparent);
+  --nk-shadow-glow: 0 0 0 1px color-mix(in srgb, var(--nk-color-accent) 25%, transparent),
+    0 8px 24px color-mix(in srgb, var(--nk-color-accent) 10%, transparent);
+  --nk-shadow-accent: 0 6px 16px color-mix(in srgb, var(--nk-color-accent) 22%, transparent);
+  --nk-focus-ring: 0 0 0 3px color-mix(in srgb, var(--nk-color-accent) 25%, transparent);
+  --nk-focus-ring-danger: 0 0 0 3px rgba(208, 44, 80, 0.2);
+
+  /* Fundos "sólidos" (tag preenchida com texto/ícone branco — contraste AA) */
+  --nk-solid-on: #ffffff;
+  --nk-solid-primary: var(--nk-color-primary);
+  --nk-solid-accent: var(--nk-color-accent);
+  --nk-solid-neutral: color-mix(in srgb, var(--nk-color-text) 68%, var(--nk-color-bg));
+  --nk-solid-success: #15803d;
+  --nk-solid-info: #5b5bd6;
+  --nk-solid-warning: #b45309;
+  --nk-solid-danger: #d02c50;
+
+  /* Logo */
+  --nk-logo-lens: #ffffff;
+  --nk-logo-pupil: var(--nk-color-text);
+
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------
+   3. PALETAS
+   -------------------------------------------------------------------------- */
+
+/* Nekkora Dark — tema principal (padrão) */
+:root:not([data-nk-theme]),
+[data-nk-theme='dark'] {
+  --nk-color-bg: #180c1a;
+  --nk-color-surface: #20222f;
+  --nk-color-card: #48213b;
+  --nk-color-primary: #603c52;
+  --nk-color-secondary: #765067;
+  --nk-color-highlight: #fadcd5;
+  --nk-color-text: #e8e2e7;
+  --nk-color-accent: #f29bb2;
+  --nk-color-accent-hover: #f6b3c4;
+  --nk-color-accent-active: #e3839d;
+
+  /* Ajustes finos do dashboard original */
+  --nk-color-text-secondary: #94a3b8;
+  --nk-color-text-muted: #918692; /* era #7c6f7d (3,33:1 na superfície) — P-LIB-02 */
+  --nk-color-surface-raised: #1f1420;
+  --nk-color-surface-sunken: #140a16;
+  --nk-color-neutral-soft: rgba(148, 163, 184, 0.1);
+  --nk-solid-accent: #c2466d; /* tag preenchida: branco com contraste AA */
+}
+
+/* Nekkora Light — mesma identidade sobre fundos claros */
+[data-nk-theme='light'] {
+  --nk-color-bg: #f8f3f5;
+  --nk-color-surface: #ffffff;
+  --nk-color-card: #f6e9ee;
+  --nk-color-primary: #603c52;
+  --nk-color-secondary: #765067;
+  --nk-color-highlight: #48213b;
+  --nk-color-text: #2a1a28;
+  /* Acento: era #c2466d (4,35:1 sobre o fundo, abaixo de AA para texto pequeno) — P-LIB-01. Mesmo matiz, 11% mais
+     escuro: AA sobre fundo, superfície, card e o próprio fundo suave (Badge accent soft). */
+  --nk-color-accent: #ad3e61;
+  --nk-color-accent-hover: #983252;
+  --nk-color-accent-active: #852c48;
+
+  --nk-color-text-secondary: #64566a;
+  --nk-color-text-muted: #786c76; /* era #9a8b97 (2,94:1 sobre o fundo) — P-LIB-02 */
+  --nk-color-highlight-text: #48213b;
+  --nk-color-icon-bg: rgba(194, 70, 109, 0.1);
+  --nk-button-secondary-bg: #f3e6ec;
+  --nk-button-secondary-bg-hover: #ead5df;
+  --nk-button-secondary-fg: #48213b;
+  --nk-card-raised-bg: linear-gradient(180deg, #fbeff3 0%, #ffffff 100%);
+  --nk-card-raised-border: rgba(194, 70, 109, 0.16);
+}
+
+/* Sakura Dark — identidade/autoral: o tema mais "Nekkora", rosa elegante */
+[data-nk-theme='sakura-dark'] {
+  --nk-color-bg: #1b0c1a;
+  --nk-color-surface: #2d222f;
+  --nk-color-card: #4b2138;
+  --nk-color-primary: #6d3c52;
+  --nk-color-secondary: #765d67;
+  --nk-color-highlight: #fadcd5;
+  --nk-color-text: #f8f2f7;
+  --nk-color-accent: #f0a3b8;
+  --nk-color-accent-hover: #f5bacb;
+  --nk-color-accent-active: #e48ca5;
+  --nk-solid-accent: #b8486f; /* tag preenchida: branco com contraste AA */
+}
+
+/* Midnight Blue — técnico/profissional, corporativo sem ser "SaaS genérico" */
+[data-nk-theme='midnight-blue'] {
+  --nk-color-bg: #0d1117;
+  --nk-color-surface: #161b22;
+  --nk-color-card: #212936;
+  --nk-color-primary: #526d9e;
+  --nk-color-secondary: #7189b5;
+  --nk-color-highlight: #afc8f2;
+  --nk-color-text: #f2f5f8;
+  --nk-color-accent: #8fb0ea;
+  --nk-color-accent-hover: #a8c3f1;
+  --nk-color-accent-active: #7897d6;
+  --nk-solid-accent: #4a6fb5; /* tag preenchida: branco com contraste AA */
+}
+
+/* Porcelain Light — neutro/institucional */
+[data-nk-theme='porcelain-light'] {
+  --nk-color-bg: #f7f6f4;
+  --nk-color-surface: #ffffff;
+  --nk-color-card: #eceae6;
+  --nk-color-primary: #4e5d78;
+  --nk-color-secondary: #76839a;
+  --nk-color-highlight: #d7cbbf;
+  --nk-color-text: #24262b;
+  --nk-color-accent: #4e5d78;
+  --nk-color-accent-hover: #414e66;
+  --nk-color-accent-active: #36415a;
+}
+
+/* Sage Light — calmo/diferente, sofisticado */
+[data-nk-theme='sage-light'] {
+  --nk-color-bg: #f4f6f1;
+  --nk-color-surface: #ffffff;
+  --nk-color-card: #e6eae2;
+  --nk-color-primary: #506b62;
+  --nk-color-secondary: #80958d;
+  --nk-color-highlight: #c7d6ce;
+  --nk-color-text: #202724;
+  --nk-color-accent: #506b62;
+  --nk-color-accent-hover: #435a52;
+  --nk-color-accent-active: #384c45;
+}
