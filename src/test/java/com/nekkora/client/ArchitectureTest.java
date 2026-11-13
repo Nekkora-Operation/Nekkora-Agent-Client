@@ -136,7 +136,9 @@ class ArchitectureTest {
         List<String> achados = new ArrayList<>();
         Pattern suspeito = Pattern.compile("(?i)localhost|127\\.0\\.0\\.1:\\d|frontlab|client_secret|BEGIN (CERTIFICATE|PRIVATE KEY)|password\\s*=|senha\\s*=");
         for (Path f : javaFiles(MAIN)) {
-            Matcher m = suspeito.matcher(code(f));
+            // unico lugar em que "localhost" pode aparecer: a lista fechada de origens de desenvolvimento
+            String c = f.endsWith("PlatformOrigin.java") ? code(f).replace("localhost", "") : code(f);
+            Matcher m = suspeito.matcher(c);
             while (m.find()) {
                 achados.add(f.getFileName() + ": " + m.group());
             }
@@ -146,6 +148,41 @@ class ArchitectureTest {
                 String n = f.getFileName().toString().toLowerCase(Locale.ROOT);
                 assertTrue(n.endsWith(".png") || n.endsWith(".txt") || n.endsWith(".properties"), "recurso inesperado: " + f);
                 assertFalse(n.endsWith(".p12") || n.endsWith(".pem") || n.endsWith(".jks") || n.endsWith(".cfg"), f.toString());
+            }
+        }
+        assertEquals(List.of(), achados);
+    }
+
+    /**
+     * O aplicativo nao registra, imprime nem grava nada da entrada: sem log, sem saida de console, sem escrita em disco
+     * fora do armazenamento (que so conhece o tema). Tambem nao pede nem le credencial: sem campo de texto ou senha, sem
+     * cookie, sem area de transferencia, sem perfil de navegador.
+     */
+    @Test
+    void semRegistroPersistenciaNemLeituraDeCredencial() throws IOException {
+        List<String> achados = new ArrayList<>();
+        Pattern registro = Pattern.compile("System\\.(out|err)|printStackTrace|java\\.util\\.logging|org\\.slf4j|Logger\\b");
+        Pattern disco = Pattern.compile("java\\.nio\\.file|java\\.io\\.File\\b|FileOutputStream|FileWriter|java\\.util\\.prefs|[^A-Za-z]Preferences\\b|KeyStore\\b");
+        Pattern credencial = Pattern.compile("JPasswordField|JTextField|JTextArea|JEditorPane|Cookie|Clipboard|getSystemClipboard|char\\[\\] (senha|password)");
+        for (Path f : javaFiles(MAIN)) {
+            String pkg = f.getParent().getFileName().toString();
+            String c = code(f);
+            Matcher m = registro.matcher(c);
+            while (m.find()) {
+                achados.add(f.getFileName() + ": registro (" + m.group() + ")");
+            }
+            if (!"storage".equals(pkg)) {
+                Matcher d = disco.matcher(c);
+                while (d.find()) {
+                    achados.add(f.getFileName() + ": disco fora do armazenamento (" + d.group() + ")");
+                }
+            }
+            Matcher k = credencial.matcher(c);
+            while (k.find()) {
+                achados.add(f.getFileName() + ": credencial (" + k.group() + ")");
+            }
+            if ("storage".equals(pkg) && Pattern.compile("(?i)token|sess[aã]o|session|auth|code|verifier|state\\b").matcher(c).find()) {
+                achados.add(f.getFileName() + ": o armazenamento nao conhece a entrada");
             }
         }
         assertEquals(List.of(), achados);

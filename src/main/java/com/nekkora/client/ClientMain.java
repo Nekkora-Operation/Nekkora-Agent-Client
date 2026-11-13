@@ -7,9 +7,11 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 
 import com.formdev.flatlaf.FlatLaf;
-import com.nekkora.client.signin.SignInAttempts;
+import com.nekkora.client.auth.BrowserSignIn;
+import com.nekkora.client.auth.DefaultBrowser;
+import com.nekkora.client.auth.PlatformApi;
+import com.nekkora.client.auth.PlatformOrigin;
 import com.nekkora.client.signin.SignInFlow;
-import com.nekkora.client.signin.UnavailableSignIn;
 import com.nekkora.client.storage.ClientDataDir;
 import com.nekkora.client.storage.ClientPreferences;
 import com.nekkora.client.storage.InstanceLock;
@@ -45,19 +47,26 @@ public final class ClientMain {
                 System.exit(0);
                 return;
             }
-            SignInFlow flow = new SignInFlow(signIn(), SwingUtilities::invokeLater);
+            PlatformOrigin origin;
+            try {
+                origin = PlatformOrigin.resolve();
+            } catch (IllegalStateException e) {
+                // endereco da Platform fora do permitido: o aplicativo nao abre apontando para outro lugar
+                JOptionPane.showMessageDialog(null, SignInText.BAD_CONFIGURATION, SignInText.APP_NAME, JOptionPane.ERROR_MESSAGE);
+                System.exit(2);
+                return;
+            }
+            BrowserSignIn signIn = new BrowserSignIn(origin, new PlatformApi(origin), new DefaultBrowser(), BrowserSignIn.Timing.DEFAULT);
+            SignInFlow flow = new SignInFlow(signIn, SwingUtilities::invokeLater);
             ClientWindow window = new ClientWindow(flow, preferences::saveTheme, () -> {
-                // fechar: a tentativa em curso e cancelada e a sessao encerrada; nada fica para a proxima abertura
+                // fechar: a tentativa em curso e cancelada e a sessao encerrada na Platform; nada fica para a proxima abertura
                 flow.close();
+                signIn.close();
                 held.get().close();
                 System.exit(0);
             });
             Runtime.getRuntime().addShutdownHook(new Thread(flow::close, "encerramento"));
             window.setVisible(true);
         });
-    }
-
-    private static SignInAttempts signIn() {
-        return new UnavailableSignIn();
     }
 }

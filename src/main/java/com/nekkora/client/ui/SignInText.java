@@ -11,6 +11,7 @@ public final class SignInText {
     public static final String WAITING = "Aguardando login no navegador...";
     public static final String CANCEL = "Cancelar";
     public static final String ALREADY_RUNNING = "O Nekkora Agent já está aberto.";
+    public static final String BAD_CONFIGURATION = "A configuração deste aplicativo não é válida. Instale o Nekkora Agent novamente.";
 
     private SignInText() {
     }
@@ -29,7 +30,7 @@ public final class SignInText {
             case RATE_LIMITED -> "Muitas tentativas seguidas. Aguarde um pouco e tente novamente.";
             case INVALID_RETURN -> "Não foi possível confirmar o login. Inicie uma nova tentativa.";
             case SESSION_EXPIRED -> "Sua sessão terminou. Entre novamente.";
-            case UNAVAILABLE -> "Entrar pelo navegador não está disponível nesta versão.";
+            case UNAVAILABLE -> "Entrar pelo navegador não está disponível no momento. Tente novamente mais tarde.";
         };
     }
 
