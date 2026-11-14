@@ -45,6 +45,9 @@ final class PackageForm extends JPanel {
 
         void download();
 
+        /** A consulta das versoes falhou e a pessoa pediu para tentar de novo. */
+        void retryVersions();
+
         void cancelDownload();
 
         void close();
@@ -65,6 +68,7 @@ final class PackageForm extends JPanel {
     private final JProgressBar progress = new JProgressBar(0, 1000);
     private final GhostButton cancelDownload = GhostButton.text(NavText.PKG_DOWNLOAD_CANCEL);
     private final WrappedText downloadResult = new WrappedText(420);
+    private final GhostButton retryVersions = GhostButton.text(NavText.PKG_VERSIONS_RETRY);
     private final GhostButton close = GhostButton.text(NavText.CLOSE);
     private boolean localError;
     private boolean downloadError;
@@ -87,6 +91,8 @@ final class PackageForm extends JPanel {
             }
         });
         cancelDownload.addActionListener(e -> events.cancelDownload());
+        retryVersions.addActionListener(e -> events.retryVersions());
+        retryVersions.setVisible(false);
         close.addActionListener(e -> events.close());
         versions.setRenderer(new javax.swing.DefaultListCellRenderer() {
             private static final long serialVersionUID = 1L;
@@ -124,7 +130,7 @@ final class PackageForm extends JPanel {
         add(Box.createVerticalStrut(ClientTheme.SPACE_2));
         add(left(versions));
         add(Box.createVerticalStrut(ClientTheme.SPACE_2));
-        add(left(row(download, cancelDownload)));
+        add(left(row(download, cancelDownload, retryVersions)));
         add(left(progress));
         add(left(downloadResult));
         add(Box.createVerticalStrut(ClientTheme.SPACE_3));
@@ -183,6 +189,10 @@ final class PackageForm extends JPanel {
     void showVersionsLoading() {
         versions.setModel(new DefaultComboBoxModel<>(new Object[] {NavText.PKG_VERSIONS_LOADING}));
         downloadBlocked = NavText.PKG_VERSIONS_LOADING;
+        retryVersions.setVisible(false);
+        if (downloadError) {
+            showDownload(null, false); // a frase da falha anterior sai enquanto a nova consulta corre
+        }
         refresh();
     }
 
@@ -190,6 +200,7 @@ final class PackageForm extends JPanel {
     void showVersionsFailed(String message) {
         versions.setModel(new DefaultComboBoxModel<>(new Object[] {NavText.PKG_VERSIONS_FAILED}));
         downloadBlocked = message;
+        retryVersions.setVisible(true);
         showDownload(message, true);
     }
 
@@ -206,11 +217,16 @@ final class PackageForm extends JPanel {
             downloadable.forEach(m::addElement);
         }
         versions.setModel(m);
+        retryVersions.setVisible(false);
         downloadBlocked = blocked != null ? blocked : downloadable.isEmpty() ? NavText.PKG_VERSIONS_NONE : null;
         if (blocked != null) {
             showDownload(blocked, false);
         }
         refresh();
+    }
+
+    javax.swing.JButton retryVersionsButton() {
+        return retryVersions;
     }
 
     Automation.Version chosenVersion() {
