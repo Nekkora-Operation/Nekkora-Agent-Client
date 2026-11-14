@@ -96,9 +96,9 @@ final class ContextView extends JPanel {
     private final WrappedText notice = new WrappedText(380);
     private List<Workshop.LocalItem> local = List.of();
     private List<Workshop.LocalItem> shownLocal = List.of();
-    private final GhostButton create = GhostButton.text(NavText.NEW_AUTOMATION);
-    private final GhostButton importZip = GhostButton.text(NavText.IMPORT_ZIP);
-    private final JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.CENTER, ClientTheme.SPACE_3, 0));
+    private final ActionButton create = new ActionButton(NavText.NEW_AUTOMATION, ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD);
+    private final ActionButton importZip = new ActionButton(NavText.IMPORT_ZIP, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
+    private final ButtonRow actionsBar = new ButtonRow();
     private final AppFooter footer;
 
     private final Consumer<Workspace> onWorkspace;
@@ -201,8 +201,8 @@ final class ContextView extends JPanel {
                 actions.importZip().run();
             }
         });
-        actionsBar.setOpaque(false);
-        actionsBar.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_2, ClientTheme.SPACE_4, 0, ClientTheme.SPACE_4));
+        // area propria das acoes: separada da lista por uma linha, com respiro em cima e embaixo
+        actionsBar.setBorder(actionsBorder());
         actionsBar.add(create);
         actionsBar.add(importZip);
         truncated.setHorizontalAlignment(JLabel.CENTER);
@@ -505,15 +505,15 @@ final class ContextView extends JPanel {
         return rows;
     }
 
-    GhostButton createButton() {
+    ActionButton createButton() {
         return create;
     }
 
-    GhostButton importButton() {
+    ActionButton importButton() {
         return importZip;
     }
 
-    JPanel actionsBar() {
+    ButtonRow actionsBar() {
         return actionsBar;
     }
 
@@ -533,9 +533,17 @@ final class ContextView extends JPanel {
         return footer;
     }
 
+    /** Linha de 1 px (token border) acima das acoes e o respiro em volta: space-3 em cima e embaixo, space-4 nos lados. */
+    private static javax.swing.border.Border actionsBorder() {
+        return BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, Themes.color(Themes.current().border())),
+                BorderFactory.createEmptyBorder(ClientTheme.SPACE_3, ClientTheme.SPACE_4, ClientTheme.SPACE_3, ClientTheme.SPACE_4));
+    }
+
     private void restyle() {
         ClientTheme t = Themes.current();
         setBackground(Themes.color(t.bg()));
+        actionsBar.setBorder(actionsBorder());
         name.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         name.setForeground(Themes.color(t.text()));
         back.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, false));
