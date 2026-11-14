@@ -66,8 +66,9 @@ public final class NavText {
     public static final String RUN_NO_PACKAGE = "O pacote desta automação não está neste computador. Abra Editar e, em Pacote nesta máquina, escolha um "
             + "pacote local ou baixe uma versão publicada da Platform. Nada é baixado sozinho.";
     public static final String RUN_TITLE = "Executar neste computador";
-    public static final String RUN_SCOPE = "Execução local. Nada é enviado à Platform: sem registro de execução lá, sem monitoramento e sem gatilho remoto. Nada "
-            + "começa até você clicar em Iniciar execução.";
+    public static final String RUN_SCOPE = "Execução local. Nada desta execução é enviado à Platform — nem estado, registros, saída ou término — mesmo com a "
+            + "sua conta conectada, e nem depois, quando a rede voltar. O histórico fica só neste computador. Nada começa até você clicar em Iniciar "
+            + "execução.";
     public static final String RUN_CHECKING = "Conferindo o pacote...";
     public static final String CHOOSE = "Escolher...";
     public static final String CLOSE = "Fechar";

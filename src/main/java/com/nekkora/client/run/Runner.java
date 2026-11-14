@@ -101,14 +101,14 @@ public final class Runner implements AutoCloseable {
     public Checked check(UUID organization, UUID workspace, String fingerprint) throws Refused {
         try {
             PackageContext context = new PackageContext(organization, workspace);
-            LocalPackages.Item item = packages.find(context, fingerprint).orElseThrow(() -> new Refused("Este pacote não está neste computador, neste ambiente. Importe o .zip dele."));
+            LocalPackages.Item item = packages.find(context, fingerprint).orElseThrow(() -> new Refused("Este pacote não está neste computador, neste ambiente. Abra Editar e escolha o pacote desta máquina."));
             ExecutionPackage pkg = packages.inspect(context, fingerprint);
             return new Checked(pkg.fingerprint(), pkg.shortFingerprint(), item.displayName(), item.packageVersion(), item.entry(), item.pythonRequirement(),
                     item.dependencies(), controller.approvals().approved(pkg));
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         } catch (IllegalArgumentException e) {
-            throw new Refused("Este pacote não está neste computador, neste ambiente. Importe o .zip dele.");
+            throw new Refused("Este pacote não está neste computador, neste ambiente. Abra Editar e escolha o pacote desta máquina.");
         }
     }
 
@@ -157,7 +157,7 @@ public final class Runner implements AutoCloseable {
                         String outputFolder) throws Refused {
         try {
             PackageContext context = new PackageContext(organization, workspace);
-            LocalPackages.Item item = packages.find(context, fingerprint).orElseThrow(() -> new Refused("Este pacote não está neste computador, neste ambiente. Importe o .zip dele."));
+            LocalPackages.Item item = packages.find(context, fingerprint).orElseThrow(() -> new Refused("Este pacote não está neste computador, neste ambiente. Abra Editar e escolha o pacote desta máquina."));
             RunContext run = new RunContext(organization, workspace, item.fingerprint(), item.displayName(), automationId, automationVersionId);
             Path out = Path.of(output(outputFolder));
             lastOutputRoot = out.toString();
