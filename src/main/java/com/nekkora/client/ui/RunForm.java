@@ -53,6 +53,8 @@ final class RunForm extends JPanel {
     private final GhostButton cancel = GhostButton.text(NavText.RUN_CANCEL);
     private final GhostButton close = GhostButton.text(NavText.CLOSE);
     private final List<JLabel> labels = new java.util.ArrayList<>();
+    /** As frases que estao dizendo um problema: a cor de erro acompanha a troca de tema. */
+    private final java.util.Set<WrappedText> errors = new java.util.HashSet<>();
 
     private boolean packageOk;
     private boolean searching;
@@ -167,6 +169,11 @@ final class RunForm extends JPanel {
         buttons.add(start);
         add(Box.createVerticalStrut(ClientTheme.SPACE_3));
         add(left(buttons));
+        // trocar o tema com a preparacao aberta repinta o formulario inteiro (fundo, textos, lista e frases de erro)
+        Themes.addListener(t -> {
+            restyle();
+            pythons.repaint();
+        });
         restyle();
         refresh();
     }
@@ -316,6 +323,11 @@ final class RunForm extends JPanel {
     }
 
     private void mark(WrappedText w, boolean error) {
+        if (error) {
+            errors.add(w);
+        } else {
+            errors.remove(w);
+        }
         w.setForeground(Themes.color(error ? Themes.current().dangerText() : Themes.current().textSecondary()));
         w.getAccessibleContext().setAccessibleDescription(error ? "Erro" : "");
         revalidate();
@@ -394,6 +406,10 @@ final class RunForm extends JPanel {
         return searchAgain;
     }
 
+    java.awt.Color pythonMessageColor() {
+        return pythonLine.getForeground();
+    }
+
     String pythonHintText() {
         return pythonHint.getText();
     }
@@ -435,7 +451,7 @@ final class RunForm extends JPanel {
         pythonScroll.setBorder(BorderFactory.createLineBorder(Themes.color(t.border())));
         for (WrappedText w : List.of(scope, packageLine, pythonHint, pythonLine, outputLine, approvalText, statusLine)) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
-            w.setForeground(Themes.color(t.textSecondary()));
+            w.setForeground(Themes.color(errors.contains(w) ? t.dangerText() : t.textSecondary()));
         }
         for (JLabel l : labels) {
             l.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, true));

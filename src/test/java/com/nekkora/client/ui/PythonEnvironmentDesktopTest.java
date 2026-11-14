@@ -627,4 +627,28 @@ class PythonEnvironmentDesktopTest {
         listados(f);
         assertFalse(read(() -> scroll.getVerticalScrollBar().isVisible()));
     }
+
+    @Test
+    void trocarOTemaComAPreparacaoAbertaRepintaOFormularioEMantemAEscolha() throws Exception {
+        importar("relatorio", ONDE, List.of("pacote-que-nao-existe-nekkora==9.9.9"));
+        RunForm f = abrir("relatorio");
+        edt(() -> f.pythonList().setSelectedIndex(0));
+        String escolhido = read(f::chosenPython).id();
+        String mensagem = read(f::pythonText);
+        assertEquals(Themes.color(ClientTheme.SAKURA_DARK.bg()), read(f::getBackground));
+        try {
+            edt(() -> window.themeToggle().doClick(0));
+            answer();
+            assertEquals(ClientTheme.NEKKORA_LIGHT, read(Themes::current));
+            assertEquals(Themes.color(ClientTheme.NEKKORA_LIGHT.bg()), read(f::getBackground), "o fundo acompanha o tema");
+            assertEquals(Themes.color(ClientTheme.NEKKORA_LIGHT.dangerText()), read(() -> f.pythonMessageColor()), "a frase de problema continua na cor de erro, a do tema novo");
+            assertEquals(escolhido, read(f::chosenPython).id(), "trocar o tema nao mexe na escolha");
+            assertEquals(mensagem, read(f::pythonText));
+            java.awt.Window w = read(() -> SwingUtilities.getWindowAncestor(f));
+            javax.swing.JScrollPane scroll = read(() -> (javax.swing.JScrollPane) SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, f));
+            assertTrue(read(() -> w.getHeight() >= f.getPreferredSize().height || scroll.getVerticalScrollBar().isVisible()));
+        } finally {
+            edt(() -> Themes.apply(ClientTheme.SAKURA_DARK));
+        }
+    }
 }

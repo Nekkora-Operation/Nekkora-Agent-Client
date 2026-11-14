@@ -88,6 +88,8 @@ final class LocalActions implements ContextView.Actions {
         this.background = background;
         this.host = host;
         if (runner != null) {
+            // a troca de tema muda medidas dos controles: a janela da preparacao se ajusta de novo ao conteudo e a tela
+            Themes.addListener(t -> SwingUtilities.invokeLater(this::fitRunDialog));
             runner.addListener(s -> SwingUtilities.invokeLater(() -> {
                 if (runForm != null && s.id().equals(runId)) {
                     runForm.showStatus(s);
