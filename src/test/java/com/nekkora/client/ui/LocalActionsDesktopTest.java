@@ -167,11 +167,12 @@ class LocalActionsDesktopTest {
         ContextView v = window.contextView();
         edt(() -> window.organizationsView().cards().get(0).choose());
         answer();
-        assertFalse(read(() -> v.createButton().isEnabled() || v.importButton().isEnabled()), "sem ambiente escolhido, nada de importar ou preparar");
+        assertFalse(read(() -> v.importButton().isEnabled()), "sem ambiente escolhido, nada de importar");
+        assertTrue(read(() -> v.generateButton().isEnabled()), "gerar um .zip nao depende de ambiente");
         assertEquals("Selecione um ambiente primeiro.", read(() -> v.importButton().getToolTipText()));
         edt(() -> v.workspaceBox().setSelectedItem(fin));
         answer();
-        assertTrue(read(() -> v.createButton().isEnabled() && v.importButton().isEnabled()));
+        assertTrue(read(() -> v.generateButton().isEnabled() && v.importButton().isEnabled()));
         assertEquals("Importar (.zip)", read(() -> v.importButton().getText()), "o texto diz que e .zip");
         JButton executar = read(() -> v.rows().get(0).actions().get(0));
         assertFalse(read(executar::isEnabled));
@@ -268,68 +269,6 @@ class LocalActionsDesktopTest {
         answer();
         assertEquals(List.of("Conciliação bancária"), names(), "o pacote identico ao publicado nao vira outra linha");
         assertEquals("Pacote disponível neste computador: conciliacao 1.2.0", read(() -> v.rows().get(0).details().get(1)));
-    }
-
-    // ------------------------------------------------------------------ nova automacao
-
-    @Test
-    void novaAutomacaoPreparaPacoteLocalSemCriarNadaNaPlatform() throws Exception {
-        ContextView v = window.contextView();
-        enter(a, fin);
-        int chamadas = session.directory.calls.size();
-        Path codigo = PackFixtures.codeZip(tmp.resolve("zips"), "declarado");
-        edt(() -> window.actions().newAutomation(codigo.toString()));
-        answer();
-        NewPackageForm f = (NewPackageForm) read(() -> window.actions().form());
-        assertNotNull(f);
-        assertTrue(read(f::scopeText).contains("Nada é criado na Platform"));
-        assertEquals("", read(f::blockersText));
-        assertEquals(NewPackageForm.ENTRY_PLACEHOLDER, read(() -> f.entryBox().getSelectedItem()), "o arquivo de entrada nunca vem escolhido");
-        assertEquals("1.0.0", read(() -> f.versionField().getText()));
-        evidence("sakura-dark-nova-automacao", (Container) read(() -> window.actions().form()));
-        // sem escolher a entrada: nao prepara
-        edt(() -> f.nameField().setText("relatorio-mensal"));
-        edt(() -> f.prepareButton().doClick(0));
-        assertEquals("Escolha o arquivo de entrada.", read(f::errorText));
-        assertEquals(0, workshop.list(a.id(), fin.id()).size());
-        edt(() -> f.entryBox().setSelectedItem("app.py"));
-        if (read(() -> f.pythonField().getText()).isBlank()) {
-            edt(() -> f.pythonField().setText(">=3.10,<3.14"));
-        }
-        edt(() -> f.confirmedBox().setSelected(true));
-        edt(() -> f.prepareButton().doClick(0));
-        answer();
-        assertNull(read(() -> window.actions().form()), "preparou: o formulario fecha");
-        assertEquals("Pacote preparado: relatorio-mensal (versão do pacote 1.0.0). Ele fica só neste computador; nada foi criado na Platform.", read(v::noticeText));
-        assertEquals(List.of("Conciliação bancária", "relatorio-mensal"), names());
-        assertFalse(session.directory.calls.subList(chamadas, session.directory.calls.size()).stream().anyMatch(c -> c.startsWith("rename")),
-                "nenhuma escrita na Platform");
-        // dados invalidos: o formulario fica aberto com a recusa, e nada e gravado
-        edt(() -> window.actions().newAutomation(codigo.toString()));
-        answer();
-        NewPackageForm g = (NewPackageForm) read(() -> window.actions().form());
-        edt(() -> {
-            g.nameField().setText("outro");
-            g.versionField().setText("versao um");
-            g.entryBox().setSelectedItem("app.py");
-            g.pythonField().setText(">=3.10,<3.14");
-            g.confirmedBox().setSelected(true);
-        });
-        edt(() -> g.prepareButton().doClick(0));
-        answer();
-        assertFalse(read(g::errorText).isBlank());
-        assertEquals(1, workshop.list(a.id(), fin.id()).size());
-    }
-
-    @Test
-    void zipQueJaEPacoteNaoViraNovaAutomacao() throws Exception {
-        enter(a, fin);
-        Path pronto = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "pronto", "1.0.0", "main.py");
-        edt(() -> window.actions().newAutomation(pronto.toString()));
-        answer();
-        NewPackageForm f = (NewPackageForm) read(() -> window.actions().form());
-        assertEquals("Este ZIP já é um pacote pronto. Use Importar (.zip) para trazê-lo como está.", read(f::blockersText));
-        assertFalse(read(() -> f.prepareButton().isEnabled()));
     }
 
     // ------------------------------------------------------------------ renomear

@@ -32,8 +32,7 @@ import com.nekkora.client.theme.ClientTheme;
 
 /**
  * Tela da organizacao escolhida. De cima para baixo: a seta para voltar ao seletor e o nome da organizacao; o seletor
- * "Ambiente"; a lista de automacoes do ambiente (area rolavel); as acoes do ambiente ("Nova automacao" e
- * "Importar (.zip)"), FORA da area rolavel; e o rodape.
+ * "Ambiente"; a lista de automacoes do ambiente (area rolavel); as acoes ("Gerar pacote novo" e "Importar (.zip)"), FORA da area rolavel; e o rodape.
  * <p>
  * "Ambiente" e so o rotulo da tela para o que a Platform chama de workspace. Nenhum ambiente e escolhido sozinho, e
  * trocar de ambiente apaga a lista anterior antes de mostrar a nova. Carregando, falha (com "Tentar novamente"), lista
@@ -55,7 +54,8 @@ final class ContextView extends JPanel {
 
         Consumer<Entry> edit();
 
-        Runnable create();
+        /** "Gerar pacote novo": so gera um arquivo .zip neste computador; nao depende de ambiente. */
+        Runnable generate();
 
         Runnable importZip();
     }
@@ -96,7 +96,7 @@ final class ContextView extends JPanel {
     private final WrappedText notice = new WrappedText(380);
     private List<Workshop.LocalItem> local = List.of();
     private List<Workshop.LocalItem> shownLocal = List.of();
-    private final ActionButton create = new ActionButton(NavText.NEW_AUTOMATION, ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD);
+    private final ActionButton generate = new ActionButton(NavText.GENERATE_NEW, ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD);
     private final ActionButton importZip = new ActionButton(NavText.IMPORT_ZIP, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
     private final ButtonRow actionsBar = new ButtonRow();
     private final AppFooter footer;
@@ -199,19 +199,19 @@ final class ContextView extends JPanel {
         add(body, BorderLayout.CENTER);
 
         // acoes do ambiente, fora da area rolavel, e o rodape
-        create.addActionListener(e -> {
-            if (actions != null && actions.create() != null) {
-                actions.create().run();
+        generate.addActionListener(e -> {
+            if (actions != null && actions.generate() != null) {
+                actions.generate().run();
             }
         });
+        // area propria das acoes: separada da lista por uma linha, com respiro em cima e embaixo
+        actionsBar.setBorder(actionsBorder());
         importZip.addActionListener(e -> {
             if (actions != null && actions.importZip() != null) {
                 actions.importZip().run();
             }
         });
-        // area propria das acoes: separada da lista por uma linha, com respiro em cima e embaixo
-        actionsBar.setBorder(actionsBorder());
-        actionsBar.add(create);
+        actionsBar.add(generate);
         actionsBar.add(importZip);
         truncated.setHorizontalAlignment(JLabel.CENTER);
         truncated.setVisible(false);
@@ -434,12 +434,15 @@ final class ContextView extends JPanel {
         b.getAccessibleContext().setAccessibleDescription(enabled ? null : whyNot);
     }
 
-    /** "Nova automacao" e "Importar (.zip)" so valem com organizacao E ambiente escolhidos. */
+    /**
+     * "Gerar pacote novo" so produz um arquivo .zip neste computador: nao depende de ambiente escolhido. "Importar (.zip)"
+     * guarda o pacote no ambiente, e por isso so vale com organizacao E ambiente escolhidos.
+     */
     private void refreshActions() {
         boolean context = organization != null && workspaces.getSelectedItem() instanceof Workspace;
-        boolean hasCreate = actions != null && actions.create() != null;
+        boolean hasGenerate = actions != null && actions.generate() != null;
         boolean hasImport = actions != null && actions.importZip() != null;
-        enable(create, hasCreate && context, NavText.NEW_AUTOMATION, hasCreate ? NavText.NEEDS_WORKSPACE : NavText.ACTION_UNAVAILABLE);
+        enable(generate, hasGenerate, NavText.GENERATE_NEW, NavText.ACTION_UNAVAILABLE);
         enable(importZip, hasImport && context, NavText.IMPORT_ZIP, hasImport ? NavText.NEEDS_WORKSPACE : NavText.ACTION_UNAVAILABLE);
         // enquanto alguma acao nao existe, a tela diz isso por escrito (nao so na dica do botao)
         List<String> missing = new ArrayList<>();
@@ -449,8 +452,8 @@ final class ContextView extends JPanel {
         if (actions == null || actions.edit() == null) {
             missing.add(NavText.EDIT);
         }
-        if (!hasCreate) {
-            missing.add(NavText.NEW_AUTOMATION);
+        if (!hasGenerate) {
+            missing.add(NavText.GENERATE_NEW);
         }
         if (!hasImport) {
             missing.add("Importar");
@@ -523,8 +526,8 @@ final class ContextView extends JPanel {
         return rows;
     }
 
-    ActionButton createButton() {
-        return create;
+    ActionButton generateButton() {
+        return generate;
     }
 
     ActionButton importButton() {

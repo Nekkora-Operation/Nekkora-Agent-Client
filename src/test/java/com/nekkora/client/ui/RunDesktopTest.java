@@ -237,7 +237,7 @@ class RunDesktopTest {
         assertEquals("", read(v::unavailableNote), "todas as acoes existem: a nota de indisponibilidade nao aparece");
         evidence("sakura-dark-estado-somente-local", window.getRootPane());
         // nenhum botao promete integracao
-        for (JButton bt : read(() -> List.of(v.createButton(), v.importButton()))) {
+        for (JButton bt : read(() -> List.of(v.generateButton(), v.importButton()))) {
             assertFalse(read(bt::getText).toLowerCase().matches(".*(vincul|parear|conectar|integra).*"));
         }
     }

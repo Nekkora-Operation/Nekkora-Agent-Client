@@ -382,6 +382,13 @@ public final class ClientWindow extends JFrame {
         });
     }
 
+    /** Como mostrar ao sistema a pasta de um arquivo gerado (entregue por quem monta o aplicativo). */
+    public void setReveal(java.util.function.Consumer<String> reveal) {
+        if (actions != null && reveal != null) {
+            actions.reveal = reveal;
+        }
+    }
+
     LocalActions actions() {
         return actions;
     }

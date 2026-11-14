@@ -28,7 +28,6 @@ public final class NavText {
     public static final String RUN = "Executar";
     public static final String EDIT = "Editar";
     public static final String EDIT_DENIED = "Você não tem permissão para editar automações neste ambiente.";
-    public static final String NEW_AUTOMATION = "Nova automação";
     public static final String IMPORT_ZIP = "Importar (.zip)";
     public static final String NEEDS_WORKSPACE = "Selecione um ambiente primeiro.";
     /** Acao que ainda nao existe nesta versao. Nao e falta de permissao da pessoa, e o texto nao pode sugerir isso. */
@@ -60,20 +59,11 @@ public final class NavText {
     public static final String NAME_REQUIRED = "Informe um nome.";
     public static final String IMPORT_TITLE = "Importar pacote (.zip)";
     public static final String IMPORT_FILTER = "Arquivo ZIP (*.zip)";
-    public static final String NEW_TITLE = "Nova automação";
-    public static final String NEW_SCOPE = "Prepara um pacote local a partir de um arquivo .zip com o código Python. Nada é criado na Platform, o código não é "
-            + "executado e nenhuma dependência é instalada.";
-    public static final String NEW_CHOOSE = "Escolher o .zip do código";
-    public static final String NEW_PREPARE = "Preparar pacote";
     public static final String WORKING = "Trabalhando...";
 
     public static String imported(String name, String version, boolean already) {
         return already ? "Este pacote já estava importado neste ambiente: " + name + "."
                 : "Pacote importado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador, neste ambiente; nada foi executado.";
-    }
-
-    public static String prepared(String name, String version) {
-        return "Pacote preparado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador; nada foi criado na Platform.";
     }
 
     public static final String INTEGRATION_LOCAL_ONLY = "Somente local — integração com a Platform não configurada";
@@ -124,6 +114,57 @@ public final class NavText {
     }
 
     /** Por que a consulta nao trouxe o resultado. Nunca e o texto de "lista vazia". */
+    // ---- gerar pacote novo (AGENT-CLIENT-PACOTES-001 T01)
+    public static final String GENERATE_NEW = "Gerar pacote novo";
+    public static final String GENERATE_TITLE = "Gerar pacote novo";
+    public static final String GENERATE_SUPPORT = "Gere um pacote .zip do seu projeto. Para cadastrar ou publicar a automação, envie o pacote pela Platform.";
+    public static final String GENERATE_FOLDER = "Pasta do projeto";
+    public static final String GENERATE_BROWSE = "Procurar pasta";
+    public static final String GENERATE_BROWSE_TITLE = "Escolher a pasta do projeto";
+    public static final String GENERATE_ENTRY = "Arquivo de entrada";
+    public static final String GENERATE_NAME = "Nome da automação";
+    public static final String GENERATE_VERSION = "Versão declarada no pacote (x.y.z)";
+    public static final String GENERATE_PYTHON = "Python exigido (por exemplo >=3.10,<3.14)";
+    public static final String GENERATE_DEPENDENCIES = "Dependências, uma por linha (nome==versão)";
+    public static final String GENERATE_DEPENDENCIES_CONFIRM = "Conferi as dependências acima";
+    public static final String GENERATE_COMPOSITION = "Arquivos do pacote e detalhes técnicos";
+    public static final String GENERATE_ADVANCED_SHOW = "Mostrar opções avançadas";
+    public static final String GENERATE_ADVANCED_HIDE = "Ocultar opções avançadas";
+    public static final String GENERATE_BUTTON = "Gerar pacote";
+    public static final String GENERATE_NEEDS = "Escolha a pasta, o arquivo de entrada e o nome.";
+    public static final String GENERATE_MANIFEST_FOUND = "Esta pasta já tem um manifesto de pacote (nekkora-external.json): os dados dele foram aproveitados e a "
+            + "versão não foi alterada.";
+    public static final String GENERATE_FOLDER_FAILED = "Não foi possível ler esta pasta.";
+    public static final String GENERATE_FAILED = "Não foi possível gerar o pacote.";
+    public static final String GENERATE_SAVE_TITLE = "Salvar o pacote como";
+    public static final String GENERATE_REPLACE = "Substituir";
+    public static final String GENERATE_NOT_REPLACED = "O arquivo que já existia não foi alterado. Escolha outro nome ou confirme a substituição.";
+    public static final String GENERATED = "Pacote gerado. Envie este arquivo pela Platform para cadastrar ou publicar a automação.";
+    public static final String GENERATE_REVEAL = "Abrir pasta do arquivo";
+
+    public static String generateReplace(String path) {
+        return "Já existe um arquivo com este nome:\n" + path + "\n\nSubstituir?";
+    }
+
+    /** Nome sugerido no "Salvar como": nome e versao do pacote, so com caracteres seguros para nome de arquivo. */
+    public static String generateFileName(String name, String version) {
+        String base = (name == null || name.isBlank() ? "pacote" : name.trim()).replaceAll("[^A-Za-z0-9._-]", "-");
+        String v = version == null || version.isBlank() ? "" : "-" + version.trim().replaceAll("[^A-Za-z0-9._-]", "-");
+        return base + v + ".zip";
+    }
+
+    /**
+     * O resumo do que sera gerado. A versao e a DECLARADA no pacote: gerar nao a reserva nem a publica na Platform, e o
+     * nome nao e conferido la.
+     */
+    public static String generateSummary(com.nekkora.client.pack.Workshop.PackageSummary s) {
+        String deps = s.dependencies().isEmpty() ? "nenhuma declarada" : String.join(", ", s.dependencies());
+        return "Resumo: nome " + s.name() + " · entrada " + s.entry() + " · versão declarada no pacote " + s.version()
+                + " (não reservada nem publicada na Platform) · Python " + (s.python() == null || s.python().isBlank() ? "não informado" : s.python())
+                + " · dependências: " + deps + " · " + s.included().size() + (s.included().size() == 1 ? " arquivo incluído" : " arquivos incluídos") + ", "
+                + s.excluded().size() + " fora (veja em opções avançadas).";
+    }
+
     // ---- atualizar (AGENT-CLIENT-NAVEGACAO-002)
     public static final String REFRESH = "Atualizar";
     public static final String REFRESHING = "Atualizando…";

@@ -337,6 +337,19 @@ public final class Workshop {
         }
     }
 
+    /**
+     * O endereco {@code file:} da PASTA em que o arquivo esta, para a tela pedir ao sistema que a mostre. Vazio se o
+     * caminho nao serve.
+     */
+    public Optional<String> folderUri(String filePath) {
+        try {
+            Path parent = Path.of(filePath).toAbsolutePath().getParent();
+            return parent != null && Files.isDirectory(parent) ? Optional.of(parent.toUri().toString()) : Optional.empty();
+        } catch (InvalidPathException | SecurityException e) {
+            return Optional.empty();
+        }
+    }
+
     /** O destino ja existe? (a tela pergunta antes de substituir; {@link #generate} tambem recusa sem {@code overwrite}) */
     public boolean exists(String destinationZipPath) {
         try {
