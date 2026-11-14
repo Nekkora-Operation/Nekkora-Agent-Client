@@ -21,7 +21,12 @@ final class Json {
     }
 
     static Object parse(String text) {
-        if (text == null || text.length() > 16_384) {
+        return parse(text, 16_384);
+    }
+
+    /** {@code max}: tamanho maximo aceito, em caracteres (as listas da navegacao sao maiores que as respostas da entrada). */
+    static Object parse(String text, int max) {
+        if (text == null || text.length() > max) {
             throw new IllegalArgumentException("json");
         }
         Json p = new Json(text);
@@ -37,11 +42,39 @@ final class Json {
     /** O objeto da raiz, ou erro se a raiz nao for um objeto. */
     @SuppressWarnings("unchecked")
     static Map<String, Object> object(String text) {
-        Object v = parse(text);
+        return object(text, 16_384);
+    }
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> object(String text, int max) {
+        Object v = parse(text, max);
         if (!(v instanceof Map)) {
             throw new IllegalArgumentException("json");
         }
         return (Map<String, Object>) v;
+    }
+
+    /** Um texto como literal JSON (aspas, barra e controles escapados). */
+    static String quote(String text) {
+        StringBuilder b = new StringBuilder(text.length() + 2).append('"');
+        for (int k = 0; k < text.length(); k++) {
+            char c = text.charAt(k);
+            switch (c) {
+                case '"' -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        b.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        b.append(c);
+                    }
+                }
+            }
+        }
+        return b.append('"').toString();
     }
 
     private Object value(int depth) {

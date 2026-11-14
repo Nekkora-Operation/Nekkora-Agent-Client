@@ -11,6 +11,7 @@ import com.nekkora.client.auth.BrowserSignIn;
 import com.nekkora.client.auth.DefaultBrowser;
 import com.nekkora.client.auth.PlatformApi;
 import com.nekkora.client.auth.PlatformOrigin;
+import com.nekkora.client.pack.Workshop;
 import com.nekkora.client.signin.SignInFlow;
 import com.nekkora.client.storage.ClientDataDir;
 import com.nekkora.client.storage.ClientPreferences;
@@ -58,13 +59,20 @@ public final class ClientMain {
             }
             BrowserSignIn signIn = new BrowserSignIn(origin, new PlatformApi(origin), new DefaultBrowser(), BrowserSignIn.Timing.DEFAULT);
             SignInFlow flow = new SignInFlow(signIn, SwingUtilities::invokeLater);
+            // area local de pacotes, na pasta de dados DESTE aplicativo (nunca a do Nekkora Agent administrativo)
+            Workshop workshop = new Workshop(data.root());
+            java.util.concurrent.ExecutorService background = java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
+                Thread t = new Thread(r, "consultas");
+                t.setDaemon(true);
+                return t;
+            });
             ClientWindow window = new ClientWindow(flow, preferences::saveTheme, () -> {
                 // fechar: a tentativa em curso e cancelada e a sessao encerrada na Platform; nada fica para a proxima abertura
                 flow.close();
                 signIn.close();
                 held.get().close();
                 System.exit(0);
-            });
+            }, BuildInfo.load(), background, workshop);
             Runtime.getRuntime().addShutdownHook(new Thread(flow::close, "encerramento"));
             window.setVisible(true);
         });

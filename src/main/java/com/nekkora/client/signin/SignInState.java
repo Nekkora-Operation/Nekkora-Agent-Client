@@ -20,6 +20,12 @@ public record SignInState(Phase phase, Notice notice) {
     /** O que dizer na tela de entrada. Os textos ficam na interface ({@code SignInText}). */
     public enum Notice {
         NONE,
+        /** A pessoa cancelou a tentativa no proprio aplicativo. Neutro: nao e falha. */
+        CANCELLED,
+        /** A pessoa recusou a entrada na pagina de confirmacao do navegador (retorno {@code access_denied} da tentativa). */
+        DECLINED,
+        /** A Platform respondeu, pelo contrato, que esta conta nao pode entrar neste aplicativo. */
+        ACCESS_DENIED,
         /** O tempo da tentativa acabou. */
         EXPIRED,
         /** O navegador padrao nao abriu. */
@@ -40,6 +46,8 @@ public record SignInState(Phase phase, Notice notice) {
         INVALID_RETURN,
         /** A sessao acabou (prazo ou encerramento na conta). */
         SESSION_EXPIRED,
+        /** A pessoa escolheu "Terminar sessao" no aplicativo. Neutro. */
+        SIGNED_OUT,
         /** Entrar pelo navegador nao esta disponivel (aplicativo ou Platform sem o recurso). */
         UNAVAILABLE
     }
