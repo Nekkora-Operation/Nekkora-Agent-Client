@@ -225,9 +225,10 @@ final class PlatformDirectory implements Directory {
                     throw new Failed(Failure.INVALID);
                 }
                 boolean published;
-                if ("PUBLISHED".equals(m.get("status"))) {
+                // os valores do contrato (DesktopAutomationVersion.status): "published" e "draft", exatamente assim
+                if ("published".equals(m.get("status"))) {
                     published = true;
-                } else if ("DRAFT".equals(m.get("status"))) {
+                } else if ("draft".equals(m.get("status"))) {
                     published = false;
                 } else {
                     throw new Failed(Failure.INVALID);
