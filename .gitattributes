@@ -5,3 +5,6 @@ mvnw text eol=lf
 *.ps1 text eol=crlf
 # copia literal dos tokens da Nekkora-lib: o teste confere o SHA-256 dos bytes
 src/test/resources/nekkora-lib/* -text
+# projetos de exemplo dos testes de pacote: os bytes sao os do Nekkora-Agent 9b1e7e1 (o hash por arquivo ignora CRLF, mas
+# o ZIP de teste nao deve mudar com o checkout)
+src/test/resources/pacotes-locais/** -text

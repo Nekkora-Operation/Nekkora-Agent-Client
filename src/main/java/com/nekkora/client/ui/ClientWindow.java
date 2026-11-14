@@ -19,6 +19,7 @@ import com.nekkora.client.BuildInfo;
 import com.nekkora.client.nav.Directory;
 import com.nekkora.client.nav.Loadable;
 import com.nekkora.client.nav.Navigation;
+import com.nekkora.client.pack.Workshop;
 import com.nekkora.client.signin.SignInFlow;
 import com.nekkora.client.signin.SignInState;
 import com.nekkora.client.signin.SignInState.Phase;
@@ -50,7 +51,11 @@ public final class ClientWindow extends JFrame {
     private final ContextView contextView;
     private final GhostButton themeToggle;
     private final AvatarButton avatar;
+    private final transient Workshop workshop;
+    private final transient LocalActions actions;
     private transient Navigation navigation;
+    /** O contexto cujos pacotes locais a tela mostra (ou pediu). Mudou o contexto, a lista anterior nao serve mais. */
+    private transient Navigation.Context localContext;
     private String showing = SIGN_IN;
 
     public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose) {
@@ -68,9 +73,15 @@ public final class ClientWindow extends JFrame {
 
     /** {@code background}: onde as consultas a Platform rodam (os testes passam um executor que eles controlam). */
     public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose, BuildInfo build, Executor background) {
+        this(flow, onThemeChosen, onClose, build, background, null);
+    }
+
+    /** {@code workshop}: a area local de pacotes. Nulo: as acoes locais ficam indisponiveis (e a tela diz isso). */
+    public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose, BuildInfo build, Executor background, Workshop workshop) {
         super(SignInText.APP_NAME);
         this.flow = flow;
         this.background = background;
+        this.workshop = workshop;
         setIconImages(BrandAssets.appIcons());
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
@@ -101,6 +112,33 @@ public final class ClientWindow extends JFrame {
                 navigation.loadAutomations();
             }
         }, build);
+        actions = workshop == null ? null : new LocalActions(workshop, background, new LocalActions.Host() {
+            @Override
+            public JFrame frame() {
+                return ClientWindow.this;
+            }
+
+            @Override
+            public Navigation navigation() {
+                return navigation;
+            }
+
+            @Override
+            public Directory directory() {
+                return flow.directory();
+            }
+
+            @Override
+            public void notice(String text, boolean error) {
+                contextView.showNotice(text, error);
+            }
+
+            @Override
+            public void localChanged(Navigation.Context context) {
+                loadLocal(context);
+            }
+        });
+        contextView.setActions(actions);
         content.add(signInView, SIGN_IN);
         content.add(organizationsView, ORGANIZATIONS);
         content.add(contextView, CONTEXT);
@@ -194,6 +232,12 @@ public final class ClientWindow extends JFrame {
             navigation.close();
             navigation = null;
         }
+        if (actions != null) {
+            actions.close();
+        }
+        localContext = null;
+        contextView.setLocal(java.util.List.of());
+        contextView.showNotice("", false);
         avatar.closeMenu();
         avatar.setVisible(false);
         avatar.setProfile(null);
@@ -208,8 +252,54 @@ public final class ClientWindow extends JFrame {
         }
         avatar.setProfile(state.profile().isReady() ? state.profile().value() : null);
         organizationsView.show(state.organizations());
+        Navigation.Context context = state.context();
+        if (!same(context, localContext)) {
+            // outro contexto (ou nenhum): os pacotes, o aviso e o formulario do anterior saem da tela antes de qualquer coisa
+            localContext = context;
+            contextView.setLocal(java.util.List.of());
+            contextView.showNotice("", false);
+            if (actions != null) {
+                actions.close();
+            }
+            if (context != null) {
+                loadLocal(context);
+            }
+        }
         contextView.show(state);
         to(state.selected() != null ? CONTEXT : ORGANIZATIONS);
+    }
+
+    private static boolean same(Navigation.Context a, Navigation.Context b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return a.organization().id().equals(b.organization().id()) && a.workspace().id().equals(b.workspace().id());
+    }
+
+    /** Le os pacotes locais do contexto, fora da fila de eventos; o resultado so entra se o contexto ainda for o mesmo. */
+    private void loadLocal(Navigation.Context context) {
+        if (workshop == null) {
+            return;
+        }
+        background.execute(() -> {
+            java.util.List<Workshop.LocalItem> items;
+            try {
+                items = workshop.list(context.organization().id(), context.workspace().id());
+            } catch (RuntimeException e) {
+                items = java.util.List.of();
+            }
+            java.util.List<Workshop.LocalItem> loaded = items;
+            SwingUtilities.invokeLater(() -> {
+                if (navigation != null && same(context, localContext)) {
+                    contextView.setLocal(loaded);
+                    contextView.show(navigation.state());
+                }
+            });
+        });
+    }
+
+    LocalActions actions() {
+        return actions;
     }
 
     private void to(String target) {

@@ -138,6 +138,28 @@ final class PlatformDirectory implements Directory {
         return new Automation.Listing(out, capabilities, true);
     }
 
+    @Override
+    public String rename(UUID organization, UUID automation, String name) throws Failed {
+        PlatformApi.Token t = token.get();
+        if (t == null) {
+            throw new Failed(Failure.SESSION_ENDED);
+        }
+        Map<String, Object> o;
+        try {
+            o = api.patch("/api/v1/desktop/organizations/" + organization + "/automations/" + automation, t, "{\"name\":" + Json.quote(name) + "}");
+        } catch (Failed f) {
+            if (f.failure() == Failure.SESSION_ENDED) {
+                onSessionEnded.run();
+            }
+            throw f;
+        }
+        // so e sucesso se o servidor confirmar QUAL automacao renomeou e com que nome
+        if (!automation.equals(uuid(o.get("automationId"))) || !(o.get("name") instanceof String saved) || saved.isBlank()) {
+            throw new Failed(Failure.INVALID);
+        }
+        return saved;
+    }
+
     private static Automation.Published published(Object value) throws Failed {
         if (value == null) {
             return null;

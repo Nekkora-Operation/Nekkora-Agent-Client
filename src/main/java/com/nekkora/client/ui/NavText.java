@@ -33,7 +33,48 @@ public final class NavText {
     public static final String NEEDS_WORKSPACE = "Selecione um ambiente primeiro.";
     /** Acao que ainda nao existe nesta versao. Nao e falta de permissao da pessoa, e o texto nao pode sugerir isso. */
     public static final String ACTION_UNAVAILABLE = "Indisponível nesta versão de teste.";
-    public static final String ACTIONS_UNAVAILABLE_NOTE = "Executar, Editar, Nova automação e Importar ainda não estão disponíveis nesta versão de teste.";
+    /** A nota por escrito das acoes que ainda nao existem nesta versao ("A, B e C ainda nao estao disponiveis..."). */
+    public static String unavailable(java.util.List<String> names) {
+        if (names.isEmpty()) {
+            return "";
+        }
+        String list = names.size() == 1 ? names.get(0) : String.join(", ", names.subList(0, names.size() - 1)) + " e " + names.get(names.size() - 1);
+        return list + (names.size() == 1 ? " ainda não está disponível" : " ainda não estão disponíveis") + " nesta versão de teste.";
+    }
+
+    public static final String SAVE = "Salvar";
+    public static final String CANCEL = "Cancelar";
+    public static final String LOCAL_ONLY = "Somente neste computador (não está na Platform)";
+    public static final String LOCAL_PRESENT = "Pacote disponível neste computador";
+    public static final String LOCAL_ABSENT = "Pacote não está neste computador";
+    public static final String RENAME_REMOTE_TITLE = "Renomear automação na Platform";
+    public static final String RENAME_REMOTE_SCOPE = "O novo nome vale na Platform, para todas as pessoas com acesso. As versões publicadas, os pacotes e os "
+            + "manifestos não mudam.";
+    public static final String RENAME_REMOTE_DONE = "Automação renomeada na Platform.";
+    public static final String RENAME_REMOTE_DENIED = "Você não tem permissão para renomear esta automação. Nada foi alterado.";
+    public static final String RENAME_LOCAL_TITLE = "Renomear neste computador";
+    public static final String RENAME_LOCAL_SCOPE = "Muda só o nome mostrado neste computador. O pacote, o manifesto e a impressão digital não mudam, e "
+            + "nada é alterado na Platform. Em branco, volta o nome declarado no pacote.";
+    public static final String RENAME_LOCAL_DONE = "Nome alterado só neste computador.";
+    public static final String NAME_FIELD = "Nome";
+    public static final String NAME_REQUIRED = "Informe um nome.";
+    public static final String IMPORT_TITLE = "Importar pacote (.zip)";
+    public static final String IMPORT_FILTER = "Arquivo ZIP (*.zip)";
+    public static final String NEW_TITLE = "Nova automação";
+    public static final String NEW_SCOPE = "Prepara um pacote local a partir de um arquivo .zip com o código Python. Nada é criado na Platform, o código não é "
+            + "executado e nenhuma dependência é instalada.";
+    public static final String NEW_CHOOSE = "Escolher o .zip do código";
+    public static final String NEW_PREPARE = "Preparar pacote";
+    public static final String WORKING = "Trabalhando...";
+
+    public static String imported(String name, String version, boolean already) {
+        return already ? "Este pacote já estava importado neste ambiente: " + name + "."
+                : "Pacote importado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador, neste ambiente; nada foi executado.";
+    }
+
+    public static String prepared(String name, String version) {
+        return "Pacote preparado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador; nada foi criado na Platform.";
+    }
 
     public static final String MENU = "Menu do usuário";
     public static final String MENU_SETTINGS = "Configurações";
@@ -54,6 +95,8 @@ public final class NavText {
             case TLS -> "Não foi possível estabelecer uma conexão segura com a Platform. Tente novamente mais tarde.";
             case SERVER -> "A Platform encontrou um problema. Tente novamente em instantes.";
             case RATE_LIMITED -> "Muitas consultas seguidas. Aguarde um pouco e tente novamente.";
+            case REJECTED -> "A Platform não aceitou o que foi enviado. Confira e tente novamente.";
+            case CONFLICT -> "Não é possível alterar agora: a automação ou o ambiente não está ativo.";
             case DENIED -> "Acesso não permitido. Sua conta não tem permissão para ver estas informações.";
             case NOT_FOUND -> "Você não tem mais acesso a este item, ou ele não existe mais.";
             case INVALID -> "A Platform respondeu de um jeito inesperado. Tente novamente.";

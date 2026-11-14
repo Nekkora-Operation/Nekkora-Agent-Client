@@ -27,6 +27,7 @@ import com.nekkora.client.nav.Loadable;
 import com.nekkora.client.nav.Navigation;
 import com.nekkora.client.nav.Organization;
 import com.nekkora.client.nav.Workspace;
+import com.nekkora.client.pack.Workshop;
 import com.nekkora.client.theme.ClientTheme;
 
 /**
@@ -50,13 +51,27 @@ final class ContextView extends JPanel {
 
     /** O que os botoes da tela fazem. Nulo: a acao ainda nao existe, e o botao fica desabilitado, dizendo isso. */
     interface Actions {
-        Consumer<Automation> run();
+        Consumer<Entry> run();
 
-        Consumer<Automation> edit();
+        Consumer<Entry> edit();
 
         Runnable create();
 
         Runnable importZip();
+    }
+
+    /**
+     * Uma linha da lista. {@code automation} nulo: item que so existe neste computador. {@code local} nulo: automacao da
+     * Platform cujo pacote NAO esta neste computador (listar os metadados nao traz o codigo).
+     */
+    record Entry(Automation automation, Workshop.LocalItem local) {
+        String name() {
+            return automation != null ? automation.name() : local.name();
+        }
+
+        boolean localOnly() {
+            return automation == null;
+        }
     }
 
     private final GhostButton back = GhostButton.text("←");
@@ -78,6 +93,9 @@ final class ContextView extends JPanel {
     private final JScrollPane scroll = new JScrollPane(rows, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
     private final JLabel truncated = new JLabel(NavText.AUTOMATIONS_TRUNCATED);
     private final WrappedText unavailable = new WrappedText(380);
+    private final WrappedText notice = new WrappedText(380);
+    private List<Workshop.LocalItem> local = List.of();
+    private List<Workshop.LocalItem> shownLocal = List.of();
     private final GhostButton create = GhostButton.text(NavText.NEW_AUTOMATION);
     private final GhostButton importZip = GhostButton.text(NavText.IMPORT_ZIP);
     private final JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.CENTER, ClientTheme.SPACE_3, 0));
@@ -191,10 +209,16 @@ final class ContextView extends JPanel {
         truncated.setVisible(false);
         JPanel bottomTop = new JPanel(new BorderLayout());
         bottomTop.setOpaque(false);
-        unavailable.setText(NavText.ACTIONS_UNAVAILABLE_NOTE);
         JPanel note = centered(unavailable);
         note.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_2, ClientTheme.SPACE_4, 0, ClientTheme.SPACE_4));
-        bottomTop.add(truncated, BorderLayout.NORTH);
+        notice.setVisible(false);
+        JPanel upper = new JPanel(new BorderLayout());
+        upper.setOpaque(false);
+        upper.add(truncated, BorderLayout.NORTH);
+        JPanel noticeRow = centered(notice);
+        noticeRow.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_2, ClientTheme.SPACE_4, 0, ClientTheme.SPACE_4));
+        upper.add(noticeRow, BorderLayout.SOUTH);
+        bottomTop.add(upper, BorderLayout.NORTH);
         bottomTop.add(actionsBar, BorderLayout.CENTER);
         bottomTop.add(note, BorderLayout.SOUTH);
         footer = new AppFooter(build);
@@ -218,7 +242,51 @@ final class ContextView extends JPanel {
 
     void setActions(Actions actions) {
         this.actions = actions;
+        shownListing = null; // as linhas sao refeitas com as acoes novas
         refreshActions();
+    }
+
+    /** Os pacotes locais do contexto ATUAL (organizacao e ambiente escolhidos). Trocar de contexto zera a lista. */
+    void setLocal(List<Workshop.LocalItem> items) {
+        this.local = List.copyOf(items);
+    }
+
+    /** Resultado da ultima acao local (importar, preparar, renomear), em linha; {@code null} ou vazio apaga. */
+    void showNotice(String text, boolean error) {
+        notice.setText(text == null ? "" : text);
+        notice.setVisible(text != null && !text.isEmpty());
+        notice.setForeground(Themes.color(error ? Themes.current().dangerText() : Themes.current().textSecondary()));
+        notice.getAccessibleContext().setAccessibleDescription(error ? "Erro" : "Aviso");
+        revalidate();
+        repaint();
+    }
+
+    String noticeText() {
+        return notice.isVisible() ? notice.getText() : "";
+    }
+
+    /**
+     * As linhas: primeiro as automacoes da Platform, na ordem dela, cada uma com o pacote local correspondente (o ligado
+     * a ela, ou o de mesma impressao digital da versao publicada); depois os itens que so existem neste computador.
+     */
+    static List<Entry> entries(Automation.Listing listing, List<Workshop.LocalItem> local) {
+        List<Entry> out = new ArrayList<>();
+        List<Workshop.LocalItem> rest = new ArrayList<>(local);
+        for (Automation a : listing.items()) {
+            Workshop.LocalItem match = null;
+            for (Workshop.LocalItem i : rest) {
+                if (a.id().equals(i.linkedAutomationId()) || (a.published() != null && i.matches(a.published().fingerprint()))) {
+                    match = i;
+                    break;
+                }
+            }
+            if (match != null) {
+                rest.remove(match);
+            }
+            out.add(new Entry(a, match));
+        }
+        rest.forEach(i -> out.add(new Entry(null, i)));
+        return out;
     }
 
     void show(Navigation.State state) {
@@ -273,7 +341,7 @@ final class ContextView extends JPanel {
             next = switch (automations.status()) {
                 case IDLE, LOADING -> LOADING;
                 case FAILED -> FAILED;
-                case READY -> automations.value().items().isEmpty() ? EMPTY : LIST;
+                case READY -> entries(automations.value(), local).isEmpty() ? EMPTY : LIST;
             };
         }
         spinner.setVisible(LOADING.equals(next));
@@ -282,12 +350,13 @@ final class ContextView extends JPanel {
             failure.getAccessibleContext().setAccessibleDescription("Erro ao carregar as automações");
         }
         Automation.Listing listing = automations.isReady() && chosen != null ? automations.value() : null;
-        if (listing == null || !listing.equals(shownListing)) {
+        if (listing == null || !listing.equals(shownListing) || !local.equals(shownLocal)) {
             shownListing = listing;
+            shownLocal = local;
             rows.removeAll();
             if (listing != null) {
-                for (Automation a : listing.items()) {
-                    rows.add(row(a, listing.capabilities()));
+                for (Entry e : entries(listing, local)) {
+                    rows.add(row(e, listing.capabilities()));
                 }
             }
             rows.revalidate();
@@ -303,22 +372,33 @@ final class ContextView extends JPanel {
         repaint();
     }
 
-    private AutomationRow row(Automation a, Automation.Capabilities capabilities) {
+    private AutomationRow row(Entry e, Automation.Capabilities capabilities) {
         PrimaryButton run = PrimaryButton.compact(NavText.RUN);
         GhostButton edit = GhostButton.text(NavText.EDIT);
-        Consumer<Automation> onRun = actions == null ? null : actions.run();
-        Consumer<Automation> onEdit = actions == null ? null : actions.edit();
-        enable(run, onRun != null, NavText.RUN + ": " + a.name(), NavText.ACTION_UNAVAILABLE);
-        // sem permissao para renomear, o botao fica desabilitado dizendo por que; o servidor recusa de qualquer forma
-        enable(edit, onEdit != null && capabilities.rename(), NavText.EDIT + ": " + a.name(),
-                onEdit == null ? NavText.ACTION_UNAVAILABLE : NavText.EDIT_DENIED);
+        Consumer<Entry> onRun = actions == null ? null : actions.run();
+        Consumer<Entry> onEdit = actions == null ? null : actions.edit();
+        enable(run, onRun != null, NavText.RUN + ": " + e.name(), NavText.ACTION_UNAVAILABLE);
+        // item so local: o nome mostrado aqui e da pessoa. Automacao da Platform: so com a permissao (o servidor confere de
+        // novo); sem ela o botao fica desabilitado dizendo por que
+        boolean mayEdit = e.localOnly() || capabilities.rename();
+        enable(edit, onEdit != null && mayEdit, NavText.EDIT + ": " + e.name(), onEdit == null ? NavText.ACTION_UNAVAILABLE : NavText.EDIT_DENIED);
         if (onRun != null) {
-            run.addActionListener(e -> onRun.accept(a));
+            run.addActionListener(x -> onRun.accept(e));
         }
         if (onEdit != null) {
-            edit.addActionListener(e -> onEdit.accept(a));
+            edit.addActionListener(x -> onEdit.accept(e));
         }
-        return new AutomationRow(a.name(), List.of(NavText.version(a)), run, edit);
+        List<String> details = new ArrayList<>();
+        if (e.localOnly()) {
+            details.add(NavText.LOCAL_ONLY);
+            details.add("Versão do pacote " + e.local().packageVersion());
+        } else {
+            details.add(NavText.version(e.automation()));
+            details.add(e.local() == null ? NavText.LOCAL_ABSENT : NavText.LOCAL_PRESENT + ": " + e.local().name() + " " + e.local().packageVersion());
+        }
+        AutomationRow row = new AutomationRow(e.name(), details, run, edit);
+        row.putClientProperty("entry", e);
+        return row;
     }
 
     private static void enable(JButton b, boolean enabled, String accessibleName, String whyNot) {
@@ -336,8 +416,21 @@ final class ContextView extends JPanel {
         enable(create, hasCreate && context, NavText.NEW_AUTOMATION, hasCreate ? NavText.NEEDS_WORKSPACE : NavText.ACTION_UNAVAILABLE);
         enable(importZip, hasImport && context, NavText.IMPORT_ZIP, hasImport ? NavText.NEEDS_WORKSPACE : NavText.ACTION_UNAVAILABLE);
         // enquanto alguma acao nao existe, a tela diz isso por escrito (nao so na dica do botao)
-        boolean missing = actions == null || actions.run() == null || actions.edit() == null || !hasCreate || !hasImport;
-        unavailable.setVisible(missing && organization != null);
+        List<String> missing = new ArrayList<>();
+        if (actions == null || actions.run() == null) {
+            missing.add(NavText.RUN);
+        }
+        if (actions == null || actions.edit() == null) {
+            missing.add(NavText.EDIT);
+        }
+        if (!hasCreate) {
+            missing.add(NavText.NEW_AUTOMATION);
+        }
+        if (!hasImport) {
+            missing.add("Importar");
+        }
+        unavailable.setText(NavText.unavailable(missing));
+        unavailable.setVisible(!missing.isEmpty() && organization != null);
     }
 
     Organization organization() {
@@ -452,6 +545,7 @@ final class ContextView extends JPanel {
         loadingText.setForeground(Themes.color(t.textSecondary()));
         failure.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
         failure.setForeground(Themes.color(t.dangerText()));
+        notice.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
         unavailable.setFont(Themes.font(ClientTheme.FONT_SIZE_XS, false));
         unavailable.setForeground(Themes.color(t.textSecondary()));
         truncated.setFont(Themes.font(ClientTheme.FONT_SIZE_XS, false));

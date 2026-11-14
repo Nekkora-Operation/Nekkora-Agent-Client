@@ -99,7 +99,8 @@ class PlatformDirectoryTest {
                 {403, "<html>403</html>", Failure.INVALID}, {404, "{\"error\":\"not_found\"}", Failure.NOT_FOUND},
                 {429, "{\"error\":\"rate_limited\"}", Failure.RATE_LIMITED}, {500, "{\"error\":\"internal_error\"}", Failure.SERVER},
                 {503, "{\"error\":\"service_unavailable\"}", Failure.SERVER}, {502, "<html>bad gateway</html>", Failure.SERVER},
-                {302, "{}", Failure.INVALID}, {400, "{\"error\":\"invalid_request\"}", Failure.INVALID}};
+                {302, "{}", Failure.INVALID}, {400, "{\"error\":\"invalid_request\"}", Failure.REJECTED},
+                {409, "{\"error\":\"conflict\"}", Failure.CONFLICT}};
         for (Object[] c : casos) {
             platform.readStatus = (Integer) c[0];
             platform.readBody = (String) c[1];
@@ -229,6 +230,39 @@ class PlatformDirectoryTest {
         assertEquals(PlatformDirectory.MAX_PAGES, l.items().size());
         assertTrue(l.truncated(), "a tela avisa que ha mais do que mostra");
         assertEquals(PlatformDirectory.MAX_PAGES, platform.pageRequests.size(), "o aplicativo para no teto: nao consulta sem fim");
+    }
+
+    // ------------------------------------------------------------------ renomear (T04)
+
+    @Test
+    void renomearEnviaSoONomeEConfiaNoQueOServidorConfirmou() throws Exception {
+        java.util.UUID org = java.util.UUID.fromString(A);
+        java.util.UUID automation = java.util.UUID.fromString(AU1);
+        platform.writeBody = "{\"automationId\":\"" + AU1 + "\",\"name\":\"Conciliação \\\"diária\\\"\"}";
+        assertEquals("Conciliação \"diária\"", directory.rename(org, automation, "Conciliação \"diária\""), "o nome que vale e o que o servidor gravou");
+        assertEquals(List.of("PATCH /api/v1/desktop/organizations/" + A + "/automations/" + AU1 + " | application/json | {\"name\":\"Conciliação \\\"diária\\\"\"}"),
+                platform.writes, "so o nome vai no corpo: nem papel, nem conta, nem versao");
+        // cada recusa do servidor com a sua classificacao; nenhuma e tratada como sucesso
+        Object[][] casos = {{403, "{\"error\":\"forbidden\"}", Failure.DENIED}, {404, "{\"error\":\"not_found\"}", Failure.NOT_FOUND},
+                {400, "{\"error\":\"invalid_request\"}", Failure.REJECTED}, {409, "{\"error\":\"conflict\"}", Failure.CONFLICT},
+                {429, "{\"error\":\"rate_limited\"}", Failure.RATE_LIMITED}, {500, "{\"error\":\"internal_error\"}", Failure.SERVER}};
+        for (Object[] c : casos) {
+            platform.writeStatus = (Integer) c[0];
+            platform.writeBody = (String) c[1];
+            assertEquals(c[2], failure(() -> directory.rename(org, automation, "Outro")), "renomear " + c[0]);
+        }
+        // 200 que nao confirma ESTA automacao ou nao traz o nome: nao e sucesso
+        platform.writeStatus = 200;
+        for (String body : new String[] {"{}", "{\"automationId\":\"" + AU1 + "\"}", "{\"automationId\":\"" + WS1 + "\",\"name\":\"Outro\"}",
+                "{\"automationId\":\"" + AU1 + "\",\"name\":\"\"}", "{\"automationId\":\"" + AU1 + "\",\"name\":7}"}) {
+            platform.writeBody = body;
+            assertEquals(Failure.INVALID, failure(() -> directory.rename(org, automation, "Outro")), body);
+        }
+        assertEquals(0, ended.get());
+        // sessao encerrada: 401 leva a entrada
+        platform.sessions.clear();
+        assertEquals(Failure.SESSION_ENDED, failure(() -> directory.rename(org, automation, "Outro")));
+        assertEquals(1, ended.get());
     }
 
     @Test
