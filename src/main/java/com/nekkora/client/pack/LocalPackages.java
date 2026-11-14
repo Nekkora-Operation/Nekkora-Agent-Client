@@ -30,6 +30,10 @@ import java.util.regex.Pattern;
  * &lt;dados&gt;/pacotes/.preparo/                                          pastas temporarias das operacoes
  * </pre>
  *
+ * <p>AGENT-CLIENT-PACOTES-001 T02: os metadados podem registrar a ORIGEM do item ({@link Provenance}: arquivo .zip, pasta
+ * de pacote, gerado aqui ou baixado da Platform, com a automacao e a versao). Sao campos opcionais do mesmo arquivo
+ * (mesmo esquema e versao): um arquivo antigo, sem eles, continua sendo lido.
+ *
  * <p>O endereco e o conteudo: a pasta tem o nome da impressao digital, de modo que o mesmo conteudo cai sempre no mesmo
  * lugar e um conteudo diferente nunca se mistura com outro. O mesmo pacote importado em dois ambientes existe duas
  * vezes, uma em cada um; nada de um ambiente e visto por outro.
@@ -67,9 +71,10 @@ public final class LocalPackages {
      * @param linkedAutomationId automacao da Platform a que a pessoa associou o item, ou {@code null}
      * @param addedAt quando o item foi guardado neste contexto
      * @param dir a pasta da copia conferida
+     * @param provenance de onde o item veio, ou {@code null} (itens guardados antes de a origem ser registrada)
      */
     public record Item(PackageContext context, String fingerprint, String declaredName, String packageVersion, String entry, String pythonRequirement,
-                       List<String> dependencies, String localName, UUID linkedAutomationId, Instant addedAt, Path dir) {
+                       List<String> dependencies, String localName, UUID linkedAutomationId, Instant addedAt, Path dir, Provenance provenance) {
         public Item {
             dependencies = List.copyOf(dependencies);
         }
@@ -84,7 +89,53 @@ public final class LocalPackages {
         }
 
         private Item with(String name, UUID automation) {
-            return new Item(context, fingerprint, declaredName, packageVersion, entry, pythonRequirement, dependencies, name, automation, addedAt, dir);
+            return new Item(context, fingerprint, declaredName, packageVersion, entry, pythonRequirement, dependencies, name, automation, addedAt, dir, provenance);
+        }
+
+        private Item from(Provenance origin) {
+            return new Item(context, fingerprint, declaredName, packageVersion, entry, pythonRequirement, dependencies, localName, linkedAutomationId, addedAt, dir,
+                    origin);
+        }
+    }
+
+    /** De onde um pacote guardado veio. O rotulo e o texto para a tela. */
+    public enum Origin {
+        /** Um arquivo .zip de pacote escolhido nesta maquina. */
+        LOCAL_ZIP("Arquivo .zip"),
+        /** Uma pasta de pacote (com {@code nekkora-external.json}) escolhida nesta maquina. */
+        LOCAL_FOLDER("Pasta de pacote"),
+        /** Gerado por este aplicativo a partir de codigo. */
+        BUILT("Gerado neste computador"),
+        /** Baixado da Platform e conferido com o que ela informou. */
+        PLATFORM_DOWNLOAD("Baixado da Platform");
+
+        private final String label;
+
+        Origin(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /**
+     * A origem de um item. Anotacao LOCAL: nao entra na impressao digital e nao autoriza nada.
+     *
+     * @param origin como o pacote chegou
+     * @param sourceLabel o arquivo ou a pasta de onde veio, como texto para a tela, ou {@code null}
+     * @param automationId automacao da Platform de que a versao foi baixada ({@code PLATFORM_DOWNLOAD}), ou {@code null}
+     * @param automationVersionId versao baixada ({@code PLATFORM_DOWNLOAD}), ou {@code null}
+     * @param versionNumber numero dessa versao na Platform ({@code PLATFORM_DOWNLOAD}), ou {@code null}
+     */
+    public record Provenance(Origin origin, String sourceLabel, UUID automationId, UUID automationVersionId, Integer versionNumber) {
+        public Provenance {
+            Objects.requireNonNull(origin, "origin");
+        }
+
+        public static Provenance local(Origin origin, String sourceLabel) {
+            return new Provenance(origin, sourceLabel, null, null, null);
         }
     }
 
@@ -120,6 +171,11 @@ public final class LocalPackages {
      * de laboratorio e recusado com {@code AGT-EXE-030}; um ZIP so de codigo, com {@code AGT-EXE-002}).
      */
     public synchronized Added add(PackageContext context, Path zip, SafeZip.Cancel cancel) throws ImportProblem, ExecRefused {
+        return add(context, zip, null, cancel);
+    }
+
+    /** {@link #add(PackageContext, Path, SafeZip.Cancel)} registrando a origem, se o item for novo neste contexto. */
+    public synchronized Added add(PackageContext context, Path zip, Provenance provenance, SafeZip.Cancel cancel) throws ImportProblem, ExecRefused {
         Objects.requireNonNull(context);
         Path tmp = newWork();
         try {
@@ -128,35 +184,7 @@ public final class LocalPackages {
             String prefix = ProjectImporter.rootPrefix(c);
             ExecutionPackage read = ExecutionPackage.inspect(prefix.isEmpty() ? into : into.resolve(prefix));
             if (cancel.requested()) throw new ImportProblem(Code.CANCELLED);
-            Path target = packageDir(context, read.fingerprint());
-            ExecutionPackage kept = intact(target, read.fingerprint());
-            boolean present = kept != null;
-            if (!present) {
-                // so o descritor e os arquivos listados entram na copia guardada; o resto do ZIP fica de fora
-                Path staged = tmp.resolve("pacote");
-                copyListed(read, staged);
-                if (!ExecutionPackage.inspect(staged).fingerprint().equals(read.fingerprint())) throw new ExecRefused(ErrorCode.EXEC_PACKAGE_CHANGED);
-                Io.deleteTree(target); // pasta alterada ou incompleta: refeita
-                Files.createDirectories(target.getParent());
-                try {
-                    Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
-                } catch (IOException e) {
-                    Files.move(staged, target);
-                }
-                kept = ExecutionPackage.inspect(target);
-                if (!kept.fingerprint().equals(read.fingerprint())) {
-                    Io.deleteTree(target);
-                    throw new ExecRefused(ErrorCode.EXEC_PACKAGE_CHANGED);
-                }
-            }
-            Optional<Item> known = load(context, read.fingerprint());
-            Item item = known.orElse(null);
-            if (item == null) {
-                item = new Item(context, kept.fingerprint(), kept.name(), kept.packageVersion(), kept.entry(), kept.pythonRequirement(), kept.dependencies(), null,
-                        null, clock.instant().truncatedTo(ChronoUnit.MILLIS), target);
-                save(item);
-            }
-            return new Added(item, kept, present && known.isPresent());
+            return keep(context, read, tmp, provenance);
         } catch (IOException e) {
             throw store(e);
         } finally {
@@ -164,9 +192,59 @@ public final class LocalPackages {
         }
     }
 
+    /**
+     * Guarda um pacote que o chamador JA leu e conferiu numa pasta privada dele ({@code read.dir()}: a extracao de um ZIP
+     * ou o retrato de uma pasta de pacote). So o descritor e os arquivos listados sao copiados, e a copia e conferida de
+     * novo pelo validador: a impressao guardada e a de {@code read}, ou nada e guardado. Idempotente como {@link #add}.
+     */
+    public synchronized Added addInspected(PackageContext context, ExecutionPackage read, Provenance provenance) throws ImportProblem, ExecRefused {
+        Objects.requireNonNull(context);
+        Objects.requireNonNull(read);
+        Path tmp = newWork();
+        try {
+            return keep(context, read, tmp, provenance);
+        } catch (IOException e) {
+            throw store(e);
+        } finally {
+            Io.deleteTree(tmp);
+        }
+    }
+
+    private Added keep(PackageContext context, ExecutionPackage read, Path tmp, Provenance provenance) throws IOException, ExecRefused {
+        Path target = packageDir(context, read.fingerprint());
+        ExecutionPackage kept = intact(target, read.fingerprint());
+        boolean present = kept != null;
+        if (!present) {
+            // so o descritor e os arquivos listados entram na copia guardada; o resto do ZIP fica de fora
+            Path staged = tmp.resolve("pacote");
+            copyListed(read, staged);
+            if (!ExecutionPackage.inspect(staged).fingerprint().equals(read.fingerprint())) throw new ExecRefused(ErrorCode.EXEC_PACKAGE_CHANGED);
+            Io.deleteTree(target); // pasta alterada ou incompleta: refeita
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException e) {
+                Files.move(staged, target);
+            }
+            kept = ExecutionPackage.inspect(target);
+            if (!kept.fingerprint().equals(read.fingerprint())) {
+                Io.deleteTree(target);
+                throw new ExecRefused(ErrorCode.EXEC_PACKAGE_CHANGED);
+            }
+        }
+        Optional<Item> known = load(context, read.fingerprint());
+        Item item = known.orElse(null);
+        if (item == null) {
+            item = new Item(context, kept.fingerprint(), kept.name(), kept.packageVersion(), kept.entry(), kept.pythonRequirement(), kept.dependencies(), null,
+                    null, clock.instant().truncatedTo(ChronoUnit.MILLIS), target, provenance);
+            save(item);
+        }
+        return new Added(item, kept, present && known.isPresent());
+    }
+
     /** Guarda um pacote que o {@link Packager} gravou: o ZIP e lido e conferido de novo, e a impressao precisa ser a do empacotamento. */
     public synchronized Added addBuilt(PackageContext context, Packager.Built built, SafeZip.Cancel cancel) throws ImportProblem, ExecRefused {
-        Added a = add(context, built.zip(), cancel);
+        Added a = add(context, built.zip(), Provenance.local(Origin.BUILT, null), cancel);
         if (!a.item().fingerprint().equals(built.fingerprint())) {
             // o arquivo mudou entre o empacotamento e a leitura: o que foi guardado agora nao e o que a pessoa preparou
             if (!a.alreadyPresent()) remove(context, a.item().fingerprint());
@@ -249,6 +327,12 @@ public final class LocalPackages {
         Objects.requireNonNull(automationId, "automationId");
         Item item = required(context, fingerprint);
         return saved(item.with(item.localName(), automationId));
+    }
+
+    /** Registra a origem do item (so nos metadados locais): usado quando o mesmo conteudo passa a ser uma versao baixada e conferida. */
+    public synchronized Item provenance(PackageContext context, String fingerprint, Provenance provenance) throws ImportProblem {
+        Objects.requireNonNull(provenance, "provenance");
+        return saved(required(context, fingerprint).from(provenance));
     }
 
     /** Desfaz a associacao (so nos metadados locais). */
@@ -380,6 +464,15 @@ public final class LocalPackages {
         b.append("],\n");
         field(b, "localName", it.localName());
         field(b, "linkedAutomationId", it.linkedAutomationId() == null ? null : it.linkedAutomationId().toString());
+        Provenance o = it.provenance();
+        if (o != null) {
+            // campos opcionais (acrescentados depois): um arquivo sem eles continua valendo, com origem desconhecida
+            field(b, "origin", o.origin().name());
+            field(b, "sourceLabel", o.sourceLabel());
+            field(b, "sourceAutomationId", o.automationId() == null ? null : o.automationId().toString());
+            field(b, "automationVersionId", o.automationVersionId() == null ? null : o.automationVersionId().toString());
+            b.append("  \"versionNumber\": ").append(o.versionNumber() == null ? "null" : o.versionNumber().toString()).append(",\n");
+        }
         b.append("  \"addedAt\": ").append(StrictJson.quote(it.addedAt().toString())).append("\n}\n");
         Path f = metaFile(it.context(), it.fingerprint());
         Files.createDirectories(f.getParent());
@@ -412,9 +505,28 @@ public final class LocalPackages {
             return Optional.of(new Item(context, fingerprint, Objects.requireNonNull(JsonReader.text(m, "name")),
                     Objects.requireNonNull(JsonReader.text(m, "packageVersion")), Objects.requireNonNull(JsonReader.text(m, "entry")),
                     Objects.requireNonNull(JsonReader.text(m, "python")), deps, JsonReader.text(m, "localName"),
-                    linked == null ? null : PackageContext.uuid(linked), Instant.parse(JsonReader.text(m, "addedAt")), dir));
+                    linked == null ? null : PackageContext.uuid(linked), Instant.parse(JsonReader.text(m, "addedAt")), dir, provenance(m)));
         } catch (IOException | JsonReader.Invalid | RuntimeException e) {
             return Optional.empty();
         }
+    }
+
+    /** A origem gravada, se houver e for legivel; um arquivo antigo (sem os campos) ou com valor desconhecido: {@code null}. */
+    private static Provenance provenance(Map<String, Object> m) {
+        try {
+            String origin = JsonReader.text(m, "origin");
+            if (origin == null) return null;
+            String automation = JsonReader.text(m, "sourceAutomationId");
+            String version = JsonReader.text(m, "automationVersionId");
+            return new Provenance(Origin.valueOf(origin), JsonReader.text(m, "sourceLabel"), automation == null ? null : PackageContext.uuid(automation),
+                    version == null ? null : PackageContext.uuid(version), m.get("versionNumber") instanceof Long n ? Math.toIntExact(n) : null);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** A pasta dos pacotes ({@code <dados>/pacotes}). */
+    public Path root() {
+        return root;
     }
 }

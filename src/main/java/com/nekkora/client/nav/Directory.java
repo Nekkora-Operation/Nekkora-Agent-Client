@@ -49,6 +49,37 @@ public interface Directory {
      */
     String rename(java.util.UUID organization, java.util.UUID automation, String name) throws Failed;
 
+    /**
+     * As versoes da automacao, da mais nova para a mais antiga, com o que a Platform informa do pacote de cada uma. So
+     * metadados: nenhum byte do pacote vem aqui.
+     */
+    java.util.List<Automation.Version> versions(java.util.UUID organization, java.util.UUID automation) throws Failed;
+
+    /**
+     * Baixa o pacote (ZIP) de uma versao PUBLICADA, entregando os bytes a {@code sink} na ordem. Quem decide se a pessoa pode
+     * e o servidor, nesta chamada: sem permissao de baixar, {@link Failure#DENIED}; fora do alcance,
+     * {@link Failure#NOT_FOUND}; versao nao publicada ou arquivo indisponivel na Platform, {@link Failure#CONFLICT}.
+     * <p>
+     * So termina sem falha se chegaram EXATAMENTE {@code expectedSize} bytes de uma resposta {@code application/zip} do
+     * proprio endereco da Platform (redirecionamento nao e seguido e o token nunca vai a outro endereco). Interrompido pela
+     * pessoa: {@link Failure#CANCELLED}. O destino recusou gravar: {@link Failure#LOCAL}. Em qualquer falha, o que ja foi
+     * entregue e LIXO: quem chamou descarta. Conferir sha256 e conteudo e de quem recebe os bytes.
+     */
+    void download(java.util.UUID organization, java.util.UUID automation, java.util.UUID version, long expectedSize, Sink sink) throws Failed;
+
+    /** Destino dos bytes de um download. Sem arquivo nem rede aqui: quem grava e a area local de pacotes. */
+    interface Sink {
+        /** Recebe o proximo trecho. {@code false}: o destino nao conseguiu gravar; o download para. */
+        boolean write(byte[] data, int length);
+
+        /** A pessoa cancelou? Consultado entre os trechos. */
+        boolean cancelled();
+
+        /** Quanto ja chegou, de quanto. */
+        default void progress(long received, long total) {
+        }
+    }
+
     /** Por que uma consulta nao trouxe o resultado. */
     enum Failure {
         /** A sessao nao vale mais: o aplicativo volta para a entrada. */
@@ -67,7 +98,11 @@ public interface Directory {
         TIMEOUT,
         TLS,
         /** Resposta que nao e a do contrato. */
-        INVALID
+        INVALID,
+        /** A pessoa interrompeu a operacao (download). */
+        CANCELLED,
+        /** O destino local nao pode gravar (disco cheio, pasta indisponivel). */
+        LOCAL
     }
 
     /** Consulta que nao trouxe resultado. Sem mensagem tecnica nem pilha: so a classificacao. */

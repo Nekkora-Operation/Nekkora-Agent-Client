@@ -3,7 +3,8 @@
 Dois pacotes Java sem tela e sem rede, só com o JDK:
 
 - `com.nekkora.client.pack` — ler um ZIP não confiável, validar um pacote Python externo, calcular a impressão digital,
-  empacotar o código de um projeto e **guardar pacotes por organização e ambiente**;
+  empacotar o código de um projeto (de um ZIP ou de uma pasta), **guardar pacotes por organização e ambiente** e
+  conferir e guardar um pacote que outra camada baixou da Platform;
 - `com.nekkora.client.run` — executar um pacote guardado, depois da aprovação da pessoa, e registrar o que aconteceu.
 
 Origem: portado de `Nekkora-Agent` (branch `dev`, commit `9b1e7e1`). O que mudou de nome está em
@@ -46,6 +47,12 @@ resposta entra por um `BooleanSupplier` entregue por quem monta o aplicativo (a 
       <impressão-hex>/                     cópia conferida: nekkora-external.json + arquivos listados
       <impressão-hex>.json                 metadados locais do item (nekkora-agent-client/local-package 1.0.0)
     .preparo/preparo-*/                    temporários das operações (apagados ao fim; sobras > 12 h são limpas)
+  baixados/                                pacotes baixados da Platform (AGENT-CLIENT-PACOTES-001 T02)
+    .parcial/                              arquivos em download (*.zip.parcial) e pastas de conferência; nunca tratados
+                                           como prontos; sobras > 12 h são limpas no download seguinte
+    <origem>/<organizationId>/<automationId>/<automationVersionId>/
+      pacote.zip                           o ZIP conferido, como a Platform o entregou
+      pacote.json                          metadados (nekkora-agent-client/downloaded-package 1.0.0)
   importacao/op-*/                         temporários de um ZIP de projeto ou de uma PASTA de projeto abertos
                                            (apagados em close(); sobras > 12 h); de uma pasta fica só o retrato
                                            (fonte/), sem credenciais, ambiente virtual, cache nem dados
@@ -64,6 +71,15 @@ Retenção: as 50 execuções **terminadas** mais recentes de cada organização
 Metadados do item (`<impressão-hex>.json`): `organizationId`, `workspaceId`, `fingerprint`, `name` (declarado),
 `packageVersion`, `entry`, `python`, `dependencies`, `localName` (ou `null`), `linkedAutomationId` (ou `null`), `addedAt`.
 Um arquivo de metadados só vale no lugar a que pertence (organização, ambiente e impressão gravados = os do caminho).
+
+Campos **opcionais** da origem (T02; mesmo esquema e versão — um arquivo antigo, sem eles, continua sendo lido, com origem
+desconhecida): `origin` (`LOCAL_ZIP`, `LOCAL_FOLDER`, `BUILT`, `PLATFORM_DOWNLOAD`), `sourceLabel` (arquivo ou pasta de
+onde veio, ou `null`) e, para um pacote baixado, `sourceAutomationId`, `automationVersionId` e `versionNumber`. Um valor
+de `origin` que esta versão não conhece é lido como origem desconhecida, sem perder o item.
+
+`<origem>` em `baixados/` são os 16 primeiros hexadecimais do SHA-256 do endereço da Platform (minúsculas, sem a barra
+final). `pacote.json`: `origin`, `organizationId`, `automationId`, `automationVersionId`, `versionNumber`, `sha256`,
+`sizeBytes`, `fingerprint`, `installedAt`; só vale no lugar a que pertence.
 
 ## Erros e textos para a pessoa
 
@@ -234,6 +250,72 @@ arquivo novo…), um descritor novo é escrito **só no ZIP**. Um arquivo de dad
 
 Os métodos antigos do ZIP (`open`, `build`, `importZip`) continuam como eram.
 
+### 3B. Pacote nesta máquina e pacote baixado (AGENT-CLIENT-PACOTES-001 T02)
+
+Sem rede aqui: o download é feito por outra camada, que recebe de `Workshop` o lugar do arquivo parcial.
+
+```java
+LocalCandidate inspectLocal(String path)                               // não guarda nada, nunca lança
+UseLocalResult useLocal(UUID organization, UUID workspace, UUID automationId, String path,
+                        String publishedFingerprintOrNull, Choice choice) throws Refused
+
+enum LocalKind { PACKAGE_ZIP, PACKAGE_FOLDER, CODE_FOLDER, UNSUPPORTED }
+record LocalCandidate(LocalKind kind, String pathLabel, String declaredName, String packageVersion, String fingerprint,
+                      String message)            // isPackage(), originLabel()
+enum Choice { ASK, SEPARATE_LOCAL }
+enum UseLocalOutcome { MATCHES_PUBLISHED, DIFFERS, STORED_SEPARATE }
+record UseLocalResult(UseLocalOutcome outcome, LocalItem item, String origin, String pathLabel, String fingerprint,
+                      String declaredName, String packageVersion)
+
+String downloadTarget(String platformOrigin, UUID organization, UUID automationId, UUID versionId) throws Refused
+OutputStream downloadStream(String tempFilePath) throws Refused
+LocalItem installDownloaded(String platformOrigin, UUID organization, UUID workspace, UUID automationId, UUID versionId,
+                            int versionNumber, String tempFilePath, String expectedSha256, long expectedSizeBytes,
+                            String expectedFingerprint, SafeZip.Cancel cancel) throws Refused
+void discardDownload(String tempFilePath) throws Refused
+
+record LocalItem(String fingerprint, String name, String declaredName, String packageVersion, UUID linkedAutomationId,
+                 LocalPackages.Origin origin, String sourceLabel, UUID sourceAutomationId, UUID automationVersionId,
+                 Integer versionNumber)          // matches(publishedFingerprint), originLabel()
+```
+
+**Escolha local.** Um `.zip` passa por `SafeZip` + `ExecutionPackage.inspect`; uma pasta passa pelo retrato de
+`openFolder` (mesma recusa de ligação e junção) e o manifesto e os arquivos listados são conferidos pelo mesmo validador.
+
+| Escolha | `kind` | `useLocal` |
+|---|---|---|
+| ZIP de pacote válido | `PACKAGE_ZIP` | compara a impressão |
+| pasta com `nekkora-external.json` válido | `PACKAGE_FOLDER` | compara a impressão |
+| pasta com código Python, sem manifesto | `CODE_FOLDER` | `Refused` (`AGT-PAC-092`, "Gerar pacote novo"); nada guardado |
+| pacote do Studio/laboratório, inválido, ZIP só de código, inexistente | `UNSUPPORTED` | `Refused` com a explicação |
+
+- A comparação é **só pela impressão digital** (conteúdo canônico), nunca pelo nome nem pelos bytes do ZIP: o mesmo
+  pacote recompactado (outra ordem, outra compressão, dentro de uma pasta externa) é o mesmo pacote.
+- Igual à publicada → guardado (`LocalPackages.addInspected`, uma única leitura: o que foi conferido é o que é guardado)
+  e associado (`link`) → `MATCHES_PUBLISHED`.
+- Diferente, ou sem impressão publicada → `Choice.ASK` (ou `null`): **nada é guardado**, `DIFFERS`;
+  `Choice.SEPARATE_LOCAL`: guardado como item só local, **sem associação** → `STORED_SEPARATE`. Um item assim nunca é
+  apresentado como a versão publicada (`item.matches(publicada)` é falso).
+- A origem registrada é a do primeiro jeito como o conteúdo chegou ao contexto; um download conferido do mesmo conteúdo
+  passa a origem para `PLATFORM_DOWNLOAD`. `importZip` registra `LOCAL_ZIP` e `build`, `BUILT`.
+
+**Download.** `downloadTarget` reserva `baixados/.parcial/<origem>-<versão>-….zip.parcial` (vazio); quem baixa escreve
+por `downloadStream` e chama `installDownloaded` ou `discardDownload`. Ordem em `installDownloaded`:
+
+1. tamanho e SHA-256 do arquivo contra o informado pela Platform, **antes** de abri-lo como ZIP (valor esperado ausente
+   ou fora do formato também é divergência);
+2. leitura segura (`SafeZip`: caminho que sai da pasta, ligação, colisão, limites) e validador real;
+3. impressão digital calculada igual à informada;
+4. o ZIP conferido é movido (troca atômica) para a pasta da versão, o pacote é guardado no contexto com origem
+   `PLATFORM_DOWNLOAD` (automação, versão e número) e associado à automação.
+
+Divergência em 1 ou 3 → `AGT-PAC-095`; em 2 → `AGT-PAC-096` (com o código do leitor ou do validador); cancelamento →
+`AGT-PAC-099`. Em qualquer desfecho o parcial deixa de existir; numa recusa nada fica fora de `.parcial` e nada vai para
+`pacotes/`. A mesma versão de novo não duplica nada; outra versão da mesma automação tem a sua pasta e o seu item, e
+nunca substitui nem apaga a anterior. Organizações, ambientes e endereços da Platform diferentes não dividem pasta.
+`discardDownload`, `downloadStream` e `installDownloaded` recusam (`AGT-PAC-097`) qualquer caminho que não seja um filho
+direto de `.parcial` com o sufixo `.zip.parcial`. Nada aqui executa script nem instala dependência.
+
 ## `run` — o que a interface usa
 
 ### 4. Preparar
@@ -394,7 +476,9 @@ Novos neste aplicativo: `AGT-EXE-030` (pacote do Studio ou de laboratório), `AG
 `AGT-PAC-060` (nome local inválido), `AGT-PAC-061` (pacote não está neste ambiente), `AGT-PAC-062` (falha ao gravar na
 pasta de pacotes); `AGT-PAC-070`…`-086` (pacote a partir de uma pasta: pasta inexistente, ligação ou junção, pasta mudou,
 limites, nomes, leitura, sem `.py`, manifesto em conflito/inválido/de outro formato, pasta do aplicativo, cancelamento,
-destino inválido, destino existente); rótulo `UNSUPPORTED_PACKAGE`. Retirados: `AGT-PAC-032`, `AGT-PAC-043` e os códigos do Studio, da
+destino inválido, destino existente); `AGT-PAC-090`…`-099` (escolha local inválida ou inexistente, pasta de código,
+ZIP ou pasta que não é pacote, download que não confere, download que não é pacote válido, caminho que não é um parcial
+do aplicativo, falha ao gravar em `baixados/`, download cancelado); rótulo `UNSUPPORTED_PACKAGE`. Retirados: `AGT-PAC-032`, `AGT-PAC-043` e os códigos do Studio, da
 Platform e da observabilidade.
 
 Atenção — textos preservados que citam o produto antigo e que a tela pode querer rever (não foram alterados aqui):

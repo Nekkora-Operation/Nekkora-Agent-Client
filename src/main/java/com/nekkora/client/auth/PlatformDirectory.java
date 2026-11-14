@@ -15,7 +15,7 @@ import com.nekkora.client.nav.Profile;
 import com.nekkora.client.nav.Workspace;
 
 /**
- * As consultas da pessoa a Platform (contratos desktop-navigation/1 e /2), com o token da sessao do aplicativo. So leitura do
+ * As consultas da pessoa a Platform (contratos desktop-navigation/1 a /3), com o token da sessao do aplicativo. So leitura do
  * que o servidor autoriza a cada chamada: o aplicativo nao declara organizacao, papel nem conta, e nao guarda nada disto
  * em disco.
  * <p>
@@ -124,7 +124,12 @@ final class PlatformDirectory implements Directory {
                 throw new Failed(Failure.INVALID);
             }
             // as capacidades valem como vieram na ULTIMA pagina lida (a mais recente)
-            capabilities = new Automation.Capabilities(rename, execute);
+            // "download" e do contrato /3; ausente (Platform anterior) = nao baixa. Presente, tem de ser booleano
+            Object download = c.get("download");
+            if (download != null && !(download instanceof Boolean)) {
+                throw new Failed(Failure.INVALID);
+            }
+            capabilities = new Automation.Capabilities(rename, execute, Boolean.TRUE.equals(download));
             for (Object item : items(o)) {
                 if (!(item instanceof Map<?, ?> m) || !(m.get("name") instanceof String name) || name.isBlank()) {
                     throw new Failed(Failure.INVALID);
@@ -172,19 +177,93 @@ final class PlatformDirectory implements Directory {
         if (!(value instanceof Map<?, ?> v) || !(v.get("versionNumber") instanceof Double n) || n != Math.rint(n) || n < 1 || n > Integer.MAX_VALUE) {
             throw new Failed(Failure.INVALID);
         }
-        String name = null;
-        String version = null;
-        String fingerprint = null;
-        Object pkg = v.get("package");
-        if (pkg != null) {
-            if (!(pkg instanceof Map<?, ?> p)) {
+        Pkg pkg = pkg(v.get("package"));
+        return new Automation.Published(uuid(v.get("automationVersionId")), n.intValue(), pkg.name(), pkg.version(), pkg.fingerprint(), pkg.sha256(),
+                pkg.sizeBytes());
+    }
+
+    private record Pkg(String name, String version, String fingerprint, String sha256, long sizeBytes) {
+    }
+
+    private static final java.util.regex.Pattern HEX64 = java.util.regex.Pattern.compile("^[0-9a-f]{64}$");
+
+    /** O pacote de uma versao, como o contrato o descreve. sha256 e tamanho sao do contrato /3: ausentes numa Platform anterior. */
+    private static Pkg pkg(Object value) throws Failed {
+        if (value == null) {
+            return new Pkg(null, null, null, null, -1);
+        }
+        if (!(value instanceof Map<?, ?> p)) {
+            throw new Failed(Failure.INVALID);
+        }
+        String sha = null;
+        long size = -1;
+        if (p.get("sha256") != null) {
+            if (!(p.get("sha256") instanceof String s) || !HEX64.matcher(s).matches()) {
                 throw new Failed(Failure.INVALID);
             }
-            name = text(p.get("name"));
-            version = text(p.get("version"));
-            fingerprint = text(p.get("fingerprint"));
+            sha = s;
         }
-        return new Automation.Published(uuid(v.get("automationVersionId")), n.intValue(), name, version, fingerprint);
+        if (p.get("sizeBytes") != null) {
+            if (!(p.get("sizeBytes") instanceof Double d) || d != Math.rint(d) || d < 1 || d > PlatformApi.MAX_PACKAGE_BYTES) {
+                throw new Failed(Failure.INVALID);
+            }
+            size = d.longValue();
+        }
+        return new Pkg(text(p.get("name")), text(p.get("version")), text(p.get("fingerprint")), sha, size);
+    }
+
+    @Override
+    public List<Automation.Version> versions(UUID organization, UUID automation) throws Failed {
+        List<Automation.Version> out = new ArrayList<>();
+        Set<UUID> seen = new HashSet<>();
+        String cursor = null;
+        for (int page = 0; page < MAX_PAGES; page++) {
+            Map<String, Object> o = get("/api/v1/desktop/organizations/" + organization + "/automations/" + automation + "/versions?limit=100"
+                    + (cursor == null ? "" : "&cursor=" + cursor));
+            for (Object item : items(o)) {
+                if (!(item instanceof Map<?, ?> m) || !(m.get("versionNumber") instanceof Double n) || n != Math.rint(n) || n < 1 || n > Integer.MAX_VALUE) {
+                    throw new Failed(Failure.INVALID);
+                }
+                boolean published;
+                // os valores do contrato (DesktopAutomationVersion.status): "published" e "draft", exatamente assim
+                if ("published".equals(m.get("status"))) {
+                    published = true;
+                } else if ("draft".equals(m.get("status"))) {
+                    published = false;
+                } else {
+                    throw new Failed(Failure.INVALID);
+                }
+                UUID id = uuid(m.get("automationVersionId"));
+                if (!seen.add(id)) {
+                    throw new Failed(Failure.INVALID);
+                }
+                Pkg pkg = pkg(m.get("package"));
+                out.add(new Automation.Version(id, n.intValue(), published, pkg.name(), pkg.version(), pkg.fingerprint(), pkg.sha256(), pkg.sizeBytes()));
+            }
+            cursor = next(o);
+            if (cursor == null) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public void download(UUID organization, UUID automation, UUID version, long expectedSize, Sink sink) throws Failed {
+        PlatformApi.Token t = token.get();
+        if (t == null) {
+            throw new Failed(Failure.SESSION_ENDED);
+        }
+        try {
+            // so ids no caminho, todos conferidos pelo servidor; nenhum endereco vem do pacote nem da lista
+            api.download("/api/v1/desktop/organizations/" + organization + "/automations/" + automation + "/versions/" + version + "/package", t,
+                    expectedSize, sink);
+        } catch (Failed f) {
+            if (f.failure() == Failure.SESSION_ENDED) {
+                onSessionEnded.run();
+            }
+            throw f;
+        }
     }
 
     private static String text(Object value) throws Failed {

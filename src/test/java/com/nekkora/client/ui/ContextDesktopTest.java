@@ -184,7 +184,6 @@ class ContextDesktopTest {
         assertEquals("Selecione um ambiente para ver as automações.", read(v::hintText));
         assertEquals(0, read(() -> v.rows().size()));
         assertFalse(session.directory.calls.stream().anyMatch(c -> c.startsWith("automations")), "sem ambiente, nenhuma consulta de automacoes");
-        assertFalse(read(() -> v.importButton().isEnabled()), "sem ambiente, sem acoes do ambiente");
         evidence("sakura-dark-ambiente-selecione");
         // nada de "workspace" nos textos visiveis
         for (String t : items()) {
@@ -282,9 +281,8 @@ class ContextDesktopTest {
         answer();
         assertEquals(ContextView.EMPTY, read(v::showing));
         assertEquals("Nenhuma automação neste ambiente.", read(v::emptyText));
-        assertTrue(read(() -> v.generateButton().isShowing() && v.importButton().isShowing()), "as acoes do ambiente continuam na tela");
+        assertTrue(read(() -> v.generateButton().isShowing()), "as acoes do ambiente continuam na tela");
         assertEquals("Gerar pacote novo", read(() -> v.generateButton().getText()));
-        assertEquals("Importar (.zip)", read(() -> v.importButton().getText()));
         evidence("sakura-dark-automacoes-nenhuma");
     }
 
@@ -322,13 +320,13 @@ class ContextDesktopTest {
         JButton edit = read(() -> v.rows().get(0).actions().get(1));
         assertFalse(read(edit::isEnabled));
         // nesta versao a acao ainda nao existe: a indicacao e de indisponibilidade, NUNCA de falta de permissao
-        for (JButton bt : read(() -> List.of(v.rows().get(0).actions().get(0), edit, v.generateButton(), v.importButton()))) {
+        for (JButton bt : read(() -> List.of(v.rows().get(0).actions().get(0), edit, v.generateButton()))) {
             assertFalse(read(bt::isEnabled));
             assertEquals("Indisponível nesta versão de teste.", read(bt::getToolTipText), bt.getText());
             assertEquals("Indisponível nesta versão de teste.", read(() -> bt.getAccessibleContext().getAccessibleDescription()));
             assertFalse(read(bt::getToolTipText).toLowerCase().contains("permiss"));
         }
-        assertEquals("Executar, Editar, Gerar pacote novo e Importar ainda não estão disponíveis nesta versão de teste.", read(v::unavailableNote));
+        assertEquals("Executar, Editar e Gerar pacote novo ainda não estão disponíveis nesta versão de teste.", read(v::unavailableNote));
         assertTrue(read(edit::isShowing), "visivel e desabilitado, com a justificativa");
         String dica = read(edit::getToolTipText);
         assertFalse(dica == null || dica.isBlank());
@@ -412,7 +410,7 @@ class ContextDesktopTest {
         assertEquals(combo, in(v.workspaceBox(), v), "o seletor de ambiente nao rola");
         Rectangle area = in(v.scroll(), v);
         assertTrue(area.y + area.height <= acoes.y && acoes.y + acoes.height <= rodape.y, "lista, depois acoes, depois rodape");
-        assertTrue(read(() -> v.generateButton().isShowing() && v.importButton().isShowing() && v.footer().isShowing()));
+        assertTrue(read(() -> v.generateButton().isShowing() && v.footer().isShowing()));
         evidence("sakura-dark-automacoes-60-rolado");
     }
 
@@ -473,6 +471,6 @@ class ContextDesktopTest {
         for (JButton bt : read(() -> v.rows().get(0).actions())) {
             assertTrue(read(bt::isFocusable));
         }
-        assertTrue(read(() -> v.generateButton().isFocusable() && v.importButton().isFocusable()));
+        assertTrue(read(() -> v.generateButton().isFocusable()));
     }
 }

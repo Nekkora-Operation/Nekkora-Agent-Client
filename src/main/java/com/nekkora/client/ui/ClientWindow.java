@@ -80,6 +80,8 @@ public final class ClientWindow extends JFrame {
     };
     private final transient LocalActions actions;
     private transient Navigation navigation;
+    /** Endereco da Platform desta instalacao (entregue por quem monta o aplicativo): separa os pacotes baixados no disco. */
+    private String platformOrigin = "platform-nao-informada";
     /** O contexto cujos pacotes locais a tela mostra (ou pediu). Mudou o contexto, a lista anterior nao serve mais. */
     private transient Navigation.Context localContext;
     private String showing = SIGN_IN;
@@ -166,6 +168,11 @@ public final class ClientWindow extends JFrame {
             @Override
             public void localChanged(Navigation.Context context) {
                 loadLocal(context);
+            }
+
+            @Override
+            public String platformOrigin() {
+                return platformOrigin;
             }
         });
         contextView.setActions(actions);
@@ -382,10 +389,23 @@ public final class ClientWindow extends JFrame {
         });
     }
 
+    public void setPlatformOrigin(String origin) {
+        if (origin != null && !origin.isBlank()) {
+            this.platformOrigin = origin;
+        }
+    }
+
     /** Como mostrar ao sistema a pasta de um arquivo gerado (entregue por quem monta o aplicativo). */
     public void setReveal(java.util.function.Consumer<String> reveal) {
         if (actions != null && reveal != null) {
             actions.reveal = reveal;
+        }
+    }
+
+    /** Recarrega os pacotes locais do contexto atual (usado depois de uma mudanca feita fora da tela). */
+    void reloadLocal() {
+        if (localContext != null) {
+            loadLocal(localContext);
         }
     }
 

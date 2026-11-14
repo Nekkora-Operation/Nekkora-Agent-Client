@@ -160,6 +160,13 @@ class LocalActionsDesktopTest {
         ImageIO.write(img, "png", EVIDENCE.resolve(name + "-200.png").toFile());
     }
 
+    /** Guarda um pacote local no contexto (preparo do teste; na tela, isso acontece em Editar) e recarrega a lista. */
+    private void seed(Path zip) throws Exception {
+        workshop.importZip(a.id(), fin.id(), zip.toString());
+        edt(() -> window.reloadLocal());
+        answer();
+    }
+
     // ------------------------------------------------------------------ disponibilidade
 
     @Test
@@ -167,108 +174,16 @@ class LocalActionsDesktopTest {
         ContextView v = window.contextView();
         edt(() -> window.organizationsView().cards().get(0).choose());
         answer();
-        assertFalse(read(() -> v.importButton().isEnabled()), "sem ambiente escolhido, nada de importar");
         assertTrue(read(() -> v.generateButton().isEnabled()), "gerar um .zip nao depende de ambiente");
-        assertEquals("Selecione um ambiente primeiro.", read(() -> v.importButton().getToolTipText()));
         edt(() -> v.workspaceBox().setSelectedItem(fin));
         answer();
-        assertTrue(read(() -> v.generateButton().isEnabled() && v.importButton().isEnabled()));
-        assertEquals("Importar (.zip)", read(() -> v.importButton().getText()), "o texto diz que e .zip");
+        assertTrue(read(() -> v.generateButton().isEnabled()));
         JButton executar = read(() -> v.rows().get(0).actions().get(0));
         assertFalse(read(executar::isEnabled));
         assertEquals("Indisponível nesta versão de teste.", read(executar::getToolTipText));
         assertEquals("Executar ainda não está disponível nesta versão de teste.", read(v::unavailableNote));
         // metadados da Platform nao sao o codigo: sem pacote local, a linha diz isso
         assertEquals(List.of("Versão publicada 3 · versão do pacote 1.2.0", "Pacote não está neste computador"), read(() -> v.rows().get(0).details()));
-    }
-
-    // ------------------------------------------------------------------ importar
-
-    @Test
-    void importarZipValidoApareceSoNoAmbienteEmQueFoiImportado() throws Exception {
-        ContextView v = window.contextView();
-        enter(a, fin);
-        Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "folha-local", "0.3.0", "main.py");
-        edt(() -> window.actions().importZip(zip.toString()));
-        assertEquals("Trabalhando...", read(v::noticeText));
-        answer();
-        assertEquals("Pacote importado: folha-local (versão do pacote 0.3.0). Ele fica só neste computador, neste ambiente; nada foi executado.", read(v::noticeText));
-        assertEquals(List.of("Conciliação bancária", "folha-local"), names(), "automacoes da Platform primeiro; depois o item so local");
-        assertEquals(List.of("Somente neste computador (não está na Platform)", "Versão do pacote 0.3.0"), row("folha-local").details());
-        evidence("sakura-dark-importado", window.getRootPane());
-        // de novo: nao duplica
-        edt(() -> window.actions().importZip(zip.toString()));
-        answer();
-        assertEquals("Este pacote já estava importado neste ambiente: folha-local.", read(v::noticeText));
-        assertEquals(2, names().size());
-        // outro ambiente da mesma organizacao: o pacote NAO aparece, e o aviso do anterior some
-        edt(() -> v.workspaceBox().setSelectedItem(fis));
-        answer();
-        assertEquals(List.of("Apuração"), names());
-        assertEquals("", read(v::noticeText));
-        // outra organizacao, ambiente homonimo: tambem nao
-        edt(() -> v.backButton().doClick(0));
-        enter(b, deB);
-        assertEquals(List.of(), names());
-        assertEquals(ContextView.EMPTY, read(v::showing));
-        // de volta ao ambiente original, ele continua la (em disco, por contexto)
-        edt(() -> v.backButton().doClick(0));
-        enter(a, fin);
-        assertEquals(List.of("Conciliação bancária", "folha-local"), names());
-        assertEquals(1, workshop.list(a.id(), fin.id()).size());
-        assertEquals(0, workshop.list(a.id(), fis.id()).size());
-        assertEquals(0, workshop.list(b.id(), deB.id()).size());
-    }
-
-    @Test
-    void zipInvalidoERecusadoComExplicacaoENadaFicaGuardado() throws Exception {
-        ContextView v = window.contextView();
-        enter(a, fin);
-        for (Path ruim : List.of(PackFixtures.notAZip(tmp.resolve("zips")), PackFixtures.codeZip(tmp.resolve("zips"), "minimo"), tmp.resolve("nao-existe.zip"))) {
-            edt(() -> window.actions().importZip(ruim.toString()));
-            answer();
-            String aviso = read(v::noticeText);
-            assertFalse(aviso.isBlank() || aviso.startsWith("Pacote importado"), ruim.getFileName() + ": " + aviso);
-            assertEquals(List.of("Conciliação bancária"), names());
-        }
-        Path semExtensao = Files.copy(PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "x", "1.0.0", "main.py"), tmp.resolve("pacote.bin"));
-        edt(() -> window.actions().importZip(semExtensao.toString()));
-        answer();
-        assertEquals("Escolha um arquivo .zip.", read(v::noticeText));
-        assertEquals(0, workshop.list(a.id(), fin.id()).size());
-    }
-
-    @Test
-    void trocarDeContextoDuranteAImportacaoNaoLevaOResultadoParaONovo() throws Exception {
-        ContextView v = window.contextView();
-        enter(a, fin);
-        Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "tardio", "1.0.0", "main.py");
-        edt(() -> window.actions().importZip(zip.toString()));
-        Runnable gravacao = background.take(0); // a importacao fica presa
-        edt(() -> v.backButton().doClick(0));
-        enter(b, deB);
-        gravacao.run(); // termina agora, com a pessoa em outra organizacao
-        answer();
-        assertEquals("", read(v::noticeText), "o aviso da importacao nao aparece no contexto novo");
-        assertEquals(List.of(), names(), "nem o pacote");
-        assertEquals(0, workshop.list(b.id(), deB.id()).size());
-        assertEquals(1, workshop.list(a.id(), fin.id()).size(), "o pacote foi para o contexto em que a importacao NASCEU");
-    }
-
-    @Test
-    void pacoteIgualAoPublicadoEReconhecidoPelaImpressaoDigital() throws Exception {
-        ContextView v = window.contextView();
-        Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "conciliacao", "1.2.0", "main.py");
-        String fingerprint = new Workshop(tmp.resolve("outra")).importZip(a.id(), fin.id(), zip.toString()).item().fingerprint();
-        session.directory.automations.put(fin.id(), new com.nekkora.client.nav.Automation.Listing(List.of(new com.nekkora.client.nav.Automation(FakeDirectory.id(2001),
-                "Conciliação bancária", new com.nekkora.client.nav.Automation.Published(FakeDirectory.id(3001), 3, "conciliacao", "1.2.0", fingerprint))),
-                new com.nekkora.client.nav.Automation.Capabilities(true, true), false));
-        enter(a, fin);
-        assertEquals("Pacote não está neste computador", read(() -> v.rows().get(0).details().get(1)));
-        edt(() -> window.actions().importZip(zip.toString()));
-        answer();
-        assertEquals(List.of("Conciliação bancária"), names(), "o pacote identico ao publicado nao vira outra linha");
-        assertEquals("Pacote disponível neste computador: conciliacao 1.2.0", read(() -> v.rows().get(0).details().get(1)));
     }
 
     // ------------------------------------------------------------------ renomear
@@ -280,7 +195,7 @@ class LocalActionsDesktopTest {
         JButton editar = read(() -> v.rows().get(0).actions().get(1));
         assertTrue(read(editar::isEnabled));
         edt(() -> editar.doClick(0));
-        RenameForm f = (RenameForm) read(() -> window.actions().form());
+        RenameForm f = read(() -> window.actions().renameFormShown());
         assertEquals("Renomear automação na Platform", read(f::titleText));
         assertTrue(read(f::scopeText).contains("vale na Platform") && read(f::scopeText).contains("pacotes e os manifestos não mudam"), "o alcance e dito antes do campo");
         assertEquals("Conciliação bancária", read(() -> f.field().getText()));
@@ -306,14 +221,19 @@ class LocalActionsDesktopTest {
     void semPermissaoOBotaoFicaDesabilitadoEAChamadaDiretaERecusadaPeloServidor() throws Exception {
         ContextView v = window.contextView();
         enter(a, fis); // capacidades do ambiente: rename=false
+        // Editar abre (o pacote desta maquina e escolhido la); a secao de renomear e que diz a falta de permissao
         JButton editar = read(() -> v.rows().get(0).actions().get(1));
-        assertFalse(read(editar::isEnabled));
-        assertEquals("Você não tem permissão para editar automações neste ambiente.", read(editar::getToolTipText));
+        assertTrue(read(editar::isEnabled));
+        edt(() -> editar.doClick(0));
+        EditForm semRenomear = (EditForm) read(() -> window.actions().form());
+        assertNull(semRenomear.renameForm(), "sem a permissao, nao ha campo de nome");
+        assertTrue(read(semRenomear::renameDeniedText).contains("não tem permissão para renomear"), read(semRenomear::renameDeniedText));
+        edt(() -> window.actions().close());
         // mesmo forcando a acao (como faria um Client alterado), quem decide e o servidor
         session.directory.renameFailure = Failure.DENIED;
         ContextView.Entry entrada = read(() -> (ContextView.Entry) v.rows().get(0).getClientProperty("entry"));
         edt(() -> window.actions().rename(entrada));
-        RenameForm f = (RenameForm) read(() -> window.actions().form());
+        RenameForm f = read(() -> window.actions().renameFormShown());
         edt(() -> f.field().setText("Nome forçado"));
         edt(() -> f.saveButton().doClick(0));
         answer();
@@ -341,8 +261,7 @@ class LocalActionsDesktopTest {
         ContextView v = window.contextView();
         enter(a, fin);
         Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "folha-local", "0.3.0", "main.py");
-        edt(() -> window.actions().importZip(zip.toString()));
-        answer();
+        seed(zip);
         List<Workshop.LocalItem> antes = workshop.list(a.id(), fin.id());
         assertEquals(1, antes.size());
         assertEquals(List.of("Conciliação bancária", "folha-local"), names());
@@ -373,13 +292,12 @@ class LocalActionsDesktopTest {
         ContextView v = window.contextView();
         enter(a, fin);
         Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "folha-local", "0.3.0", "main.py");
-        edt(() -> window.actions().importZip(zip.toString()));
-        answer();
+        seed(zip);
         String fingerprint = workshop.list(a.id(), fin.id()).get(0).fingerprint();
         JButton editar = row("folha-local").actions().get(1);
         assertTrue(read(editar::isEnabled), "item so local: a pessoa pode dar um nome");
         edt(() -> editar.doClick(0));
-        RenameForm f = (RenameForm) read(() -> window.actions().form());
+        RenameForm f = read(() -> window.actions().renameFormShown());
         assertEquals("Renomear neste computador", read(f::titleText));
         assertTrue(read(f::scopeText).contains("só o nome mostrado neste computador") && read(f::scopeText).contains("nada é alterado na Platform"));
         evidence("sakura-dark-renomear-local", (Container) read(() -> window.actions().form()));

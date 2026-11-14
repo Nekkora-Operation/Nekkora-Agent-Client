@@ -1,6 +1,7 @@
 package com.nekkora.client.pack;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -27,6 +28,11 @@ import java.util.UUID;
  * (copia privada, sem seguir ligacao nem juncao), {@link #summary} mostra o que SERIA gerado e {@link #generate} grava o
  * ZIP onde a pessoa escolheu. Nada e guardado no contexto, nada e executado, importado ou instalado, e a pasta da pessoa
  * nunca e alterada.
+ * <p>
+ * T02 - pacote nesta maquina: {@link #inspectLocal} e {@link #useLocal} tratam um .zip ou uma pasta de pacote escolhidos
+ * para uma automacao (comparacao SO pela impressao digital), e {@link #downloadTarget}, {@link #installDownloaded} e
+ * {@link #discardDownload} guardam um pacote que OUTRA camada baixou da Platform, depois de conferir tamanho, SHA-256,
+ * formato e impressao digital. Aqui continua sem rede.
  */
 public final class Workshop {
 
@@ -100,7 +106,17 @@ public final class Workshop {
      * Um pacote local do contexto. {@code name} e o nome mostrado (o local, se a pessoa deu um; senao o declarado no
      * pacote); {@code declaredName} e {@code packageVersion} sao os do manifesto e nunca mudam.
      */
-    public record LocalItem(String fingerprint, String name, String declaredName, String packageVersion, UUID linkedAutomationId) {
+    public record LocalItem(String fingerprint, String name, String declaredName, String packageVersion, UUID linkedAutomationId,
+                            LocalPackages.Origin origin, String sourceLabel, UUID sourceAutomationId, UUID automationVersionId, Integer versionNumber) {
+
+        /**
+         * De onde o pacote veio, para a tela ("Arquivo .zip", "Pasta de pacote", "Gerado neste computador", "Baixado da
+         * Platform"); vazio para um item guardado antes de a origem ser registrada. {@code sourceAutomationId},
+         * {@code automationVersionId} e {@code versionNumber} so existem para um pacote baixado.
+         */
+        public String originLabel() {
+            return origin == null ? "" : origin.label();
+        }
 
         /** Este pacote e o conteudo exato desta impressao digital publicada? */
         public boolean matches(String publishedFingerprint) {
@@ -216,16 +232,24 @@ public final class Workshop {
 
     private final LocalPackages packages;
     private final ProjectImporter importer;
+    private final DownloadedPackages downloads;
 
     /** {@code dataRoot}: a pasta de dados do Client (nunca a do Nekkora Agent administrativo). */
     public Workshop(Path dataRoot) {
         this(new LocalPackages(LocalPackages.defaultRoot(dataRoot), AtomicWriter.DEFAULT, Clock.systemUTC()),
-                new ProjectImporter(ProjectImporter.defaultRoot(dataRoot), ZipLimits.DEFAULT));
+                new ProjectImporter(ProjectImporter.defaultRoot(dataRoot), ZipLimits.DEFAULT),
+                new DownloadedPackages(DownloadedPackages.defaultRoot(dataRoot), AtomicWriter.DEFAULT, Clock.systemUTC()));
     }
 
+    /** Os pacotes baixados ficam em {@code baixados}, ao lado da pasta dos pacotes guardados. */
     public Workshop(LocalPackages packages, ProjectImporter importer) {
+        this(packages, importer, new DownloadedPackages(packages.root().resolveSibling("baixados"), AtomicWriter.DEFAULT, Clock.systemUTC()));
+    }
+
+    public Workshop(LocalPackages packages, ProjectImporter importer, DownloadedPackages downloads) {
         this.packages = packages;
         this.importer = importer;
+        this.downloads = downloads;
     }
 
     public LocalPackages packages() {
@@ -239,7 +263,8 @@ public final class Workshop {
     public Imported importZip(UUID organization, UUID workspace, String zipPath) throws Refused {
         Path zip = zip(zipPath);
         try {
-            LocalPackages.Added a = packages.add(new PackageContext(organization, workspace), zip, SafeZip.Cancel.NEVER);
+            LocalPackages.Added a = packages.add(new PackageContext(organization, workspace), zip,
+                    LocalPackages.Provenance.local(LocalPackages.Origin.LOCAL_ZIP, zip.toString()), SafeZip.Cancel.NEVER);
             return new Imported(item(a.item()), a.alreadyPresent());
         } catch (ImportProblem e) {
             throw new Refused(e.message());
@@ -459,6 +484,274 @@ public final class Workshop {
         }
     }
 
+    // ------------------------------------------------------------------ pacote nesta maquina (T02)
+
+    /** O que a pessoa escolheu para "pacote nesta maquina". */
+    public enum LocalKind {
+        /** Um .zip que e um pacote Python externo valido. */
+        PACKAGE_ZIP,
+        /** Uma pasta com um {@code nekkora-external.json} valido, cujos arquivos listados conferem. */
+        PACKAGE_FOLDER,
+        /** Uma pasta com codigo Python e sem manifesto: a tela oferece "Gerar pacote novo"; nada e associado. */
+        CODE_FOLDER,
+        /** Nada que possa ser usado; {@link LocalCandidate#message()} explica. */
+        UNSUPPORTED
+    }
+
+    /**
+     * O resultado de olhar a escolha, sem guardar nada.
+     *
+     * @param pathLabel o caminho escolhido, como texto para a tela
+     * @param declaredName nome declarado no pacote (so para pacote)
+     * @param packageVersion versao declarada no pacote (so para pacote)
+     * @param fingerprint impressao digital do conteudo (so para pacote)
+     * @param message a frase para a pessoa
+     */
+    public record LocalCandidate(LocalKind kind, String pathLabel, String declaredName, String packageVersion, String fingerprint, String message) {
+
+        public boolean isPackage() {
+            return kind == LocalKind.PACKAGE_ZIP || kind == LocalKind.PACKAGE_FOLDER;
+        }
+
+        /** A origem para a tela: "Arquivo .zip" ou "Pasta de pacote"; vazio se nao e pacote. */
+        public String originLabel() {
+            return kind == LocalKind.PACKAGE_ZIP ? LocalPackages.Origin.LOCAL_ZIP.label()
+                    : kind == LocalKind.PACKAGE_FOLDER ? LocalPackages.Origin.LOCAL_FOLDER.label() : "";
+        }
+    }
+
+    /** O que fazer quando o pacote escolhido NAO e o conteudo da versao publicada. */
+    public enum Choice {
+        /** Nao guardar: devolver {@link UseLocalOutcome#DIFFERS} para a tela explicar e perguntar. */
+        ASK,
+        /** Guardar como item so local, separado, SEM associar a automacao. */
+        SEPARATE_LOCAL
+    }
+
+    public enum UseLocalOutcome {
+        /** Mesma impressao digital da versao publicada: guardado e associado a automacao. */
+        MATCHES_PUBLISHED,
+        /** Conteudo diferente da versao publicada (ou nao ha versao publicada): nada foi guardado. */
+        DIFFERS,
+        /** Guardado como item so local, sem associacao: nunca e apresentado como a versao publicada. */
+        STORED_SEPARATE
+    }
+
+    /**
+     * @param item o item guardado ({@code null} em {@link UseLocalOutcome#DIFFERS})
+     * @param origin "Arquivo .zip" ou "Pasta de pacote"
+     * @param pathLabel o caminho escolhido
+     * @param fingerprint impressao digital do que foi escolhido
+     */
+    public record UseLocalResult(UseLocalOutcome outcome, LocalItem item, String origin, String pathLabel, String fingerprint, String declaredName,
+                                 String packageVersion) {
+    }
+
+    /** Um pacote escolhido, ja lido e conferido numa pasta privada (apagada em {@link #close()}). */
+    private final class Picked implements AutoCloseable {
+        private LocalKind kind = LocalKind.UNSUPPORTED;
+        private String label = "";
+        private String message;
+        private ExecutionPackage pkg;
+        private Path work;
+        private ImportedProject project;
+
+        private Picked refuse(ImportProblem.Code code) {
+            message = new ImportProblem(code).message();
+            return this;
+        }
+
+        private LocalCandidate candidate() {
+            return new LocalCandidate(kind, label, pkg == null ? null : pkg.name(), pkg == null ? null : pkg.packageVersion(),
+                    pkg == null ? null : pkg.fingerprint(), message);
+        }
+
+        @Override
+        public void close() {
+            Io.deleteTree(work);
+            importer.close(project);
+        }
+    }
+
+    /**
+     * Le e confere a escolha. Um .zip passa pelo leitor seguro e pelo validador; uma pasta passa pelo mesmo retrato de
+     * {@link #openFolder} (sem seguir ligacao nem juncao) e o manifesto e os arquivos listados sao conferidos pelo mesmo
+     * validador - as mesmas regras nos dois casos.
+     */
+    private Picked pick(String path) {
+        Picked k = new Picked();
+        Path p;
+        try {
+            if (path == null || path.isBlank()) return k.refuse(ImportProblem.Code.LOCAL_PICK_INVALID);
+            p = Path.of(path);
+        } catch (InvalidPathException e) {
+            return k.refuse(ImportProblem.Code.LOCAL_PICK_INVALID);
+        }
+        k.label = p.toString();
+        if (Files.isDirectory(p)) {
+            try {
+                k.project = importer.openFolder(p, SafeZip.Cancel.NEVER);
+            } catch (ImportProblem e) {
+                k.message = e.message();
+                return k;
+            }
+            k.label = k.project.source().toString();
+            switch (k.project.kind()) {
+                case EXTERNAL_PACKAGE -> {
+                    k.kind = LocalKind.PACKAGE_FOLDER;
+                    k.pkg = k.project.existing();
+                    k.message = "Pacote Python externo válido (pasta de pacote).";
+                }
+                case CODE -> {
+                    if (k.project.blockers().isEmpty()) {
+                        k.kind = LocalKind.CODE_FOLDER;
+                        k.refuse(ImportProblem.Code.LOCAL_CODE_FOLDER);
+                    } else {
+                        k.refuse(ImportProblem.Code.LOCAL_FOLDER_NOT_PACKAGE);
+                    }
+                }
+                default -> k.message = k.project.blockers().isEmpty() ? new ImportProblem(ImportProblem.Code.LOCAL_FOLDER_NOT_PACKAGE).message()
+                        : k.project.blockers().get(0).message();
+            }
+            return k;
+        }
+        if (!Files.exists(p, LinkOption.NOFOLLOW_LINKS)) return k.refuse(ImportProblem.Code.LOCAL_PICK_NOT_FOUND);
+        if (!path.toLowerCase(Locale.ROOT).endsWith(".zip")) return k.refuse(ImportProblem.Code.LOCAL_PICK_INVALID);
+        try {
+            k.work = importer.newWork();
+            Path into = Files.createDirectories(k.work.resolve("x"));
+            SafeZip.Content c = SafeZip.extract(p, into, ZipLimits.DEFAULT, SafeZip.Cancel.NEVER);
+            String prefix = ProjectImporter.rootPrefix(c);
+            k.pkg = ExecutionPackage.inspect(prefix.isEmpty() ? into : into.resolve(prefix));
+            k.kind = LocalKind.PACKAGE_ZIP;
+            k.message = "Pacote Python externo válido (arquivo .zip).";
+        } catch (ImportProblem e) {
+            k.message = e.message();
+        } catch (ExecRefused e) {
+            // um ZIP so de codigo nao e pacote: a frase diz o que fazer; os outros motivos sao os do validador
+            if (e.code() == ErrorCode.EXEC_PACKAGE_UNKNOWN) k.refuse(ImportProblem.Code.LOCAL_ZIP_NOT_PACKAGE);
+            else k.message = e.code().message();
+        } catch (IOException e) {
+            k.message = Io.work(e, k.work).message();
+        }
+        return k;
+    }
+
+    /**
+     * Diz o que e o arquivo ou a pasta que a pessoa escolheu para uma automacao, sem guardar nem associar nada. A
+     * impressao digital e do CONTEUDO: o mesmo pacote recompactado tem a mesma impressao.
+     */
+    public LocalCandidate inspectLocal(String path) {
+        try (Picked k = pick(path)) {
+            return k.candidate();
+        }
+    }
+
+    /**
+     * Usa o pacote escolhido para a automacao. A comparacao com a versao publicada e SO pela impressao digital (conteudo
+     * canonico), nunca pelo nome nem pelos bytes do ZIP:
+     * <ul>
+     *   <li>igual a {@code publishedFingerprint}: guarda no contexto e associa a automacao
+     *       ({@link UseLocalOutcome#MATCHES_PUBLISHED});</li>
+     *   <li>diferente, ou sem versao publicada: com {@link Choice#ASK} nada e guardado ({@link UseLocalOutcome#DIFFERS});
+     *       com {@link Choice#SEPARATE_LOCAL} o pacote e guardado como item so local, SEM associacao
+     *       ({@link UseLocalOutcome#STORED_SEPARATE});</li>
+     *   <li>pasta de codigo ou escolha invalida: {@link Refused} com a explicacao; nada e guardado.</li>
+     * </ul>
+     * O que e guardado e exatamente o que foi lido e conferido aqui (uma unica leitura). Nada e executado nem enviado.
+     */
+    public UseLocalResult useLocal(UUID organization, UUID workspace, UUID automationId, String path, String publishedFingerprint, Choice choice)
+            throws Refused {
+        PackageContext context = new PackageContext(organization, workspace);
+        try (Picked k = pick(path)) {
+            LocalCandidate c = k.candidate();
+            if (!c.isPackage()) throw new Refused(c.message());
+            boolean matches = sameFingerprint(c.fingerprint(), publishedFingerprint);
+            if (matches) java.util.Objects.requireNonNull(automationId, "automationId");
+            if (!matches && choice != Choice.SEPARATE_LOCAL) {
+                return new UseLocalResult(UseLocalOutcome.DIFFERS, null, c.originLabel(), c.pathLabel(), c.fingerprint(), c.declaredName(), c.packageVersion());
+            }
+            LocalPackages.Origin origin = k.kind == LocalKind.PACKAGE_ZIP ? LocalPackages.Origin.LOCAL_ZIP : LocalPackages.Origin.LOCAL_FOLDER;
+            LocalPackages.Item item = packages.addInspected(context, k.pkg, LocalPackages.Provenance.local(origin, c.pathLabel())).item();
+            if (matches && !automationId.equals(item.linkedAutomationId())) item = packages.link(context, item.fingerprint(), automationId);
+            return new UseLocalResult(matches ? UseLocalOutcome.MATCHES_PUBLISHED : UseLocalOutcome.STORED_SEPARATE, item(item), c.originLabel(), c.pathLabel(),
+                    c.fingerprint(), c.declaredName(), c.packageVersion());
+        } catch (ImportProblem e) {
+            throw new Refused(e.message());
+        } catch (ExecRefused e) {
+            throw new Refused(e.code().message());
+        }
+    }
+
+    private static boolean sameFingerprint(String a, String b) {
+        if (a == null || b == null) return false;
+        String x = a.strip().toLowerCase(Locale.ROOT);
+        String y = b.strip().toLowerCase(Locale.ROOT);
+        return (x.startsWith("sha256:") ? x.substring(7) : x).equals(y.startsWith("sha256:") ? y.substring(7) : y);
+    }
+
+    // ------------------------------------------------------------------ pacote baixado da Platform (T02)
+
+    /**
+     * Reserva o arquivo PARCIAL de um download ({@code <dados>/baixados/.parcial/...}) e devolve o caminho. Esta camada
+     * nao baixa nada: quem baixa escreve em {@link #downloadStream} e depois chama {@link #installDownloaded} ou
+     * {@link #discardDownload}. Um parcial nunca fica num lugar que o aplicativo trata como pronto.
+     */
+    public String downloadTarget(String platformOrigin, UUID organization, UUID automationId, UUID versionId) throws Refused {
+        try {
+            return downloads.target(platformOrigin, organization, automationId, versionId).toString();
+        } catch (ImportProblem e) {
+            throw new Refused(e.message());
+        }
+    }
+
+    /** Abre o arquivo parcial para escrita (do inicio). So aceita um caminho entregue por {@link #downloadTarget}. */
+    public OutputStream downloadStream(String tempFilePath) throws Refused {
+        try {
+            return downloads.open(partial(tempFilePath));
+        } catch (ImportProblem e) {
+            throw new Refused(e.message());
+        }
+    }
+
+    /**
+     * Confere o arquivo baixado e instala o pacote neste contexto, associado a automacao, com origem "Baixado da Platform"
+     * e a versao. Ordem: tamanho e SHA-256 contra o que a Platform informou (antes de abrir como ZIP), leitura segura e
+     * validador real, impressao digital igual a informada. Qualquer divergencia: {@link Refused}, o parcial e apagado e
+     * nada e instalado. A mesma versao de novo nao duplica; outra versao da mesma automacao convive, sem substituir a
+     * anterior. Nada e executado e nenhuma dependencia e instalada.
+     */
+    public LocalItem installDownloaded(String platformOrigin, UUID organization, UUID workspace, UUID automationId, UUID versionId, int versionNumber,
+                                       String tempFilePath, String expectedSha256, long expectedSizeBytes, String expectedFingerprint, SafeZip.Cancel cancel)
+            throws Refused {
+        try {
+            return item(downloads.install(packages, platformOrigin, new PackageContext(organization, workspace), automationId, versionId, versionNumber,
+                    partial(tempFilePath), expectedSha256, expectedSizeBytes, expectedFingerprint, cancel == null ? SafeZip.Cancel.NEVER : cancel));
+        } catch (ImportProblem e) {
+            throw new Refused(e.message());
+        } catch (ExecRefused e) {
+            throw new Refused(e.code().message());
+        }
+    }
+
+    /** Apaga um arquivo parcial (cancelamento ou falha). Qualquer caminho fora da pasta de parciais e recusado. */
+    public void discardDownload(String tempFilePath) throws Refused {
+        try {
+            downloads.discard(partial(tempFilePath));
+        } catch (ImportProblem e) {
+            throw new Refused(e.message());
+        }
+    }
+
+    private static Path partial(String tempFilePath) throws ImportProblem {
+        try {
+            if (tempFilePath == null || tempFilePath.isBlank()) throw new ImportProblem(ImportProblem.Code.DOWNLOAD_NOT_MANAGED);
+            return Path.of(tempFilePath);
+        } catch (InvalidPathException e) {
+            throw new ImportProblem(ImportProblem.Code.DOWNLOAD_NOT_MANAGED);
+        }
+    }
+
     private static Path zip(String zipPath) throws Refused {
         if (zipPath == null || !zipPath.toLowerCase(Locale.ROOT).endsWith(".zip")) {
             throw new Refused("Escolha um arquivo .zip.");
@@ -471,6 +764,9 @@ public final class Workshop {
     }
 
     private static LocalItem item(LocalPackages.Item i) {
-        return new LocalItem(i.fingerprint(), i.displayName(), i.declaredName(), i.packageVersion(), i.linkedAutomationId());
+        LocalPackages.Provenance o = i.provenance();
+        return new LocalItem(i.fingerprint(), i.displayName(), i.declaredName(), i.packageVersion(), i.linkedAutomationId(), o == null ? null : o.origin(),
+                o == null ? null : o.sourceLabel(), o == null ? null : o.automationId(), o == null ? null : o.automationVersionId(),
+                o == null ? null : o.versionNumber());
     }
 }

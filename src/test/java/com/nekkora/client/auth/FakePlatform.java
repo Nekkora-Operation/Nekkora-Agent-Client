@@ -78,6 +78,17 @@ final class FakePlatform implements AutoCloseable {
     /** Renomear: o que chegou (metodo, caminho, tipo, corpo) e o que a "Platform" responde. */
     final List<String> writes = new CopyOnWriteArrayList<>();
     volatile int writeStatus = 200;
+    /** Download do pacote (AGENT-CLIENT-PACOTES-001): o que a "Platform" responde em .../package. */
+    volatile byte[] packageBytes;
+    volatile int packageStatus = 200;
+    volatile String packageContentType = "application/zip";
+    /** Cabecalho Location (com um status 3xx): o aplicativo NAO pode segui-lo. */
+    volatile String packageLocation;
+    /** Envia so os primeiros N bytes do corpo declarado e fecha a conexao (download interrompido). */
+    volatile int packageCutAt = -1;
+    /** Pausa entre os trechos, para o teste cancelar no meio. */
+    volatile long packageChunkDelayMillis;
+    final List<String> packageRequests = new CopyOnWriteArrayList<>();
     volatile String writeBody = "{}";
 
     FakePlatform() throws Exception {
@@ -165,7 +176,7 @@ final class FakePlatform implements AutoCloseable {
     String authorize(URI page) {
         Map<String, String> q = query(page.getRawQuery());
         if (!"/entrar/aplicativo".equals(page.getPath()) || q.size() != 7 || !"code".equals(q.get("response_type"))
-                || !"nekkora-agent-client".equals(q.get("client_id")) || !"identity navigation".equals(q.get("scope"))
+                || !"nekkora-agent-client".equals(q.get("client_id")) || !"identity navigation packages".equals(q.get("scope"))
                 || !"S256".equals(q.get("code_challenge_method")) || !q.get("code_challenge").matches("[A-Za-z0-9_-]{43}")
                 || !q.get("state").matches("[A-Za-z0-9_-]{22,128}") || !q.get("redirect_uri").matches("http://127\\.0\\.0\\.1:[1-9][0-9]{3,4}/callback")) {
             throw new IllegalArgumentException("pedido fora do contrato: " + page);
@@ -206,6 +217,10 @@ final class FakePlatform implements AutoCloseable {
             requests.add(x.getRequestMethod() + " " + path);
             if (x.getRequestHeaders().containsKey("Cookie")) {
                 reply(x, 418, "text/plain", "o aplicativo nao envia cookies");
+                return;
+            }
+            if ("GET".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/") && path.endsWith("/package")) {
+                pack(x, path);
                 return;
             }
             if ("GET".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/")) {
@@ -278,7 +293,7 @@ final class FakePlatform implements AutoCloseable {
         String t = token();
         sessions.put(t, g.email());
         usedCodes.put(f.get("code"), t);
-        reply(x, 200, "application/json", "{\"access_token\":\"" + t + "\",\"token_type\":\"Bearer\",\"expires_in\":" + expiresIn + ",\"scope\":\"identity navigation\"}");
+        reply(x, 200, "application/json", "{\"access_token\":\"" + t + "\",\"token_type\":\"Bearer\",\"expires_in\":" + expiresIn + ",\"scope\":\"identity navigation packages\"}");
     }
 
     private void session(HttpExchange x) throws IOException {
@@ -292,7 +307,7 @@ final class FakePlatform implements AutoCloseable {
             reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
             return;
         }
-        reply(x, 200, "application/json", "{\"account\":{\"email\":\"" + who + "\"},\"scope\":\"identity navigation\",\"expiresIn\":" + expiresIn + "}");
+        reply(x, 200, "application/json", "{\"account\":{\"email\":\"" + who + "\"},\"scope\":\"identity navigation packages\",\"expiresIn\":" + expiresIn + "}");
     }
 
     private void page(HttpExchange x) throws IOException {
@@ -314,6 +329,47 @@ final class FakePlatform implements AutoCloseable {
             return;
         }
         reply(x, 200, "application/json", body);
+    }
+
+    private void pack(HttpExchange x, String path) throws IOException {
+        packageRequests.add(path + " | " + x.getRequestHeaders().getFirst("Authorization") + " | " + x.getRequestHeaders().getFirst("Accept"));
+        String t = bearer(x);
+        if (t == null || sessions.get(t) == null) {
+            reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
+            return;
+        }
+        if (packageLocation != null) {
+            x.getResponseHeaders().set("Location", packageLocation);
+            x.sendResponseHeaders(packageStatus, -1);
+            return;
+        }
+        if (packageStatus != 200) {
+            reply(x, packageStatus, "application/json", packageStatus == 403 ? "{\"error\":\"forbidden\"}" : packageStatus == 409 ? "{\"error\":\"conflict\"}"
+                    : packageStatus == 404 ? "{\"error\":\"not_found\"}" : "{\"error\":\"internal_error\"}");
+            return;
+        }
+        byte[] b = packageBytes;
+        x.getResponseHeaders().set("Content-Type", packageContentType);
+        x.getResponseHeaders().set("Cache-Control", "no-store");
+        x.sendResponseHeaders(200, b.length);
+        OutputStream out = x.getResponseBody();
+        int end = packageCutAt >= 0 ? Math.min(packageCutAt, b.length) : b.length;
+        try {
+            for (int i = 0; i < end; i += 4096) {
+                out.write(b, i, Math.min(4096, end - i));
+                out.flush();
+                if (packageChunkDelayMillis > 0) {
+                    Thread.sleep(packageChunkDelayMillis);
+                }
+            }
+            if (end == b.length) {
+                out.close();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            // o aplicativo fechou a conexao (cancelou)
+        }
     }
 
     private void read(HttpExchange x, String path) throws IOException {

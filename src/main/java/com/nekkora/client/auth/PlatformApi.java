@@ -42,7 +42,14 @@ public final class PlatformApi {
      * O que o aplicativo pede: a propria identidade e a navegacao (organizacoes, ambientes e automacoes da pessoa). A
      * pagina de confirmacao da Platform diz isso a pessoa; o servidor devolve o escopo concedido, e so vale se for este.
      */
-    public static final String SCOPE = "identity navigation";
+    /**
+     * Navegacao e download de pacotes (contrato desktop-navigation/3). O escopo e pedido, mostrado na pagina de confirmacao
+     * e aprovado como tal; a Platform anterior a esse contrato nao o reconhece e recusa o pedido de entrada.
+     */
+    public static final String SCOPE = "identity navigation packages";
+    /** Teto de um pacote baixado: o do artefato na Platform (50 MiB). */
+    static final long MAX_PACKAGE_BYTES = 50L * 1024 * 1024;
+    private static final Duration DOWNLOAD_DEADLINE = Duration.ofMinutes(10);
     /** Teto das respostas de leitura (paginas de ate 100 itens, ou ate 200 organizacoes). */
     private static final int MAX_READ_CHARS = 512 * 1024;
     /** Teto que o aplicativo aceita para a sessao, em segundos (o contrato diz 900). */
@@ -161,6 +168,86 @@ public final class PlatformApi {
     Map<String, Object> patch(String path, Token token, String json) throws Directory.Failed {
         return call(request(path).header("Authorization", "Bearer " + token.value()).header("Content-Type", "application/json")
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8)));
+    }
+
+    /**
+     * Download autenticado do pacote de uma versao publicada. So aceita {@code 200 application/zip}, do proprio endereco da
+     * Platform (este cliente HTTP nunca segue redirecionamento: um {@code 3xx} e resposta fora do contrato, e o token nao vai
+     * a nenhum outro endereco), com {@code Content-Length} igual ao tamanho que a lista de versoes informou. Entrega os
+     * bytes ao destino em trechos; para ao cancelar, ao passar do tamanho ou do prazo, ou quando o destino recusa.
+     */
+    void download(String path, Token token, long expectedSize, Directory.Sink sink) throws Directory.Failed {
+        if (expectedSize <= 0 || expectedSize > MAX_PACKAGE_BYTES) {
+            throw new Directory.Failed(Directory.Failure.INVALID);
+        }
+        HttpRequest request = HttpRequest.newBuilder(origin.apiPath(path)).timeout(requestTimeout).header("Accept", "application/zip, application/json")
+                .header("Authorization", "Bearer " + token.value()).GET().build();
+        HttpResponse<java.io.InputStream> r;
+        try {
+            r = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (SSLException e) {
+            throw new Directory.Failed(Directory.Failure.TLS);
+        } catch (HttpTimeoutException e) {
+            throw new Directory.Failed(Directory.Failure.TIMEOUT);
+        } catch (IOException e) {
+            for (Throwable t = e.getCause(); t != null; t = t.getCause()) {
+                if (t instanceof SSLException) {
+                    throw new Directory.Failed(Directory.Failure.TLS);
+                }
+            }
+            throw new Directory.Failed(Directory.Failure.NETWORK);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Directory.Failed(Directory.Failure.CANCELLED);
+        }
+        try (java.io.InputStream in = r.body()) {
+            int s = r.statusCode();
+            String type = r.headers().firstValue("Content-Type").orElse("").toLowerCase(java.util.Locale.ROOT);
+            if (s != 200) {
+                throw new Directory.Failed(switch (s) {
+                    case 401 -> Directory.Failure.SESSION_ENDED;
+                    case 403 -> type.startsWith("application/json") ? Directory.Failure.DENIED : Directory.Failure.INVALID;
+                    case 404 -> Directory.Failure.NOT_FOUND;
+                    case 409 -> type.startsWith("application/json") ? Directory.Failure.CONFLICT : Directory.Failure.INVALID;
+                    case 429 -> Directory.Failure.RATE_LIMITED;
+                    default -> s >= 500 ? Directory.Failure.SERVER : Directory.Failure.INVALID;
+                });
+            }
+            long declared = r.headers().firstValueAsLong("Content-Length").orElse(-1);
+            if (!type.startsWith("application/zip") || declared != expectedSize) {
+                throw new Directory.Failed(Directory.Failure.INVALID);
+            }
+            long deadline = System.nanoTime() + DOWNLOAD_DEADLINE.toNanos();
+            byte[] buffer = new byte[64 * 1024];
+            long received = 0;
+            sink.progress(0, expectedSize);
+            while (true) {
+                if (sink.cancelled()) {
+                    throw new Directory.Failed(Directory.Failure.CANCELLED);
+                }
+                if (System.nanoTime() > deadline) {
+                    throw new Directory.Failed(Directory.Failure.TIMEOUT);
+                }
+                int n = in.read(buffer);
+                if (n < 0) {
+                    break;
+                }
+                received += n;
+                if (received > expectedSize) {
+                    throw new Directory.Failed(Directory.Failure.INVALID);
+                }
+                if (!sink.write(buffer, n)) {
+                    throw new Directory.Failed(Directory.Failure.LOCAL);
+                }
+                sink.progress(received, expectedSize);
+            }
+            if (received != expectedSize) {
+                // conexao encerrada antes do fim: bytes parciais nunca sao um pacote
+                throw new Directory.Failed(Directory.Failure.NETWORK);
+            }
+        } catch (IOException e) {
+            throw new Directory.Failed(sink.cancelled() ? Directory.Failure.CANCELLED : Directory.Failure.NETWORK);
+        }
     }
 
     Map<String, Object> call(HttpRequest.Builder b) throws Directory.Failed {

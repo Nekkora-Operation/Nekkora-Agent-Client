@@ -76,6 +76,66 @@ public final class FakeDirectory implements Directory {
         return listing;
     }
 
+    /** Versoes por automacao e bytes por versao (AGENT-CLIENT-PACOTES-001). Chave ausente = fora do alcance / sem pacote. */
+    public final java.util.Map<UUID, List<Automation.Version>> versions = new java.util.concurrent.ConcurrentHashMap<>();
+    public final java.util.Map<UUID, byte[]> packages = new java.util.concurrent.ConcurrentHashMap<>();
+    public volatile Failure versionsFailure;
+    public volatile Failure downloadFailure;
+    /** Entrega so os primeiros N bytes e falha por rede (download interrompido). */
+    public volatile int downloadCutAt = -1;
+    /** Chamado depois de cada trecho entregue (para o teste cancelar ou mudar algo no meio). */
+    public volatile Runnable afterChunk;
+
+    @Override
+    public List<Automation.Version> versions(UUID organization, UUID automation) throws Failed {
+        calls.add("versions " + organization + " " + automation);
+        if (versionsFailure != null) {
+            throw new Failed(versionsFailure);
+        }
+        List<Automation.Version> l = versions.get(automation);
+        if (l == null) {
+            throw new Failed(Failure.NOT_FOUND);
+        }
+        return l;
+    }
+
+    @Override
+    public void download(UUID organization, UUID automation, UUID version, long expectedSize, Sink sink) throws Failed {
+        calls.add("download " + organization + " " + automation + " " + version);
+        if (downloadFailure != null) {
+            throw new Failed(downloadFailure);
+        }
+        byte[] b = packages.get(version);
+        if (b == null) {
+            throw new Failed(Failure.CONFLICT);
+        }
+        if (b.length != expectedSize) {
+            throw new Failed(Failure.INVALID);
+        }
+        int end = downloadCutAt >= 0 ? Math.min(downloadCutAt, b.length) : b.length;
+        sink.progress(0, b.length);
+        for (int i = 0; i < end; i += 1024) {
+            if (sink.cancelled()) {
+                throw new Failed(Failure.CANCELLED);
+            }
+            int n = Math.min(1024, end - i);
+            if (!sink.write(java.util.Arrays.copyOfRange(b, i, i + n), n)) {
+                throw new Failed(Failure.LOCAL);
+            }
+            sink.progress(i + n, b.length);
+            Runnable r = afterChunk;
+            if (r != null) {
+                r.run();
+            }
+        }
+        if (sink.cancelled()) {
+            throw new Failed(Failure.CANCELLED);
+        }
+        if (end < b.length) {
+            throw new Failed(Failure.NETWORK);
+        }
+    }
+
     /** Renomear: quem pode (por organizacao) e o que a "Platform" respondeu. */
     public volatile Failure renameFailure;
     public final List<String> renames = new java.util.concurrent.CopyOnWriteArrayList<>();
