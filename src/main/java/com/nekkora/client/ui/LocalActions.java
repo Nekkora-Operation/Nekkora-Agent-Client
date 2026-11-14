@@ -13,6 +13,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import com.nekkora.client.nav.Directory;
 import com.nekkora.client.nav.Navigation;
 import com.nekkora.client.pack.Workshop;
+import com.nekkora.client.run.Runner;
 
 /**
  * As acoes locais da tela da organizacao: importar um pacote (.zip), preparar uma automacao nova a partir de um ZIP de
@@ -24,7 +25,10 @@ import com.nekkora.client.pack.Workshop;
  * maquina pareada. Exigem so a sessao e o contexto que a Platform listou;</li>
  * <li>renomear uma automacao da Platform e uma chamada ao servidor, que decide se a pessoa pode; renomear um item so
  * local mexe apenas no nome mostrado neste computador;</li>
- * <li>disco e rede ficam fora da fila de eventos.</li>
+ * <li>executar e SO LOCAL e nunca comeca sozinho: abre a preparacao (pacote conferido, Python escolhido pela pessoa,
+ * pasta de saida, aprovacao explicita) e so "Iniciar execucao" lanca o processo. Automacao cujo pacote nao esta neste
+ * computador nao e baixada: a tela explica e aponta a importacao;</li>
+ * <li>disco, rede e processos ficam fora da fila de eventos.</li>
  * </ul>
  */
 final class LocalActions implements ContextView.Actions {
@@ -45,22 +49,42 @@ final class LocalActions implements ContextView.Actions {
     }
 
     private final Workshop workshop;
+    private final Runner runner;
     private final Executor background;
     private final Host host;
+    /** A execucao que o formulario aberto prepara ou acompanha. */
+    private record Target(Navigation.Context context, String fingerprint, java.util.UUID automationId, java.util.UUID versionId) {
+    }
+
+    private JDialog runDialog;
+    private RunForm runForm;
+    private Target runTarget;
+    private String runId;
     /** Os testes abrem os formularios sem bloquear a fila de eventos. */
     boolean modal = true;
     private JDialog dialog;
     private JPanel form;
 
-    LocalActions(Workshop workshop, Executor background, Host host) {
+    LocalActions(Workshop workshop, Runner runner, Executor background, Host host) {
         this.workshop = workshop;
+        this.runner = runner;
         this.background = background;
         this.host = host;
+        if (runner != null) {
+            runner.addListener(s -> SwingUtilities.invokeLater(() -> {
+                if (runForm != null && s.id().equals(runId)) {
+                    runForm.showStatus(s);
+                    if (s.finished() && runDialog != null) {
+                        runDialog.pack(); // o resultado ocupa mais linhas que o andamento
+                    }
+                }
+            }));
+        }
     }
 
     @Override
     public java.util.function.Consumer<ContextView.Entry> run() {
-        return null; // execucao local: tarefa seguinte
+        return runner == null ? null : this::execute;
     }
 
     @Override
@@ -316,6 +340,229 @@ final class LocalActions implements ContextView.Actions {
         });
     }
 
+    // ------------------------------------------------------------------ executar (so local)
+
+    /**
+     * "Executar" numa linha: abre a PREPARACAO. Nada e lancado aqui. Sem o pacote neste computador, explica e aponta a
+     * importacao (o aplicativo nao baixa codigo por uma rota de metadados).
+     */
+    void execute(ContextView.Entry entry) {
+        Navigation.Context context = context();
+        if (context == null) {
+            return;
+        }
+        if (entry.local() == null) {
+            host.notice(NavText.RUN_NO_PACKAGE, false);
+            return;
+        }
+        if (runner.running().isPresent()) {
+            host.notice(NavText.RUN_BUSY, false);
+            if (runDialog != null && !runDialog.isVisible()) {
+                runDialog.setVisible(true);
+            }
+            return;
+        }
+        closeRun();
+        // a versao da Platform so acompanha a execucao se o pacote local for EXATAMENTE o publicado
+        java.util.UUID automation = entry.automation() == null ? null : entry.automation().id();
+        java.util.UUID version = entry.automation() != null && entry.automation().published() != null
+                && entry.local().matches(entry.automation().published().fingerprint()) ? entry.automation().published().versionId() : null;
+        Target target = new Target(context, entry.local().fingerprint(), automation, version);
+        RunForm f = new RunForm(this::choosePython, this::chooseOutput, this::approve, this::start, () -> runner.cancel(), this::closeRun);
+        JDialog d = new JDialog(host.frame(), NavText.RUN_TITLE, false);
+        d.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
+        d.setContentPane(f);
+        d.pack();
+        d.setLocationRelativeTo(host.frame());
+        runDialog = d;
+        runForm = f;
+        runTarget = target;
+        runId = null;
+        d.setVisible(true);
+        background.execute(() -> {
+            Runner.Checked checked = null;
+            String problem = null;
+            try {
+                checked = runner.check(context.organization().id(), context.workspace().id(), target.fingerprint());
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException e) {
+                problem = "Não foi possível conferir o pacote.";
+            }
+            Runner.Checked ok = checked;
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm == f) {
+                    f.showPackage(ok, why);
+                    d.pack();
+                }
+            });
+        });
+    }
+
+    private void choosePython() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Escolher o interpretador Python");
+        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        if (chooser.showOpenDialog(runDialog) == JFileChooser.APPROVE_OPTION) {
+            setPython(chooser.getSelectedFile().getAbsolutePath());
+        }
+    }
+
+    private void chooseOutput() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Escolher a pasta de saída");
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if (chooser.showOpenDialog(runDialog) == JFileChooser.APPROVE_OPTION) {
+            setOutput(chooser.getSelectedFile().getAbsolutePath());
+        }
+    }
+
+    /** O interpretador que a pessoa escolheu: conferido contra o pacote (versao e dependencias), sem instalar nada. */
+    void setPython(String path) {
+        RunForm f = runForm;
+        Target t = runTarget;
+        if (f == null || t == null) {
+            return;
+        }
+        f.setBusy(true);
+        background.execute(() -> {
+            Runner.Python found = null;
+            String problem = null;
+            try {
+                found = runner.python(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), path);
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException e) {
+                problem = "Não foi possível conferir este interpretador.";
+            }
+            Runner.Python ok = found;
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm == f) {
+                    f.setBusy(false);
+                    f.showPython(path, ok, why);
+                    runDialog.pack();
+                }
+            });
+        });
+    }
+
+    void setOutput(String folder) {
+        RunForm f = runForm;
+        if (f == null) {
+            return;
+        }
+        background.execute(() -> {
+            String ok = null;
+            String problem = null;
+            try {
+                ok = runner.output(folder);
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException e) {
+                problem = "Não foi possível usar esta pasta.";
+            }
+            String out = ok == null ? folder : ok;
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm == f) {
+                    f.showOutput(out, why);
+                    runDialog.pack();
+                }
+            });
+        });
+    }
+
+    /** Aprovacao explicita: e o clique da pessoa neste botao, para este conteudo. Nao inicia nada. */
+    private void approve() {
+        RunForm f = runForm;
+        Target t = runTarget;
+        if (f == null || t == null) {
+            return;
+        }
+        f.setBusy(true);
+        background.execute(() -> {
+            String problem = null;
+            try {
+                runner.approve(t.context().organization().id(), t.context().workspace().id(), t.fingerprint());
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException e) {
+                problem = "Não foi possível registrar a aprovação.";
+            }
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm == f) {
+                    f.setBusy(false);
+                    f.showApproved(why == null, why);
+                    runDialog.pack();
+                }
+            });
+        });
+    }
+
+    private void start() {
+        RunForm f = runForm;
+        Target t = runTarget;
+        if (f == null || t == null || !f.canStart()) {
+            return;
+        }
+        if (!still(t.context())) {
+            // a tela nao esta mais no contexto em que a execucao foi preparada: nada e lancado
+            closeRun();
+            return;
+        }
+        f.setBusy(true);
+        background.execute(() -> {
+            Runner.Status started = null;
+            String problem = null;
+            try {
+                started = runner.start(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), t.automationId(), t.versionId(), f.pythonPath(),
+                        f.outputFolder());
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException e) {
+                problem = "Não foi possível iniciar a execução.";
+            }
+            Runner.Status s = started;
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm != f) {
+                    return;
+                }
+                f.setBusy(false);
+                if (s == null) {
+                    f.showStartProblem(why);
+                } else {
+                    runId = s.id();
+                    f.showStatus(s);
+                }
+                runDialog.pack();
+            });
+        });
+    }
+
+    /** Fecha a janela da execucao. NAO cancela nada: a execucao em andamento segue, e as salvaguardas valem. */
+    void closeRun() {
+        JDialog d = runDialog;
+        if (d != null && runner != null && runner.running().isPresent()) {
+            d.setVisible(false); // segue acompanhando; "Executar" a traz de volta
+            return;
+        }
+        runDialog = null;
+        runForm = null;
+        runTarget = null;
+        runId = null;
+        if (d != null) {
+            d.dispose();
+        }
+    }
+
+    RunForm runForm() {
+        return runForm;
+    }
+
     // ------------------------------------------------------------------ formularios
 
     private void open(String title, JPanel content, Runnable onDispose) {
@@ -338,8 +585,12 @@ final class LocalActions implements ContextView.Actions {
         d.setVisible(true);
     }
 
-    /** Fecha o formulario aberto, se houver (tambem quando a sessao termina ou a pessoa sai do contexto). */
+    /**
+     * Fecha o formulario aberto, se houver (tambem quando a sessao termina ou a pessoa sai do contexto). A preparacao de
+     * uma execucao que ainda nao comecou fecha junto; a janela de uma execucao EM ANDAMENTO fica.
+     */
     void close() {
+        closeRun();
         JDialog d = dialog;
         dialog = null;
         form = null;

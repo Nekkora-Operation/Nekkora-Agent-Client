@@ -32,6 +32,27 @@ public final class PackFixtures {
         }
     }
 
+    /** ZIP de um PACOTE pronto com os arquivos dados (nome -> conteudo), gerado pelo empacotador real. */
+    public static Path packageZip(Path dir, String name, java.util.Map<String, String> files, String entry, List<String> dependencies) throws Exception {
+        Path src = dir.resolve("fonte-" + System.nanoTime());
+        for (java.util.Map.Entry<String, String> f : files.entrySet()) {
+            Path target = src.resolve(f.getKey());
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, f.getValue());
+        }
+        Path code = ZipForge.ofFolder(src, "", dir.resolve(name + "-codigo-" + System.nanoTime() + ".zip"));
+        ProjectImporter importer = new ProjectImporter(dir.resolve("trabalho-" + System.nanoTime()), ZipLimits.DEFAULT);
+        ImportedProject p = importer.open(code, SafeZip.Cancel.NEVER);
+        try {
+            Path out = dir.resolve("saida-" + System.nanoTime());
+            Files.createDirectories(out);
+            return Packager.build(p, new PackagePlan(name, "1.0.0", entry, ">=3.9,<3.99", dependencies, true, Set.of(), Set.of(), false), out, false,
+                    SafeZip.Cancel.NEVER).zip();
+        } finally {
+            importer.close(p);
+        }
+    }
+
     /** Um arquivo com extensao .zip que nao e um ZIP. */
     public static Path notAZip(Path dir) throws Exception {
         Files.createDirectories(dir);

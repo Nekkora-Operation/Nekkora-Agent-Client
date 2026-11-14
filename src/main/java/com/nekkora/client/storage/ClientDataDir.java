@@ -64,6 +64,26 @@ public final class ClientDataDir {
         return root.resolve("client.lock");
     }
 
+    /** Pacotes locais, separados por organizacao e ambiente: {@code pacotes/<organizacao>/<ambiente>/<impressao>/}. */
+    public Path packagesDir() {
+        return root.resolve("pacotes");
+    }
+
+    /** Pastas temporarias da leitura de um ZIP de projeto (apagadas ao concluir ou cancelar). */
+    public Path importWorkDir() {
+        return root.resolve("importacao");
+    }
+
+    /** Registros das execucoes locais: {@code execucoes/<id>/}. */
+    public Path runsDir() {
+        return root.resolve("execucoes");
+    }
+
+    /** Aprovacoes de pacotes deste perfil. */
+    public Path approvalsFile() {
+        return root.resolve("execucao").resolve("aprovacoes.json");
+    }
+
     public void create() throws IOException {
         Files.createDirectories(root);
     }

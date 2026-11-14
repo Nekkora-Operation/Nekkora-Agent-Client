@@ -39,24 +39,12 @@ public final class WrappedText extends JComponent {
         return text;
     }
 
-    /** Linhas que cabem em {@code maxWidth}, quebrando so entre palavras. */
+    /**
+     * Linhas que cabem em {@code maxWidth}, quebrando entre palavras; uma palavra mais larga que a linha (um caminho de
+     * pasta, por exemplo) e partida, nunca cortada.
+     */
     List<String> lines() {
-        FontMetrics fm = getFontMetrics(getFont());
-        List<String> lines = new ArrayList<>();
-        StringBuilder line = new StringBuilder();
-        for (String word : text.split(" ")) {
-            String candidate = line.length() == 0 ? word : line + " " + word;
-            if (line.length() > 0 && fm.stringWidth(candidate) > maxWidth) {
-                lines.add(line.toString());
-                line = new StringBuilder(word);
-            } else {
-                line = new StringBuilder(candidate);
-            }
-        }
-        if (line.length() > 0) {
-            lines.add(line.toString());
-        }
-        return lines;
+        return text.isEmpty() ? new ArrayList<>() : TextLines.wrap(getFontMetrics(getFont()), text, maxWidth);
     }
 
     @Override
