@@ -26,6 +26,7 @@ public final class FakeSignIn implements SignInAttempts {
     public static final class FakeSession implements Session {
         public int ended;
         public int checks;
+        public final com.nekkora.client.nav.FakeDirectory directory = new com.nekkora.client.nav.FakeDirectory();
         private Runnable onEnded;
 
         @Override
@@ -41,6 +42,11 @@ public final class FakeSignIn implements SignInAttempts {
         @Override
         public void check() {
             checks++;
+        }
+
+        @Override
+        public com.nekkora.client.nav.Directory directory() {
+            return directory;
         }
 
         /** A Platform deixou de reconhecer a sessao (prazo ou revogacao). */
