@@ -311,8 +311,11 @@ class RunDesktopTest {
         enter(a, fin);
         importar("meu-script", GRAVA, List.of());
         RunForm f = abrir("meu-script");
-        assertTrue(read(f::scopeText).contains("Nada desta execução é enviado à Platform") && read(f::scopeText).contains("Nada começa até você clicar em Iniciar execução"));
-        assertTrue(read(f::packageText).startsWith("meu-script · versão do pacote 1.0.0 · entrada main.py"), read(f::packageText));
+        assertEquals("Execução local. Os registros ficam neste computador.", read(f::scopeText), "texto curto na tela principal");
+        assertEquals("meu-script · versão 1.0.0", read(f::packageText), "so o nome e a versao; o resto fica em detalhes tecnicos");
+        assertFalse(read(f::detailsOpen), "detalhes tecnicos recolhidos");
+        assertTrue(read(f::detailsText).contains("Entrada: main.py") && read(f::detailsText).contains("Impressão digital: sha256:"), read(f::detailsText));
+        assertTrue(read(f::detailsText).contains("nada desta execução é enviado à Platform"), "a regra da execucao local continua escrita, nos detalhes");
         assertFalse(read(() -> f.startButton().isEnabled()), "abrir a preparacao nao habilita o inicio");
         assertTrue(runner.current().isEmpty());
         evidence("sakura-dark-preparar-execucao", read(() -> (Container) window.actions().runForm()));
@@ -375,7 +378,8 @@ class RunDesktopTest {
         // a unica instalacao compativel da descoberta inicial vem selecionada, e a tela diz qual sera usada
         aguardarPythons(f);
         assertEquals(1, (int) read(() -> f.pythonLines().size()));
-        assertTrue(read(f::pythonText).startsWith("Será usado: Python "), read(f::pythonText));
+        assertTrue(read(f::pythonShown).matches("Python \\d+\\.\\d+\\.\\d+ — Compatível"), read(f::pythonShown));
+        assertEquals(NavText.PY_COMPATIBLE, read(f::pythonText));
         Path saida = Files.createDirectories(tmp.resolve("saida"));
         edt(() -> window.actions().setOutput(saida.toString()));
         answer();
@@ -493,7 +497,7 @@ class RunDesktopTest {
         assertTrue(read(f::pythonLines).get(0).endsWith("— Dependências ausentes"), read(f::pythonLines).toString());
         assertNull(read(f::chosenPython), "o que nao e totalmente compativel nao vem selecionado");
         assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9"), "sem ambiente compativel, a tela diz o requisito real: " + read(f::pythonText));
-        edt(() -> f.pythonList().setSelectedIndex(0));
+        edt(() -> f.pythonBox().setSelectedIndex(0));
         assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9 (não instalado)"), read(f::pythonText));
         assertTrue(read(f::pythonText).contains("Nada é instalado pelo aplicativo"));
         Path saida = Files.createDirectories(tmp.resolve("saida"));

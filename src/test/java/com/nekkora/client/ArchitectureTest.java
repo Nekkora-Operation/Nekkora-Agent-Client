@@ -93,13 +93,8 @@ class ArchitectureTest {
                 assertTrue(c.contains("List.of(\".venv\", \"venv\", \"env\", \"__pycache__\""), "a lista de pastas proibidas mudou");
                 c = c.replace("List.of(\".venv\", \"venv\", \"env\", \"__pycache__\"", "");
             }
-            // AGENT-CLIENT-PYTHON-001: a outra lista fechada - os dois nomes de pasta em que um ambiente virtual JA EXISTENTE e
-            // procurado, diretamente dentro da pasta que a pessoa indicou. So leitura e sondagem: criar ou instalar continua
-            // proibido (ver nucleoLocalNaoInstalaNadaNemEnviaRegistros)
-            if (f.endsWith("PythonEnvironments.java")) {
-                assertTrue(c.contains("PROJECT_FOLDERS = List.of(\".venv\", \"venv\")"), "a lista de pastas de ambiente do projeto mudou");
-                c = c.replace("PROJECT_FOLDERS = List.of(\".venv\", \"venv\")", "");
-            }
+            // AGENT-CLIENT-PREPARACAO-002: a segunda lista fechada (os dois nomes de pasta procurados dentro do projeto) SAIU. A
+            // pessoa aponta a pasta do ambiente virtual, com o nome que ele tiver, e o aplicativo nao procura nome nenhum
             achados.addAll(matches(f, c, proibido, "Nekkora Agent administrativo"));
             achados.addAll(matches(f, c, funcao, "funcao fora do Client"));
         }

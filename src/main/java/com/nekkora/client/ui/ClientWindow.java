@@ -395,6 +395,13 @@ public final class ClientWindow extends JFrame {
         }
     }
 
+    /** Como mostrar ao sistema uma PASTA (entregue por quem monta o aplicativo); falso se ela nao existe ou nao pode ser mostrada. */
+    public void setOpenFolder(java.util.function.Predicate<String> openFolder) {
+        if (actions != null && openFolder != null) {
+            actions.openFolder = openFolder;
+        }
+    }
+
     /** Como mostrar ao sistema a pasta de um arquivo gerado (entregue por quem monta o aplicativo). */
     public void setReveal(java.util.function.Consumer<String> reveal) {
         if (actions != null && reveal != null) {

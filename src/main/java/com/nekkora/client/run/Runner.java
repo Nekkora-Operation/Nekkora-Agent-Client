@@ -41,9 +41,14 @@ public final class Runner implements AutoCloseable {
         }
     }
 
-    /** O pacote conferido na area local: o que vai ser executado e se aquele conteudo ja foi aprovado. */
+    /**
+     * O pacote conferido na area local: o que vai ser executado e se aquele conteudo ja foi aprovado. {@code packageDir}: a
+     * pasta, gerenciada pelo aplicativo, em que o pacote conferido esta guardado - e a ORIGEM da execucao. O processo nao
+     * roda nela: ao iniciar, o executor cria uma copia conferida propria daquela execucao ({@link Status#runDir()}), que
+     * antes do inicio ainda nao existe. {@code declaredName}: o nome que o pacote declara.
+     */
     public record Checked(String fingerprint, String shortFingerprint, String name, String packageVersion, String entry, String pythonRequirement,
-                          List<String> dependencies, boolean approved) {
+                          List<String> dependencies, boolean approved, String packageDir, String declaredName) {
     }
 
     /** O interpretador conferido contra o pacote: versao encontrada; compativel e com as dependencias exatas instaladas. */
@@ -55,7 +60,14 @@ public final class Runner implements AutoCloseable {
      * {@code detail}: por que terminou assim, quando ha o que dizer. {@code outputFolder}: onde o script gravou.
      */
     public record Status(String id, UUID organizationId, UUID workspaceId, String fingerprint, String name, boolean running, boolean finished,
-                         boolean succeeded, String state, String detail, long elapsedMillis, String outputFolder, boolean cancelRequested) {
+                         boolean succeeded, String state, String detail, long elapsedMillis, String outputFolder, boolean cancelRequested, String runDir) {
+        /**
+         * {@code runDir}: a pasta de onde o processo Python desta execucao roda (a copia conferida do pacote, criada no
+         * inicio); vazio se a execucao foi recusada antes de a copia existir.
+         */
+        public Status {
+            runDir = runDir == null ? "" : runDir;
+        }
     }
 
     /**
@@ -136,7 +148,7 @@ public final class Runner implements AutoCloseable {
             LocalPackages.Item item = packages.find(context, fingerprint).orElseThrow(() -> new Refused("Este pacote não está neste computador, neste ambiente. Abra Editar e escolha o pacote desta máquina."));
             ExecutionPackage pkg = packages.inspect(context, fingerprint);
             return new Checked(pkg.fingerprint(), pkg.shortFingerprint(), item.displayName(), item.packageVersion(), item.entry(), item.pythonRequirement(),
-                    item.dependencies(), controller.approvals().approved(pkg));
+                    item.dependencies(), controller.approvals().approved(pkg), pkg.dir().toString(), item.declaredName());
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         } catch (IllegalArgumentException e) {
@@ -171,13 +183,14 @@ public final class Runner implements AutoCloseable {
     }
 
     /**
-     * Os ambientes virtuais convencionais ({@code .venv} e {@code venv}) DIRETAMENTE dentro da pasta que a pessoa
-     * indicou, conferidos contra o pacote. Nada e procurado em subpastas nem em outras pastas; nada e criado.
+     * O ambiente virtual cuja RAIZ e a pasta que a pessoa escolheu (com o nome que tiver), conferido contra o pacote. A
+     * pasta do codigo e a pasta de saida nao mudam com isto. Nada e procurado em subpastas nem em outras pastas; nada e
+     * criado. Sem ambiente na resposta, {@code problems} diz por que - e nada do que ja estava escolhido muda.
      */
-    public ProjectPythons projectPythons(UUID organization, UUID workspace, String fingerprint, String folder, PythonProbe.Cancel cancel) throws Refused {
+    public ProjectPythons virtualEnvironment(UUID organization, UUID workspace, String fingerprint, String folder, PythonProbe.Cancel cancel) throws Refused {
         ExecutionPackage pkg = inspected(organization, workspace, fingerprint);
-        Path dir = path(folder, "Selecione a pasta da automação.");
-        PythonEnvironments.Project p = environments.project(dir, pkg, cancel);
+        Path dir = path(folder, "Selecione a pasta do ambiente virtual.");
+        PythonEnvironments.Project p = environments.virtual(dir, pkg, cancel);
         return new ProjectPythons(String.valueOf(p.folder()), remember(p.environments()), p.problems(), p.cancelled());
     }
 
@@ -224,6 +237,19 @@ public final class Runner implements AutoCloseable {
             pending.add(p.requirement() + (p.installed() == null ? " (não instalado)" : " (instalada a versão " + p.installed() + ")"));
         }
         return new PythonOption(e.id(), e.kind(), e.folderName(), e.python().toString(), e.version() == null ? "" : e.version(), e.state(), List.copyOf(pending));
+    }
+
+    /**
+     * O endereco {@code file:} de uma PASTA que existe, para a tela pedir ao sistema que a mostre no gerenciador de arquivos.
+     * Abrir a pasta nao executa nada dela. Vazio se o caminho nao e uma pasta.
+     */
+    public Optional<String> folderUri(String folder) {
+        try {
+            Path p = folder == null || folder.isBlank() ? null : Path.of(folder.trim()).toAbsolutePath();
+            return p != null && Files.isDirectory(p) ? Optional.of(p.toUri().toString()) : Optional.empty();
+        } catch (InvalidPathException | SecurityException e) {
+            return Optional.empty();
+        }
     }
 
     /** A pasta de saida precisa existir (a execucao cria nela uma subpasta propria). */
@@ -298,7 +324,8 @@ public final class Runner implements AutoCloseable {
         }
         String out = lastOutputRoot == null ? "" : Path.of(lastOutputRoot).resolve(r.id().value()).toString();
         return new Status(r.id().value(), r.context().organizationId(), r.context().workspaceId(), r.context().fingerprint(), r.context().localName(), s.running(),
-                finished, r.state() == ExecutionState.SUCCEEDED, r.state().label(), detail, s.elapsedMillis(), out, r.cancellation() != null);
+                finished, r.state() == ExecutionState.SUCCEEDED, r.state().label(), detail, s.elapsedMillis(), out, r.cancellation() != null,
+                controller.runCopy(r.id()).map(Path::toString).orElse(""));
     }
 
     private static Path path(String text, String whenMissing) throws Refused {

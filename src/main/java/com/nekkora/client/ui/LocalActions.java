@@ -560,6 +560,11 @@ final class LocalActions implements ContextView.Actions {
      */
     java.util.function.Consumer<String> reveal = path -> {
     };
+    /**
+     * Mostra, no gerenciador de arquivos, a PASTA dita (o pacote de origem, a copia executada ou a saida). Devolve falso se a
+     * pasta nao existe mais. Abrir a pasta nao executa nada dela. Os testes trocam por um registro.
+     */
+    java.util.function.Predicate<String> openFolder = folder -> false;
 
     /**
      * "Gerar pacote novo": abre o formulario. Nada e lido ate a pessoa escolher a pasta, e nada e gravado ate ela escolher
@@ -1051,22 +1056,52 @@ final class LocalActions implements ContextView.Actions {
         java.util.UUID version = entry.automation() != null && entry.automation().published() != null
                 && entry.local().matches(entry.automation().published().fingerprint()) ? entry.automation().published().versionId() : null;
         Target target = new Target(context, entry.local().fingerprint(), automation, version);
-        RunForm f = new RunForm(new RunForm.PythonEvents() {
+        RunForm f = new RunForm(new RunForm.Events() {
             @Override
-            public void chosen() {
-                pythonChosen();
+            public void pythonChosen() {
+                LocalActions.this.pythonChosen();
             }
 
             @Override
-            public void selectFolder() {
-                choosePythonFolder();
+            public void locateEnvironment() {
+                chooseEnvironmentFolder();
             }
 
             @Override
             public void searchAgain() {
                 searchPythons(false);
             }
-        }, this::chooseOutput, this::approve, this::start, () -> runner.cancel(), this::closeRun);
+
+            @Override
+            public void chooseOutput() {
+                LocalActions.this.chooseOutput();
+            }
+
+            @Override
+            public void approve() {
+                LocalActions.this.approve();
+            }
+
+            @Override
+            public void start() {
+                LocalActions.this.start();
+            }
+
+            @Override
+            public void cancel() {
+                runner.cancel();
+            }
+
+            @Override
+            public void close() {
+                closeRun();
+            }
+
+            @Override
+            public void openFolder(String folder) {
+                openRunFolder(folder);
+            }
+        });
         JDialog d = new JDialog(host.frame(), NavText.RUN_TITLE, false);
         d.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
         // em tela pequena ou escala alta (150%, 200%) a preparacao e mais alta que a area util: ela rola, em vez de sair da tela
@@ -1128,11 +1163,11 @@ final class LocalActions implements ContextView.Actions {
         pythonFailedSources = java.util.List.of();
     }
 
-    /** A lista como a pessoa a ve: os ambientes do projeto primeiro, depois as instalacoes do computador. */
+    /** As opcoes como a pessoa as ve: o ambiente virtual que ela localizou primeiro, depois as instalacoes do computador. */
     private java.util.List<Runner.PythonOption> pythonOptions() {
         java.util.List<Runner.PythonOption> all = new java.util.ArrayList<>(projectPythons);
         for (Runner.PythonOption o : machinePythons) {
-            // a mesma pasta pode ter chegado tambem pelo PATH: fica so a entrada do projeto
+            // o mesmo interpretador pode ter chegado tambem pelo PATH: fica so a entrada do ambiente localizado
             if (all.stream().noneMatch(p -> p.path().equalsIgnoreCase(o.path()))) {
                 all.add(o);
             }
@@ -1145,34 +1180,45 @@ final class LocalActions implements ContextView.Actions {
         return id == null ? null : pythonOptions().stream().filter(o -> o.id().equals(id)).findFirst().orElse(null);
     }
 
-    /** O que dizer abaixo da lista: o ambiente escolhido, ou o que falta. {@code lead}: o resultado da acao que acabou. */
-    private String pythonMessage(String lead) {
+    private boolean anyUsablePython() {
+        return pythonOptions().stream().anyMatch(Runner.PythonOption::usable);
+    }
+
+    /** Uma mensagem com a gravidade dela. */
+    private record Said(Notice.Kind kind, String text) {
+    }
+
+    /**
+     * O que dizer abaixo da caixa. {@code lead}: o resultado da acao que acabou (com a gravidade DELA), se houver. Sem isso, o
+     * resumo curto do ambiente escolhido: compativel, ou o motivo em uma frase. Um ambiente escolhido que nao serve e um
+     * impedimento (erro); nenhuma escolha feita ainda e so o que falta (texto comum ou aviso).
+     */
+    private Said pythonSaid(Said lead) {
         Runner.Checked c = runChecked;
-        Runner.PythonOption chosen = chosenPython();
-        String body;
         if (c == null) {
-            body = "";
-        } else if (chosen != null) {
-            body = NavText.pythonDetail(chosen, c.pythonRequirement());
-        } else if (pythonOptions().stream().noneMatch(Runner.PythonOption::usable)) {
-            body = NavText.pythonNoneCompatible(c.pythonRequirement(), c.dependencies());
-        } else {
-            body = NavText.PY_CHOOSE;
+            return new Said(Notice.Kind.PLAIN, "");
         }
-        return ((lead == null ? "" : lead + " ") + body + NavText.pythonPartial(pythonFailedSources)).trim();
-    }
-
-    private boolean pythonMessageIsError(String lead, boolean leadIsError) {
+        String partial = NavText.pythonPartial(pythonFailedSources);
+        if (lead != null) {
+            return new Said(lead.kind(), (lead.text() + partial).trim());
+        }
         Runner.PythonOption chosen = chosenPython();
-        return (lead != null && leadIsError) || (chosen != null && !chosen.usable()) || (chosen == null && pythonOptions().stream().noneMatch(Runner.PythonOption::usable));
+        if (chosen != null) {
+            return new Said(chosen.usable() ? Notice.Kind.PLAIN : Notice.Kind.ERROR, NavText.pythonSummary(chosen, c.pythonRequirement()) + partial);
+        }
+        if (!anyUsablePython()) {
+            return new Said(Notice.Kind.WARNING, NavText.pythonNoneCompatible(c.pythonRequirement(), c.dependencies()) + partial);
+        }
+        return new Said(Notice.Kind.PLAIN, NavText.PY_CHOOSE + partial);
     }
 
-    private void presentPythons(RunForm f, String lead, boolean leadIsError) {
-        f.showPythons(pythonOptions(), chosenPythonId, pythonMessage(lead), pythonMessageIsError(lead, leadIsError));
+    private void presentPythons(RunForm f, Said lead) {
+        Said said = pythonSaid(lead);
+        f.showPythons(pythonOptions(), chosenPythonId, said.kind(), said.text(), pythonFailedSources);
         fitRunDialog();
     }
 
-    /** A pessoa mexeu na selecao da lista: e uma escolha explicita dela (escolher nao aprova nem inicia nada). */
+    /** A pessoa mexeu na caixa de selecao: e uma escolha explicita dela (escolher nao aprova nem inicia nada). */
     private void pythonChosen() {
         RunForm f = runForm;
         if (f == null) {
@@ -1180,17 +1226,18 @@ final class LocalActions implements ContextView.Actions {
         }
         Runner.PythonOption o = f.chosenPython();
         chosenPythonId = o == null ? null : o.id();
-        f.showPythonMessage(pythonMessage(null), pythonMessageIsError(null, false));
+        Said said = pythonSaid(null);
+        f.showPythonMessage(said.kind(), said.text());
         fitRunDialog();
     }
 
     /**
-     * Procura as instalacoes de Python deste computador (descoberta LIMITADA) e confere cada uma contra o pacote; se ha
-     * pasta indicada, confere de novo os ambientes dela. Nao e "Atualizar": nada da Platform e consultado.
+     * Procura as instalacoes de Python deste computador (descoberta LIMITADA) e confere cada uma contra o pacote; se a pessoa
+     * localizou um ambiente virtual, ele e conferido de novo. Nao e "Atualizar": nada da Platform e consultado.
      * <p>
      * {@code initial}: a busca ao abrir a preparacao. So nela, sem escolha anterior e com EXATAMENTE um ambiente totalmente
-     * compativel, esse ambiente vem selecionado (e a tela diz qual sera usado). Depois, a escolha e sempre da pessoa: a que
-     * existe e preservada pela identidade do ambiente; se ele sumiu, a selecao e limpa e NENHUM outro entra no lugar.
+     * compativel, esse ambiente vem selecionado. Depois, a escolha e sempre da pessoa: a que existe e preservada pela
+     * identidade do ambiente; se ele sumiu, a selecao e limpa e NENHUM outro entra no lugar.
      */
     void searchPythons(boolean initial) {
         RunForm f = runForm;
@@ -1208,12 +1255,12 @@ final class LocalActions implements ContextView.Actions {
         fitRunDialog();
         background.execute(() -> {
             Runner.PythonList found = null;
-            Runner.ProjectPythons project = null;
+            Runner.ProjectPythons located = null;
             String problem = null;
             try {
                 found = runner.pythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), cancel::get);
                 if (folder != null && !found.cancelled()) {
-                    project = runner.projectPythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
+                    located = runner.virtualEnvironment(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
                 }
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
@@ -1221,27 +1268,33 @@ final class LocalActions implements ContextView.Actions {
                 problem = NavText.PY_SEARCH_FAILED;
             }
             Runner.PythonList list = found;
-            Runner.ProjectPythons ofFolder = project;
+            Runner.ProjectPythons ofFolder = located;
             String why = problem;
             SwingUtilities.invokeLater(() -> {
                 if (runForm != f || pythonTurn != mine) {
                     return; // outra preparacao, outra busca ou a janela fechou: esta resposta nao vale mais
                 }
                 if (list == null || list.cancelled() || (ofFolder != null && ofFolder.cancelled())) {
-                    // a busca falhou: a lista anterior e a escolha anterior ficam como estavam, e a pessoa pode tentar de novo
-                    presentPythons(f, why == null ? NavText.PY_SEARCH_FAILED : why, true);
+                    // a busca falhou: as opcoes e a escolha anteriores ficam como estavam, e a pessoa pode tentar de novo
+                    presentPythons(f, new Said(Notice.Kind.ERROR, why == null ? NavText.PY_SEARCH_FAILED : why));
                     return;
                 }
                 machinePythons = list.options();
                 pythonFailedSources = list.failedSources();
                 if (ofFolder != null) {
-                    projectPythons = ofFolder.options();
+                    projectPythons = ofFolder.options(); // vazio se o ambiente localizado deixou de existir ou de responder
+                    if (ofFolder.options().isEmpty()) {
+                        pythonFolder = null;
+                    }
                 }
-                String lead = null;
+                Said lead = null;
                 if (before != null) {
                     if (pythonOptions().stream().noneMatch(o -> o.id().equals(before))) {
                         chosenPythonId = null;
-                        lead = NavText.PY_GONE;
+                        // sem a escolha de antes e sem nenhum outro que sirva, a frase diz tambem o que a automacao precisa
+                        Runner.Checked c = runChecked;
+                        lead = new Said(Notice.Kind.WARNING, NavText.PY_GONE
+                                + (anyUsablePython() || c == null ? "" : " " + NavText.pythonNoneCompatible(c.pythonRequirement(), c.dependencies())));
                     }
                 } else if (initial) {
                     java.util.List<Runner.PythonOption> usable = pythonOptions().stream().filter(Runner.PythonOption::usable).toList();
@@ -1249,29 +1302,37 @@ final class LocalActions implements ContextView.Actions {
                         chosenPythonId = usable.get(0).id();
                     }
                 }
-                presentPythons(f, lead, lead != null);
+                presentPythons(f, lead);
             });
         });
     }
 
-    /** Seletor de PASTA (nao de arquivo .py nem de python.exe). Desistir preserva a lista e a escolha. */
-    private void choosePythonFolder() {
+    /** Seletor de PASTA: a raiz do ambiente virtual (nao um arquivo .py nem o python.exe). Desistir preserva as opcoes e a escolha. */
+    private void chooseEnvironmentFolder() {
         JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle(NavText.PY_SELECT_FOLDER_TITLE);
+        chooser.setDialogTitle(NavText.PY_LOCATE_TITLE);
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         chooser.setMultiSelectionEnabled(false);
+        chooser.setFileHidingEnabled(false); // a pasta de um ambiente virtual costuma comecar com ponto
         if (chooser.showOpenDialog(runDialog) == JFileChooser.APPROVE_OPTION) {
-            setPythonFolder(chooser.getSelectedFile().getAbsolutePath());
+            setEnvironmentFolder(chooser.getSelectedFile().getAbsolutePath());
         }
     }
 
     /**
-     * A pasta da automacao que a pessoa indicou: os ambientes virtuais convencionais DIRETAMENTE dentro dela entram no alto
-     * da lista e SUBSTITUEM os de uma pasta anterior. Uma escolha ja feita nao e trocada. Sem escolha, e so quando a pasta
-     * tem um unico ambiente e ele e totalmente compativel, esse ambiente fica selecionado: foi para usa-lo que a pessoa
-     * indicou a pasta, e a tela diz qual sera usado. Com dois ambientes na pasta, a pessoa escolhe.
+     * A pessoa apontou a pasta RAIZ de um ambiente virtual (com o nome que ele tiver). Escolher o ambiente nao muda a pasta do
+     * codigo nem a de saida.
+     * <ul>
+     *   <li>a pasta e um ambiente virtual e ele e totalmente compativel: entra nas opcoes e fica ESCOLHIDO - foi para usa-lo que
+     *       a pessoa o localizou;</li>
+     *   <li>e um ambiente virtual, mas nao atende ao pacote: entra nas opcoes (para ver o motivo) e a escolha anterior e
+     *       mantida;</li>
+     *   <li>nao e um ambiente virtual (ou esta incompleto, e um link, nao respondeu): NADA muda - nem as opcoes, nem a escolha.
+     *       Se ha outro Python que serve, isto e so uma informacao; nunca um erro geral do formulario.</li>
+     * </ul>
+     * O ambiente localizado antes sai das opcoes quando outro e localizado: nao se acumulam.
      */
-    void setPythonFolder(String folder) {
+    void setEnvironmentFolder(String folder) {
         RunForm f = runForm;
         Target t = runTarget;
         if (f == null || t == null || runChecked == null) {
@@ -1284,55 +1345,61 @@ final class LocalActions implements ContextView.Actions {
         f.showPythonSearching(NavText.PY_SEARCHING_FOLDER);
         fitRunDialog();
         background.execute(() -> {
-            Runner.ProjectPythons project = null;
+            Runner.ProjectPythons located = null;
             String problem = null;
             try {
-                project = runner.projectPythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
+                located = runner.virtualEnvironment(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
             } catch (RuntimeException | LinkageError e) {
                 problem = NavText.PY_FOLDER_FAILED;
             }
-            Runner.ProjectPythons found = project;
+            Runner.ProjectPythons found = located;
             String why = problem;
             SwingUtilities.invokeLater(() -> {
                 if (runForm != f || pythonTurn != mine) {
                     return;
                 }
                 if (found == null || found.cancelled()) {
-                    presentPythons(f, why == null ? NavText.PY_FOLDER_FAILED : why, true);
+                    presentPythons(f, new Said(Notice.Kind.ERROR, why == null ? NavText.PY_FOLDER_FAILED : why));
                     return;
                 }
-                boolean notFolder = found.problems().stream().anyMatch(p -> p.issue() == com.nekkora.client.run.PythonEnvironments.Issue.NOT_A_FOLDER);
-                if (notFolder) {
-                    presentPythons(f, NavText.PY_NOT_A_FOLDER, true); // nada muda: os candidatos e a escolha anteriores ficam
+                if (found.options().isEmpty()) {
+                    // tentativa que nao serve: opcoes e escolha ficam EXATAMENTE como estavam. Com outro Python utilizavel, a
+                    // frase e uma informacao; sem nenhum, um aviso - e o caminho do Python escolhido nao entra nela
+                    com.nekkora.client.run.PythonEnvironments.Problem p = found.problems().isEmpty() ? null : found.problems().get(0);
+                    boolean none = p == null || p.issue() == com.nekkora.client.run.PythonEnvironments.Issue.NOT_AN_ENVIRONMENT;
+                    boolean other = anyUsablePython();
+                    String text = none ? (other ? NavText.PY_NOT_AN_ENVIRONMENT : NavText.PY_NOT_AN_ENVIRONMENT_ALONE)
+                            : NavText.pythonProblem(p.name(), p.issue()) + (chosenPython() != null ? " " + NavText.PY_KEPT : "");
+                    presentPythons(f, new Said(other ? Notice.Kind.INFO : Notice.Kind.WARNING, text));
                     return;
                 }
+                Runner.PythonOption env = found.options().get(0);
                 String before = chosenPythonId;
-                boolean wasProject = before != null && projectPythons.stream().anyMatch(o -> o.id().equals(before));
-                pythonFolder = folder;
-                projectPythons = found.options();
-                java.util.List<String> said = new java.util.ArrayList<>();
-                for (com.nekkora.client.run.PythonEnvironments.Problem p : found.problems()) {
-                    said.add(NavText.pythonProblem(p.name(), p.issue()));
+                boolean chosenIsLocated = before != null && projectPythons.stream().anyMatch(o -> o.id().equals(before)) && !env.id().equals(before);
+                if (env.usable()) {
+                    pythonFolder = folder;
+                    projectPythons = found.options();
+                    chosenPythonId = env.id();
+                    presentPythons(f, null);
+                    return;
                 }
-                if (found.options().isEmpty() && found.problems().isEmpty()) {
-                    said.add(NavText.PY_NO_VENV);
+                // localizado, mas nao atende ao pacote: nunca toma o lugar de uma escolha valida. Se o ambiente escolhido e o
+                // localizado antes, ele FICA (as opcoes nao mudam); senao, o novo entra nas opcoes, para a pessoa ver o motivo
+                if (!chosenIsLocated) {
+                    pythonFolder = folder;
+                    projectPythons = found.options();
                 }
-                if (before != null && pythonOptions().stream().noneMatch(o -> o.id().equals(before))) {
-                    chosenPythonId = null; // era um ambiente da pasta anterior, que saiu da lista
-                    if (wasProject) {
-                        said.add("O ambiente da pasta anterior saiu da lista.");
-                    }
-                } else if (before == null && found.options().size() == 1 && found.options().get(0).usable()) {
-                    chosenPythonId = found.options().get(0).id();
-                }
-                presentPythons(f, said.isEmpty() ? null : String.join(" ", said), !said.isEmpty() && found.options().isEmpty());
+                Runner.Checked c = runChecked;
+                String reason = NavText.pythonChoice(env) + ". " + NavText.pythonSummary(env, c == null ? null : c.pythonRequirement());
+                presentPythons(f, new Said(Notice.Kind.WARNING, "O ambiente virtual localizado não atende ao pacote: " + reason
+                        + (chosenPython() != null ? " " + NavText.PY_KEPT : "")));
             });
         });
     }
 
-    /** Confere de novo o ambiente escolhido (o inicio foi recusado): a lista mostra a situacao de agora, sem trocar de ambiente. */
+    /** Confere de novo o ambiente escolhido (o inicio foi recusado): a caixa mostra a situacao de agora, sem trocar de ambiente. */
     private void recheckChosenPython() {
         RunForm f = runForm;
         Target t = runTarget;
@@ -1359,9 +1426,19 @@ final class LocalActions implements ContextView.Actions {
                     machinePythons = machinePythons.stream().map(x -> x.id().equals(o.id()) ? o : x).toList();
                     projectPythons = projectPythons.stream().map(x -> x.id().equals(o.id()) ? o : x).toList();
                 });
-                presentPythons(f, null, false);
+                presentPythons(f, null);
             });
         });
+    }
+
+    /** "Abrir pasta": mostra, no gerenciador de arquivos, a pasta dita. Nada dela e executado. */
+    private void openRunFolder(String folder) {
+        if (folder == null || folder.isBlank()) {
+            return;
+        }
+        if (!openFolder.test(folder)) {
+            host.notice(NavText.RUN_FOLDER_GONE, false);
+        }
     }
 
     void setOutput(String folder) {
