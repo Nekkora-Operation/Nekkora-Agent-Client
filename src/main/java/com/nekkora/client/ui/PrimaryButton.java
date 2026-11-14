@@ -25,9 +25,20 @@ public final class PrimaryButton extends JButton {
 
     private static final int RING = ClientTheme.FOCUS_RING_WIDTH;
     private boolean loading;
+    private final boolean compact;
 
     public PrimaryButton(String text) {
+        this(text, false);
+    }
+
+    /** Tamanho sm da lib (altura control-sm, largura do rotulo), para as acoes de uma linha de lista. */
+    public static PrimaryButton compact(String text) {
+        return new PrimaryButton(text, true);
+    }
+
+    private PrimaryButton(String text, boolean compact) {
         super(text);
+        this.compact = compact;
         setContentAreaFilled(false);
         setBorderPainted(false);
         setFocusPainted(false);
@@ -59,8 +70,8 @@ public final class PrimaryButton extends JButton {
     @Override
     public Dimension getPreferredSize() {
         FontMetrics fm = getFontMetrics(getFont());
-        int w = Math.max(220, fm.stringWidth(getText()) + 2 * ClientTheme.SPACE_4);
-        return new Dimension(w + 2 * RING, ClientTheme.CONTROL_MD + 2 * RING);
+        int w = Math.max(compact ? 0 : 220, fm.stringWidth(getText()) + 2 * (compact ? ClientTheme.SPACE_3 : ClientTheme.SPACE_4));
+        return new Dimension(w + 2 * RING, (compact ? ClientTheme.CONTROL_SM : ClientTheme.CONTROL_MD) + 2 * RING);
     }
 
     @Override

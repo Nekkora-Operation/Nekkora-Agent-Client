@@ -45,6 +45,8 @@ equivalente da lib:
 | Título da tela | — | `text`, `font-size-xl` (18), peso médio |
 | Cartão de organização | `.nk-card` | fundo `surface` (hover `surface-hover`), borda de 1 px `border` (com foco, `accent`), raio `radius-lg` (12), espaço `space-5` (20); nome `text` `font-size-md` médio; identificador `text-secondary` `font-size-xs` |
 | Quadro com a inicial (no lugar do logotipo, que o contrato não tem) | — | fundo `accent-soft`, letra `accent`, raio `radius-md`. Apoio visual; não é ativo de marca |
+| Seletor de ambiente | `.nk-select` | fundo `surface`, borda `border` (foco `accent`), texto `text`; rótulo `font-size-sm` médio |
+| Linha de automação | — | nome `text` `font-size-md` médio; detalhe `text-secondary` `font-size-xs`; divisor `border`; Executar = botão primário `sm`; Editar = botão ghost |
 | Avatar | — | círculo `accent-soft`, iniciais `text` `font-size-xs` médio; sem nome, desenho neutro em `text-secondary` |
 | Menu do usuário | — | `surface`, `text`, divisor `border`, item desabilitado `text-muted`, seleção `surface-hover` |
 | Espaços | `--nk-space-*` | 8, 12, 16, 24, 32 |

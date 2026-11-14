@@ -88,6 +88,18 @@ public final class ClientWindow extends JFrame {
             if (navigation != null) {
                 navigation.back();
             }
+        }, w -> {
+            if (navigation != null) {
+                navigation.selectWorkspace(w);
+            }
+        }, () -> {
+            if (navigation != null) {
+                navigation.loadWorkspaces();
+            }
+        }, () -> {
+            if (navigation != null) {
+                navigation.loadAutomations();
+            }
         }, build);
         content.add(signInView, SIGN_IN);
         content.add(organizationsView, ORGANIZATIONS);
@@ -186,7 +198,7 @@ public final class ClientWindow extends JFrame {
         avatar.setVisible(false);
         avatar.setProfile(null);
         organizationsView.show(Loadable.loading());
-        contextView.show(null);
+        contextView.show(null, Loadable.idle(), null, Loadable.idle());
         to(SIGN_IN);
     }
 
@@ -196,13 +208,8 @@ public final class ClientWindow extends JFrame {
         }
         avatar.setProfile(state.profile().isReady() ? state.profile().value() : null);
         organizationsView.show(state.organizations());
-        if (state.selected() != null) {
-            contextView.show(state.selected());
-            to(CONTEXT);
-        } else {
-            contextView.show(null);
-            to(ORGANIZATIONS);
-        }
+        contextView.show(state);
+        to(state.selected() != null ? CONTEXT : ORGANIZATIONS);
     }
 
     private void to(String target) {

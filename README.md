@@ -26,6 +26,10 @@ mesmo a um Client alterado.
 - Depois da entrada, o **seletor de organizações**: cartões em duas colunas (uma só quando a largura não comporta), na
   ordem da Platform, com rolagem só na área dos cartões. A escolha é sempre explícita, mesmo com uma organização só.
   Carregando, falha (com **Tentar novamente**) e "nenhuma organização" são estados diferentes.
+- Escolhida a organização: o seletor **Ambiente** (o workspace da Platform; só o rótulo muda) e a lista de automações
+  do ambiente, com a versão publicada (número da Platform) e a versão declarada no pacote. Nada é escolhido sozinho, e
+  trocar de contexto apaga o que dependia do anterior. **Nova automação** e **Importar (.zip)** ficam fora da área
+  rolável.
 - No topo, o **avatar** com as iniciais do nome (o contrato não tem foto) e o menu: nome, Configurações e Ajuda
   (desabilitadas nesta etapa), **Terminar sessão** e **Sair**. Terminar sessão descarta o token, pede o encerramento à
   Platform e volta para a entrada; Sair encerra o aplicativo.

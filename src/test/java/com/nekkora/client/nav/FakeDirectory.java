@@ -18,6 +18,12 @@ public final class FakeDirectory implements Directory {
     public volatile List<Organization> organizations = List.of();
     public volatile Failure organizationsFailure;
     public volatile RuntimeException crash;
+    /** Por organizacao e por ambiente: o que a "Platform" devolve. Chave ausente = fora do alcance (NOT_FOUND). */
+    public final java.util.Map<UUID, List<Workspace>> workspaces = new java.util.concurrent.ConcurrentHashMap<>();
+    public final java.util.Map<UUID, Automation.Listing> automations = new java.util.concurrent.ConcurrentHashMap<>();
+    public volatile Failure workspacesFailure;
+    public volatile Failure automationsFailure;
+    public final List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
     public final AtomicInteger profileCalls = new AtomicInteger();
     public final AtomicInteger organizationCalls = new AtomicInteger();
 
@@ -40,6 +46,45 @@ public final class FakeDirectory implements Directory {
             throw new Failed(organizationsFailure);
         }
         return organizations;
+    }
+
+    @Override
+    public List<Workspace> workspaces(UUID organization) throws Failed {
+        calls.add("workspaces " + organization);
+        if (workspacesFailure != null) {
+            throw new Failed(workspacesFailure);
+        }
+        List<Workspace> list = workspaces.get(organization);
+        if (list == null) {
+            throw new Failed(Failure.NOT_FOUND);
+        }
+        return list;
+    }
+
+    @Override
+    public Automation.Listing automations(UUID organization, UUID workspace) throws Failed {
+        calls.add("automations " + organization + " " + workspace);
+        if (automationsFailure != null) {
+            throw new Failed(automationsFailure);
+        }
+        Automation.Listing listing = automations.get(workspace);
+        if (listing == null) {
+            throw new Failed(Failure.NOT_FOUND);
+        }
+        return listing;
+    }
+
+    public static Workspace ws(int n, String name) {
+        return new Workspace(id(1000 + n), name);
+    }
+
+    public static Automation automation(int n, String name, Integer published, String packageVersion) {
+        return new Automation(id(2000 + n), name, published == null ? null
+                : new Automation.Published(id(3000 + n), published, "pacote-" + n, packageVersion, "sha256:" + String.format("%064d", n)));
+    }
+
+    public static Automation.Listing listing(boolean rename, boolean execute, Automation... items) {
+        return new Automation.Listing(List.of(items), new Automation.Capabilities(rename, execute), false);
     }
 
     /** Identificador estavel a partir de um numero, para os testes compararem ordem e identidade. */
