@@ -121,7 +121,7 @@ class LoopbackReceiverTest {
     }
 
     @Test
-    void recusaNoNavegadorViraCancelamento() throws Exception {
+    void recusaNoNavegadorComACorrelacaoCertaEEntregueComoRecusa() throws Exception {
         open();
         FakeBrowser.Visit v = FakeBrowser.get(url("error=access_denied&state=" + pkce.state() + "&iss=" + URLEncoder.encode(ISS, StandardCharsets.UTF_8)));
         assertEquals(200, v.status());
