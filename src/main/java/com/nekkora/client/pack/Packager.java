@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -39,6 +40,13 @@ import java.util.zip.ZipOutputStream;
  * pacote existe com o nome final; uma falha (disco cheio, arquivo em uso, cancelamento, queda) deixa no maximo o temporario,
  * que nunca tem o nome de um pacote pronto. O ZIP de origem nao e tocado; um arquivo existente so e substituido com
  * {@code overwrite} (consentimento da pessoa).
+ * <p>
+ * AGENT-CLIENT-PACOTES-001: o projeto tambem pode ter sido aberto de uma PASTA ({@link ProjectImporter#openFolder}) e o
+ * destino pode ser um arquivo escolhido pela pessoa ({@link #writeTo}). O formato, o descritor e a impressao sao os
+ * mesmos; so mudam a conferencia da origem (cada arquivo incluido, por tamanho, data e conteudo) e os textos de recusa.
+ * Quando a pasta ja tem um {@code nekkora-external.json} valido e o plano pede exatamente o que ele declara, o descritor
+ * existente e reaproveitado byte a byte (mesma impressao digital); senao um descritor novo vai so para o ZIP - o da pasta
+ * nunca e regravado.
  */
 public final class Packager {
     private Packager() {}
@@ -128,7 +136,8 @@ public final class Packager {
                     if (plan.includeData().contains(f.path())) throw new ImportProblem(Code.FORBIDDEN_INCLUDED, ZipNames.display(f.path()));
                     in = false;
                 }
-                case DATA -> in = plan.includeData().contains(f.path());
+                // numa pasta, um arquivo de dados so foi copiado se o descritor existente o lista
+                case DATA -> in = plan.includeData().contains(f.path()) && (!p.fromFolder() || p.folder().stamps().containsKey(f.path()));
                 default -> in = !plan.exclude().contains(f.path());
             }
             if (!in) {
@@ -155,8 +164,23 @@ public final class Packager {
         }
         if (files.size() > ZipLimits.PACKAGE_FILES || bytes > ZipLimits.PACKAGE_BYTES) throw new ImportProblem(Code.PACKAGE_LIMIT);
         byte[] descriptor = descriptor(plan, files, generator);
+        if (p.fromFolder() && p.kind() == Kind.EXTERNAL_PACKAGE && sameAsExisting(p.existing(), plan, files)) {
+            // o descritor da pasta ja diz exatamente isto: e ele que vai para o ZIP, sem mudar um byte (mesma impressao)
+            try {
+                descriptor = Files.readAllBytes(p.root().resolve(ExecutionPackage.EXTERNAL_DESCRIPTOR));
+            } catch (IOException e) {
+                throw Io.work(e, p.workDir());
+            }
+        }
         return new Preview(descriptor, files, ExecutionPackage.externalFingerprint(descriptor, files), contentIdentity(plan.entry(), plan.python(),
                 plan.dependencies(), files), excluded, warned, bytes, plan);
+    }
+
+    /** O plano pede exatamente o pacote que o descritor existente declara (metadados e arquivos)? */
+    private static boolean sameAsExisting(ExecutionPackage existing, PackagePlan plan, Map<String, String> files) {
+        return existing.name().equals(plan.name()) && existing.packageVersion().equals(plan.version()) && existing.entry().equals(plan.entry())
+                && existing.pythonRequirement().equals(plan.python()) && existing.dependencies().equals(plan.dependencies())
+                && existing.files().equals(files);
     }
 
     private static ImportProblem first(ImportedProject p, Code fallback) {
@@ -253,19 +277,54 @@ public final class Packager {
     }
 
     static Built write(ImportedProject p, Preview pv, Path outDir, boolean overwrite, SafeZip.Cancel cancel) throws ImportProblem {
-        if (cancel.requested()) throw new ImportProblem(Code.CANCELLED);
-        if (!ProjectImporter.sourceUnchanged(p)) throw new ImportProblem(Code.SOURCE_CHANGED);
+        if (cancel.requested()) throw new ImportProblem(cancelled(p));
+        if (!unchanged(p, pv, true)) throw new ImportProblem(changed(p));
         if (outDir == null || !Files.isDirectory(outDir)) throw new ImportProblem(Code.WRITE_FAILED);
-        Path target = outDir.resolve(fileName(pv.plan())).toAbsolutePath().normalize();
+        return writeChecked(p, pv, outDir.resolve(fileName(pv.plan())).toAbsolutePath().normalize(), overwrite, cancel);
+    }
+
+    /**
+     * Grava o pacote no ARQUIVO {@code target} escolhido pela pessoa (o nome e dela). As mesmas garantias de {@link #build}:
+     * temporario ao lado do destino, conferencia pelo validador real antes da troca, e nada com o nome final em caso de
+     * falha ou cancelamento. Um arquivo existente so e substituido com {@code overwrite}.
+     */
+    public static Built writeTo(ImportedProject p, Preview pv, Path target, boolean overwrite, SafeZip.Cancel cancel) throws ImportProblem {
+        if (cancel.requested()) throw new ImportProblem(cancelled(p));
+        if (!unchanged(p, pv, true)) throw new ImportProblem(changed(p));
+        Path file = target == null ? null : target.toAbsolutePath().normalize();
+        if (file == null || file.getParent() == null || !Files.isDirectory(file.getParent())) throw new ImportProblem(Code.WRITE_FAILED);
+        return writeChecked(p, pv, file, overwrite, cancel);
+    }
+
+    private static Code cancelled(ImportedProject p) {
+        return p.fromFolder() ? Code.FOLDER_CANCELLED : Code.CANCELLED;
+    }
+
+    private static Code changed(ImportedProject p) {
+        return p.fromFolder() ? Code.FOLDER_CHANGED : Code.SOURCE_CHANGED;
+    }
+
+    /**
+     * A origem continua como foi lida? ZIP: tamanho e data do arquivo. Pasta: cada arquivo INCLUIDO, por tamanho e data e,
+     * com {@code content}, pelo conteudo (um arquivo da pasta que nao entra no pacote pode mudar a vontade).
+     */
+    private static boolean unchanged(ImportedProject p, Preview pv, boolean content) {
+        return p.fromFolder() ? ProjectImporter.folderUnchanged(p, pv.files().keySet(), content) : ProjectImporter.sourceUnchanged(p);
+    }
+
+    private static Built writeChecked(ImportedProject p, Preview pv, Path target, boolean overwrite, SafeZip.Cancel cancel) throws ImportProblem {
+        Path outDir = target.getParent();
+        String fileName = String.valueOf(target.getFileName());
+        Code exists = p.fromFolder() ? Code.DESTINATION_EXISTS : Code.TARGET_EXISTS;
         try {
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && Files.isSameFile(target, p.source())) throw new ImportProblem(Code.SAME_AS_SOURCE);
         } catch (IOException e) {
             throw Io.target(e, outDir);
         }
-        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !overwrite) throw new ImportProblem(Code.TARGET_EXISTS, fileName(pv.plan()));
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !overwrite) throw new ImportProblem(exists, fileName);
         Path tmp;
         try {
-            tmp = Files.createTempFile(outDir, "." + fileName(pv.plan()) + ".", ".parcial");
+            tmp = Files.createTempFile(outDir, "." + fileName + ".", ".parcial");
         } catch (IOException e) {
             throw Io.target(e, outDir);
         }
@@ -275,13 +334,20 @@ public final class Packager {
             if (Files.size(tmp) > ZipLimits.DEFAULT.zipBytes()) throw new ImportProblem(Code.PACKAGE_LIMIT);
             verify(p, pv, tmp);
             beforeMove.run();
-            if (cancel.requested()) throw new ImportProblem(Code.CANCELLED);
-            if (!ProjectImporter.sourceUnchanged(p)) throw new ImportProblem(Code.SOURCE_CHANGED);
+            if (cancel.requested()) throw new ImportProblem(cancelled(p));
+            if (!unchanged(p, pv, false)) throw new ImportProblem(changed(p));
             try {
-                if (overwrite) Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                else Files.move(tmp, target); // sem substituir: se alguem criou o arquivo agora, falha
+                if (overwrite) {
+                    try {
+                        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    } catch (AtomicMoveNotSupportedException e) {
+                        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING); // so com o consentimento de substituir
+                    }
+                } else {
+                    Files.move(tmp, target); // sem substituir: se alguem criou o arquivo agora, falha
+                }
             } catch (FileAlreadyExistsException e) {
-                throw new ImportProblem(Code.TARGET_EXISTS, fileName(pv.plan()));
+                throw new ImportProblem(exists, fileName);
             }
             moved = true;
             String sha = sha256(target);
@@ -307,7 +373,7 @@ public final class Packager {
             z.setLevel(Deflater.BEST_COMPRESSION);
             put(z, ExecutionPackage.EXTERNAL_DESCRIPTOR, pv.descriptor(), fixed);
             for (Map.Entry<String, String> e : pv.files().entrySet()) {
-                if (cancel.requested()) throw new ImportProblem(Code.CANCELLED);
+                if (cancel.requested()) throw new ImportProblem(cancelled(p));
                 Path f = p.root().resolve(e.getKey()).normalize();
                 if (!f.startsWith(p.root())) throw new ImportProblem(Code.VERIFY_FAILED);
                 byte[] data = Files.readAllBytes(f);

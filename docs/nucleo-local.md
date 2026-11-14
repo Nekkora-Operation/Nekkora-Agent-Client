@@ -46,7 +46,9 @@ resposta entra por um `BooleanSupplier` entregue por quem monta o aplicativo (a 
       <impressão-hex>/                     cópia conferida: nekkora-external.json + arquivos listados
       <impressão-hex>.json                 metadados locais do item (nekkora-agent-client/local-package 1.0.0)
     .preparo/preparo-*/                    temporários das operações (apagados ao fim; sobras > 12 h são limpas)
-  importacao/op-*/                         temporários de um ZIP de projeto aberto (apagados em close(); sobras > 12 h)
+  importacao/op-*/                         temporários de um ZIP de projeto ou de uma PASTA de projeto abertos
+                                           (apagados em close(); sobras > 12 h); de uma pasta fica só o retrato
+                                           (fonte/), sem credenciais, ambiente virtual, cache nem dados
   execucao/aprovacoes.json                 aprovações do perfil (nekkora-agent/approvals 1.0.0), por impressão digital
   execucoes/<ex-…>/
     estado.json                            registro (nekkora-agent-client/execution 1.0.0), com o contexto
@@ -154,6 +156,83 @@ record Item(PackageContext context, String fingerprint, String declaredName, Str
 - Item que não está no contexto → `AGT-PAC-061`; falha de disco → `AGT-PAC-062` (ou `AGT-PAC-051`, sem espaço).
 - `remove` não toca execuções já registradas nem uma execução em andamento (ela roda da própria cópia).
 - `link`/`unlink` não enviam nada: é uma anotação local.
+
+### 3A. Gerar um pacote `.zip` a partir de uma pasta (AGENT-CLIENT-PACOTES-001 T01)
+
+A tela não conhece arquivos: fala só com `Workshop`, com caminhos em texto, e recebe **uma** frase por recusa
+(`Workshop.Refused`). A entrada é uma **pasta**; a saída é **um arquivo .zip onde a pessoa escolheu**. Nada é guardado em
+`pacotes/`, nada é executado, importado ou instalado, e nada vai para a rede. O formato é o de sempre
+(`nekkora-external.json`, mesma regra de impressão): `Packager` e `ExecutionPackage` não mudaram de regra.
+
+```java
+Draft openFolder(String folderPath) throws Refused
+    // Draft: folder(), sourceLabel(), blockers(), notes(), pythonFiles(), suggestedEntry(), python(), dependencies(),
+    //        unsupportedDependencies(), dependenciesNeedConfirmation(), existingManifest(), close()
+PackageSummary summary(Draft, String name, String version, String entry, String python, List<String> dependencies,
+                       boolean dependenciesConfirmed[, String destinationZipPath]) throws Refused      // não grava nada
+boolean exists(String destinationZipPath)
+Generated generate(Draft, String name, String version, String entry, String python, List<String> dependencies,
+                   boolean dependenciesConfirmed, String destinationZipPath, boolean overwrite, SafeZip.Cancel cancel)
+        throws Refused        // DestinationExists (subclasse de Refused): destino existe e overwrite == false
+
+record Manifest(String name, String version, String entry, String python, List<String> dependencies, String fingerprint)
+record ExcludedFile(String path, String reason)
+record PackageSummary(String name, String version, String entry, String python, List<String> dependencies,
+                      List<String> included, List<ExcludedFile> excluded, List<String> warned, String fingerprint,
+                      long sizeBytes, boolean manifestReused)
+record Generated(String path, String name, String version, String entry, String fingerprint, String sha256,
+                 int fileCount, long sizeBytes)
+```
+
+**Retrato.** `openFolder` resolve a pasta (`toRealPath`) e a lê **uma vez** para `importacao/op-*/fonte`. Tudo o que é
+mostrado, conferido e empacotado depois é esse retrato; a pasta da pessoa só é lida de novo para saber se mudou. A pasta
+(e um manifesto que esteja nela) **nunca é alterada**.
+
+- Nada é seguido: ligação simbólica, junção do Windows ou outro item especial recusa a pasta (`AGT-PAC-071`), a não ser
+  dentro do que já fica fora. Não há como trazer um arquivo de fora da pasta por ligação, junção, `..` ou caminho absoluto.
+- Pastas `.git`, `.venv`, `venv`, `env`, `node_modules`, `__pycache__`, `.idea`, `.vscode`… (regra `forbidden` do
+  validador) **não são lidas, nem copiadas, nem contam nos limites**; aparecem no resumo como `nome/`, com o motivo.
+- Arquivos que não entram (credenciais, dados, configuração iniciada por ponto) são **listados com o motivo e não
+  copiados** — uma credencial nunca chega à pasta de trabalho. Exceção: um arquivo de dados que o
+  `nekkora-external.json` da raiz lista é copiado, para o manifesto poder ser conferido e mantido. Passando de 2000
+  arquivos de fora, o resto vira só uma contagem (em `notes()`).
+- Limites dos arquivos copiados: os de `ZipLimits` (1000 arquivos, 50 MiB por arquivo, 100 MiB no total, 16 níveis) →
+  `AGT-PAC-073/074/075/077`. Nomes: regras do Windows de `ZipNames` (reservado, caractere inválido, colisão só por
+  maiúsculas) → `AGT-PAC-076`. O limite do **pacote** (500 arquivos, 50 MiB, nomes do contrato) continua em `summary`.
+
+**Manifesto que já está na pasta** (só o da raiz conta):
+
+| Raiz da pasta | `Draft` |
+|---|---|
+| sem descritor | código; `existingManifest()` vazio; versão padrão `1.0.0` |
+| `nekkora-external.json` válido (arquivos listados conferem) | `existingManifest()` com nome, versão, entrada, Python e dependências: são os valores usados quando o campo vem nulo ou em branco. **A versão nunca sobe sozinha.** |
+| `nekkora-external.json` inválido ou que não confere | `blockers()` com `AGT-PAC-081` (e o código do validador) |
+| `nekkora-external.json` junto com `manifest.json`/`nekkora-agent-lab.json` | `blockers()` com `AGT-PAC-080` |
+| `manifest.json` do Studio ou `nekkora-agent-lab.json` | `blockers()` com `AGT-PAC-082` |
+
+Com manifesto válido, se as escolhas e os arquivos são **exatamente** os que ele declara, o descritor da pasta vai para o
+ZIP byte a byte (`manifestReused`, mesma impressão digital do pacote que a pasta já é). Se algo muda (versão, entrada,
+arquivo novo…), um descritor novo é escrito **só no ZIP**. Um arquivo de dados que o manifesto lista continua incluído.
+
+**Resumo e geração.**
+
+- Nome, versão, Python e dependências: regras do `Packager` (`AGT-PAC-035..038`, `-042`). A entrada precisa ser
+  exatamente um item de `pythonFiles()` — `..`, caminho absoluto, outra caixa, barra invertida ou arquivo que fica fora →
+  `AGT-PAC-034`.
+- Destino: um `.zip` numa pasta que existe (`AGT-PAC-085`). Existe e `overwrite == false` → `DestinationExists`
+  (`AGT-PAC-086`), e o arquivo fica como estava.
+- **O pacote não se inclui.** O destino é escolhido depois do retrato; por isso, em `summary` (com destino) e em
+  `generate`, o arquivo do retrato cujo caminho é o do destino fica fora (motivo "é o próprio arquivo de destino"). O
+  temporário nasce depois do retrato e nunca entra. Atenção: `InclusionRules` **não** trata `*.zip` como saída de build —
+  outro `.zip` que esteja na pasta entra como qualquer arquivo (a regra de conteúdo não foi mudada).
+- Antes de gravar, e de novo antes da troca de nome, cada arquivo **incluído** é conferido na pasta (tamanho e data; na
+  primeira vez também o conteúdo). Mudou → `AGT-PAC-072`, "abra a pasta de novo". O que não entra no pacote pode mudar.
+- Gravação: temporário `.<nome>.….parcial` ao lado do destino → relido por `SafeZip` + `ExecutionPackage.inspect` com a
+  impressão igual à calculada → troca de nome (`ATOMIC_MOVE`; substituir só com `overwrite`). Falha ou cancelamento
+  (`AGT-PAC-084`) apagam o temporário; nunca fica um arquivo com o nome final.
+- Mesma pasta + mesmas escolhas ⇒ mesmos bytes e mesma impressão digital.
+
+Os métodos antigos do ZIP (`open`, `build`, `importZip`) continuam como eram.
 
 ## `run` — o que a interface usa
 
@@ -313,7 +392,9 @@ Sem mudança de código nem de texto em relação ao Nekkora-Agent `9b1e7e1` (co
 
 Novos neste aplicativo: `AGT-EXE-030` (pacote do Studio ou de laboratório), `AGT-PAC-046` (idem, no ZIP),
 `AGT-PAC-060` (nome local inválido), `AGT-PAC-061` (pacote não está neste ambiente), `AGT-PAC-062` (falha ao gravar na
-pasta de pacotes); rótulo `UNSUPPORTED_PACKAGE`. Retirados: `AGT-PAC-032`, `AGT-PAC-043` e os códigos do Studio, da
+pasta de pacotes); `AGT-PAC-070`…`-086` (pacote a partir de uma pasta: pasta inexistente, ligação ou junção, pasta mudou,
+limites, nomes, leitura, sem `.py`, manifesto em conflito/inválido/de outro formato, pasta do aplicativo, cancelamento,
+destino inválido, destino existente); rótulo `UNSUPPORTED_PACKAGE`. Retirados: `AGT-PAC-032`, `AGT-PAC-043` e os códigos do Studio, da
 Platform e da observabilidade.
 
 Atenção — textos preservados que citam o produto antigo e que a tela pode querer rever (não foram alterados aqui):
