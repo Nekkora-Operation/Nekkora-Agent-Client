@@ -162,6 +162,28 @@ public enum ClientTheme {
         return accent.over(dark ? 35 : 25, bg);
     }
 
+    // ---- botao secundario (.nk-button--secondary): escuro, formulas do bloco de modo; claro (Nekkora Light), valores do tema
+
+    /** {@code --nk-button-secondary-bg}: escuro, primary; claro (Nekkora Light), o valor fixo do tema. */
+    public Rgb buttonSecondaryBg() {
+        return dark ? primary : Rgb.hex("#f3e6ec");
+    }
+
+    /** {@code --nk-button-secondary-bg-hover}: escuro, secondary; claro (Nekkora Light), o valor fixo do tema. */
+    public Rgb buttonSecondaryBgHover() {
+        return dark ? secondary : Rgb.hex("#ead5df");
+    }
+
+    /** {@code --nk-button-secondary-fg}: escuro, text; claro (Nekkora Light), o valor fixo do tema. */
+    public Rgb buttonSecondaryFg() {
+        return dark ? text : Rgb.hex("#48213b");
+    }
+
+    /** {@code --nk-button-secondary-border} (highlight 12% escuro / primary 12% claro), pintado sobre a superficie do botao. */
+    public Rgb buttonSecondaryBorder() {
+        return (dark ? highlight : primary).over(12, buttonSecondaryBg());
+    }
+
     /** {@code --nk-color-danger-text}: texto de erro. */
     public Rgb dangerText() {
         return Rgb.hex(dark ? "#ff7d95" : "#c0264a");

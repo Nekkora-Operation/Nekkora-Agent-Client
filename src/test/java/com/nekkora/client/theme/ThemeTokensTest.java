@@ -120,6 +120,15 @@ class ThemeTokensTest {
             assertEquals(resolved(modo, paleta, "--nk-color-surface-hover", t), t.surfaceHover().toHex(), t + " surface-hover");
             assertEquals(resolved(modo, paleta, "--nk-color-accent-soft", t), t.accentSoft().toHex(), t + " accent-soft");
             assertEquals(resolved(modo, paleta, "--nk-color-danger-text", t), t.dangerText().toHex(), t + " danger-text");
+            // botao secundario: superficie, hover e rotulo; o contorno e transparente a N%, pintado sobre a superficie do botao
+            assertEquals(resolved(modo, paleta, "--nk-button-secondary-bg", t), t.buttonSecondaryBg().toHex(), t + " button-secondary-bg");
+            assertEquals(resolved(modo, paleta, "--nk-button-secondary-bg-hover", t), t.buttonSecondaryBgHover().toHex(), t + " button-secondary-bg-hover");
+            assertEquals(resolved(modo, paleta, "--nk-button-secondary-fg", t), t.buttonSecondaryFg().toHex(), t + " button-secondary-fg");
+            Matcher sb = Pattern.compile("^color-mix\\(in srgb, (.+?) ([0-9.]+)%, transparent\\)$")
+                    .matcher(paleta.getOrDefault("--nk-button-secondary-border", modo.get("--nk-button-secondary-border")));
+            assertTrue(sb.matches(), "button-secondary-border");
+            assertEquals(Rgb.hex(eval(sb.group(1), paleta, t)).mix(Double.parseDouble(sb.group(2)), t.buttonSecondaryBg()).toHex(),
+                    t.buttonSecondaryBorder().toHex(), t + " button-secondary-border");
             // anel de foco: "0 0 0 3px color-mix(in srgb, var(--nk-color-accent) N%, transparent)"
             Matcher ring = Pattern.compile("^0 0 0 (\\d+)px (color-mix\\(.*\\))$").matcher(modo.get("--nk-focus-ring"));
             assertTrue(ring.matches(), modo.get("--nk-focus-ring"));
