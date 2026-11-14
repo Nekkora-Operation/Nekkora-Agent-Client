@@ -36,13 +36,60 @@ import java.util.UUID;
  */
 public final class Workshop {
 
-    /** Recusa de uma operacao local, com a frase para a pessoa (inclui o codigo de suporte quando ha). */
+    /** O campo do formulario a que uma recusa se refere: a tela poe a frase junto dele. */
+    public enum Field { FOLDER, ENTRY, NAME, VERSION, PYTHON, DEPENDENCIES, DESTINATION, GENERAL }
+
+    /**
+     * Recusa de uma operacao local, com a frase para a pessoa. {@link #getMessage()} traz a frase com o codigo de suporte no
+     * fim (como sempre); {@link #plain()} e so a frase, {@link #code()} o codigo (para os detalhes) e {@link #field()} o
+     * campo a que ela se refere.
+     */
     public static class Refused extends Exception {
         private static final long serialVersionUID = 1L;
+        private final String plain;
+        private final String code;
+        private final Field field;
 
         public Refused(String message) {
-            super(message, null, false, false);
+            this(message, message, null, Field.GENERAL);
         }
+
+        Refused(String message, String plain, String code, Field field) {
+            super(message, null, false, false);
+            this.plain = plain;
+            this.code = code;
+            this.field = field;
+        }
+
+        /** A frase, sem o codigo de suporte. */
+        public String plain() {
+            return plain;
+        }
+
+        /** O codigo de suporte ({@code AGT-PAC-xxx}), ou {@code null}. */
+        public String code() {
+            return code;
+        }
+
+        public Field field() {
+            return field;
+        }
+    }
+
+    /** A recusa do nucleo como recusa da operacao, com o campo a que ela se refere. */
+    static Refused refused(ImportProblem e) {
+        Field f = switch (e.code()) {
+            case NAME_INVALID -> Field.NAME;
+            case VERSION_INVALID -> Field.VERSION;
+            case ENTRY_INVALID -> Field.ENTRY;
+            case PYTHON_INVALID -> Field.PYTHON;
+            case DEPENDENCY_INVALID, DEPENDENCIES_UNCONFIRMED, REQUIREMENTS_UNRESOLVED, REQUIREMENTS_CHANGED, REQUIREMENTS_UNREADABLE -> Field.DEPENDENCIES;
+            case DESTINATION_INVALID, DESTINATION_EXISTS, TARGET_EXISTS, SAME_AS_SOURCE, NO_SPACE, WRITE_FAILED, WRITE_DENIED, TARGET_LOCKED -> Field.DESTINATION;
+            case FOLDER_NOT_FOUND, FOLDER_CHANGED, FOLDER_UNREADABLE -> Field.FOLDER;
+            default -> Field.GENERAL;
+        };
+        String plain = e.code().text() + e.detail().map(d -> " (" + d + ")").orElse("");
+        return new Refused(e.message(), plain, e.code().code(), f);
     }
 
     /**
@@ -53,7 +100,7 @@ public final class Workshop {
         private static final long serialVersionUID = 1L;
 
         public DestinationExists(String message) {
-            super(message);
+            super(message, message, ImportProblem.Code.DESTINATION_EXISTS.code(), Field.DESTINATION);
         }
     }
 
@@ -65,6 +112,36 @@ public final class Workshop {
         public Manifest {
             dependencies = List.copyOf(dependencies);
         }
+    }
+
+    /**
+     * O que a pessoa digitou em "Requisito de Python (opcional)", como o aplicativo o entende.
+     *
+     * @param valid falso: o texto nao e uma forma aceita; precisa ser corrigido ou apagado (nada e posto no lugar)
+     * @param declared ha um requisito (falso com {@code valid}: campo em branco, sem restricao declarada)
+     * @param text o requisito como vai no manifesto, ou vazio
+     * @param meaning a interpretacao em palavras, para a tela
+     */
+    public record PythonReading(boolean valid, boolean declared, String text, String meaning) {
+    }
+
+    /** Sem requisito: o autor nao declarou restricao. Nao e promessa de que qualquer Python serve. */
+    public static final String NO_PYTHON_REQUIREMENT = "Sem restrição de Python declarada";
+
+    /**
+     * Interpreta o texto do campo: {@code 3.12} e a familia 3.12.x; {@code 3.12.0} e a versao exata; um especificador do
+     * manifesto ({@code >=3.10,<3.14}) fica como esta; em branco, sem restricao declarada. So leitura.
+     */
+    public static PythonReading readPython(String typed) {
+        PythonRequirement.Typed t = PythonRequirement.interpret(typed);
+        if (!t.valid()) return new PythonReading(false, false, "", "");
+        return t.requirement().map(r -> new PythonReading(true, true, r.text(), r.meaning())).orElse(new PythonReading(true, false, "", NO_PYTHON_REQUIREMENT));
+    }
+
+    /** O requisito de um manifesto em palavras (ou {@link #NO_PYTHON_REQUIREMENT}). */
+    public static String pythonMeaning(String requirement) {
+        if (requirement == null || requirement.isBlank()) return NO_PYTHON_REQUIREMENT;
+        return PythonRequirement.parse(requirement).map(PythonRequirement::meaning).orElse(requirement);
     }
 
     /** Um arquivo (ou uma subpasta, com {@code /} no fim) que fica fora do pacote, e por que. */
@@ -207,6 +284,16 @@ public final class Workshop {
             return project.declarations().python();
         }
 
+        /** De onde veio {@link #python()} (por exemplo, {@code pyproject.toml (requires-python)}), para a tela dizer. */
+        public Optional<String> pythonSource() {
+            return project.declarations().python().isPresent() ? Optional.ofNullable(project.declarations().pythonSource()) : Optional.empty();
+        }
+
+        /** Um requisito de Python declarado no projeto que o manifesto nao consegue representar (a pessoa revisa). */
+        public Optional<String> pythonUnsupported() {
+            return project.declarations().pythonUnsupported();
+        }
+
         /** Dependencias com versao exata declaradas no projeto ({@code nome==versao}). */
         public List<String> dependencies() {
             return project.declarations().exact();
@@ -267,7 +354,7 @@ public final class Workshop {
                     LocalPackages.Provenance.local(LocalPackages.Origin.LOCAL_ZIP, zip.toString()), SafeZip.Cancel.NEVER);
             return new Imported(item(a.item()), a.alreadyPresent());
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         }
@@ -288,7 +375,7 @@ public final class Workshop {
         try {
             return item(packages.rename(new PackageContext(organization, workspace), fingerprint, localName));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -297,7 +384,7 @@ public final class Workshop {
         try {
             return new Draft(importer.open(zip(zipPath), SafeZip.Cancel.NEVER));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -312,7 +399,7 @@ public final class Workshop {
             LocalPackages.Added a = packages.addBuilt(new PackageContext(organization, workspace), draft.project, plan, SafeZip.Cancel.NEVER);
             return new Imported(item(a.item()), a.alreadyPresent());
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         }
@@ -333,7 +420,7 @@ public final class Workshop {
         } catch (InvalidPathException e) {
             throw new Refused(new ImportProblem(ImportProblem.Code.FOLDER_NOT_FOUND).message());
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -346,6 +433,8 @@ public final class Workshop {
     /**
      * O que SERIA gerado com estas escolhas; nao grava nada. Campo nulo ou em branco usa o do manifesto valido da pasta,
      * se houver; a versao, sem manifesto, e {@link #FIRST_VERSION} (a de um manifesto existente nunca e aumentada sozinha).
+     * {@code python} e a excecao: nulo usa o que a pasta declara; um texto e o que a pessoa deixou no campo (ver
+     * {@link #readPython}) - em branco, o pacote sai sem restricao de Python declarada.
      * A entrada precisa ser exatamente um dos {@link Draft#pythonFiles()}.
      * <p>
      * {@code destinationZipPath} (opcional): se o destino fica DENTRO da pasta e ja estava nela quando foi aberta (um
@@ -358,7 +447,7 @@ public final class Workshop {
             Path destination = destinationZipPath == null || destinationZipPath.isBlank() ? null : destination(destinationZipPath);
             return summarize(draft, preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, destination));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -408,7 +497,7 @@ public final class Workshop {
             return new Generated(b.zip().toString(), b.name(), b.version(), b.entry(), b.fingerprint(), b.sha256(), b.files(), b.size());
         } catch (ImportProblem e) {
             if (e.code() == ImportProblem.Code.DESTINATION_EXISTS) throw new DestinationExists(e.message());
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -424,7 +513,16 @@ public final class Workshop {
         String n = blank(name) && existing != null ? existing.name() : name;
         String v = !blank(version) ? version : existing != null ? existing.packageVersion() : FIRST_VERSION;
         String en = blank(entry) && existing != null ? existing.entry() : entry;
-        String py = !blank(python) ? python : existing != null ? existing.pythonRequirement() : p.declarations().python().orElse(null);
+        // nulo: o que a pasta ja declara (manifesto ou metadados). Texto (mesmo em branco): o que a pessoa deixou no campo -
+        // em branco e "sem restricao declarada"; texto que nao e um requisito e recusado, nunca trocado por um padrao
+        String py;
+        if (python == null) {
+            py = existing != null ? existing.pythonRequirement() : p.declarations().python().orElse(null);
+        } else {
+            PythonRequirement.Typed typed = PythonRequirement.interpret(python);
+            if (!typed.valid()) throw new ImportProblem(ImportProblem.Code.PYTHON_INVALID, ZipNames.display(python.strip()));
+            py = typed.text();
+        }
         List<String> deps = dependencies != null ? dependencies : existing != null ? existing.dependencies() : p.declarations().exact();
         Set<String> data = new HashSet<>();
         if (existing != null) {
@@ -677,7 +775,7 @@ public final class Workshop {
             return new UseLocalResult(matches ? UseLocalOutcome.MATCHES_PUBLISHED : UseLocalOutcome.STORED_SEPARATE, item(item), c.originLabel(), c.pathLabel(),
                     c.fingerprint(), c.declaredName(), c.packageVersion());
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         }
@@ -701,7 +799,7 @@ public final class Workshop {
         try {
             return downloads.target(platformOrigin, organization, automationId, versionId).toString();
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -710,7 +808,7 @@ public final class Workshop {
         try {
             return downloads.open(partial(tempFilePath));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 
@@ -728,7 +826,7 @@ public final class Workshop {
             return item(downloads.install(packages, platformOrigin, new PackageContext(organization, workspace), automationId, versionId, versionNumber,
                     partial(tempFilePath), expectedSha256, expectedSizeBytes, expectedFingerprint, cancel == null ? SafeZip.Cancel.NEVER : cancel));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         }
@@ -739,7 +837,7 @@ public final class Workshop {
         try {
             downloads.discard(partial(tempFilePath));
         } catch (ImportProblem e) {
-            throw new Refused(e.message());
+            throw refused(e);
         }
     }
 

@@ -205,7 +205,8 @@ final class RunForm extends JPanel {
         packageOk = checked != null;
         if (checked != null) {
             approved = checked.approved();
-            packageLine.setText(checked.name() + " · versão do pacote " + checked.packageVersion() + " · entrada " + checked.entry() + " · Python " + checked.pythonRequirement()
+            packageLine.setText(checked.name() + " · versão do pacote " + checked.packageVersion() + " · entrada " + checked.entry() + " · "
+                    + (checked.pythonRequirement() == null ? com.nekkora.client.pack.Workshop.NO_PYTHON_REQUIREMENT : "Python " + checked.pythonRequirement())
                     + (checked.dependencies().isEmpty() ? " · sem dependências" : " · " + checked.dependencies().size() + " dependência(s) exata(s)") + " · impressão digital "
                     + checked.shortFingerprint());
         } else {

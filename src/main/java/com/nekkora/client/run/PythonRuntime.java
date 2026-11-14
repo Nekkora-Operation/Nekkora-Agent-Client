@@ -100,8 +100,7 @@ public final class PythonRuntime {
 
     /** O Python serve para o pacote? A faixa do descritor decide ({@code AGT-EXT-022} se nao atende). */
     public static void requireCompatible(Probe probe, ExecutionPackage pkg) throws ExecRefused {
-        String[] v = probe.pythonVersion().split("\\.");
-        if (!ExecutionPackage.pythonSatisfies(pkg.pythonRequirement(), Integer.parseInt(v[0]), Integer.parseInt(v[1]))) {
+        if (!ExecutionPackage.pythonSatisfies(pkg.pythonRequirement(), probe.pythonVersion())) {
             throw new ExecRefused(ErrorCode.EXT_ENVIRONMENT_INCOMPATIBLE);
         }
     }

@@ -128,13 +128,13 @@ class ExternalPackageTest {
 
     @Test
     void faixaDePython() {
-        assertTrue(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", 3, 12));
-        assertFalse(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", 3, 14));
-        assertFalse(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", 3, 9));
-        assertTrue(ExecutionPackage.pythonSatisfies("==3.12.*", 3, 12));
-        assertFalse(ExecutionPackage.pythonSatisfies("==3.12.*", 3, 13));
-        assertTrue(ExecutionPackage.pythonSatisfies("~=3.11", 3, 13));
-        assertFalse(ExecutionPackage.pythonSatisfies("~=3.11", 4, 0));
+        assertTrue(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", "3.12.0"));
+        assertFalse(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", "3.14.0"));
+        assertFalse(ExecutionPackage.pythonSatisfies(">=3.10,<3.14", "3.9.0"));
+        assertTrue(ExecutionPackage.pythonSatisfies("==3.12.*", "3.12.0"));
+        assertFalse(ExecutionPackage.pythonSatisfies("==3.12.*", "3.13.0"));
+        assertTrue(ExecutionPackage.pythonSatisfies("~=3.11", "3.13.0"));
+        assertFalse(ExecutionPackage.pythonSatisfies("~=3.11", "4.0.0"));
     }
 
     /** Os codigos e os textos mantidos sao os do Nekkora Agent, letra por letra (amostra dos que a tela mais mostra). */

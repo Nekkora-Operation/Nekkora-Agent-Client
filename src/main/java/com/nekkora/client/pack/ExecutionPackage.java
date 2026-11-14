@@ -39,7 +39,8 @@ import java.util.regex.Pattern;
  * @param fingerprint impressao digital {@code sha256:...}
  * @param entry o {@code .py} de entrada
  * @param generator gerador declarado, ou {@code null}
- * @param pythonRequirement versao de Python exigida, no formato do descritor
+ * @param pythonRequirement requisito de Python no formato do descritor; {@code null}: o pacote (descritor 1.1) nao declara
+ *        restricao de Python
  * @param dependencies dependencias com versao exata
  * @param packageVersion versao DECLARADA do pacote
  */
@@ -58,7 +59,12 @@ public record ExecutionPackage(Path dir, String name, Map<String, String> files,
     public static final String EXTERNAL_DESCRIPTOR = "nekkora-external.json";
     public static final String EXTERNAL_SCHEMA = "nekkora-agent/external-python-package";
     public static final String EXTERNAL_RULE = "nekkora-agent/external-python-fingerprint/1";
-    private static final Pattern EXTERNAL_PYTHON_REQ = Pattern.compile("(>=|==|~=)([0-9]{1,2})\\.([0-9]{1,2})(\\.\\*)?(,<([0-9]{1,2})\\.([0-9]{1,2}))?");
+    /** Versoes do descritor: 1.0.x (requisito de Python obrigatorio) e 1.1.x (opcional; aceita versao exata {@code ==X.Y.Z}). */
+    private static final Pattern DESCRIPTOR_10 = Pattern.compile("1\\.0\\.[0-9]{1,3}");
+    private static final Pattern DESCRIPTOR_11 = Pattern.compile("1\\.1\\.[0-9]{1,3}");
+    /** O que o empacotador grava: 1.1.0 so quando o pacote usa o que existe a partir da 1.1; senao 1.0.0, como sempre. */
+    public static final String DESCRIPTOR_VERSION_10 = "1.0.0";
+    public static final String DESCRIPTOR_VERSION_11 = "1.1.0";
     private static final Pattern EXTERNAL_DEP = Pattern.compile("([A-Za-z0-9][A-Za-z0-9._-]{0,79})(\\[[A-Za-z0-9,._-]{1,80}])?==([0-9][0-9A-Za-z.+!-]{0,40})");
     static final int MAX_FILES = 500;
     static final long MAX_BYTES = 50L * 1024 * 1024;
@@ -133,22 +139,30 @@ public record ExecutionPackage(Path dir, String name, Map<String, String> files,
     }
 
     /**
-     * Pacote Python externo. Descritor 1.0.x com nome, versao do projeto, entrada relativa {@code .py} listada, versao de
-     * Python, dependencias com versao EXATA e os arquivos com hash. Ambiente virtual, credenciais e cache nunca entram
+     * Pacote Python externo. Descritor 1.0.x ou 1.1.x com nome, versao do projeto, entrada relativa {@code .py} listada,
+     * requisito de Python (obrigatorio na 1.0, opcional na 1.1), dependencias com versao EXATA e os arquivos com hash. Ambiente virtual, credenciais e cache nunca entram
      * (recusa). O pacote nao pede segredo nem framework: o processo roda com o Python preparado pela pessoa.
      */
     private static ExecutionPackage external(Path dir, Map<String, Object> m) throws ExecRefused {
         String version = JsonReader.text(m, "version");
-        if (!EXTERNAL_SCHEMA.equals(JsonReader.text(m, "schema")) || version == null || !version.matches("1\\.0\\.[0-9]{1,3}")) {
+        boolean v10 = version != null && DESCRIPTOR_10.matcher(version).matches();
+        boolean v11 = version != null && DESCRIPTOR_11.matcher(version).matches();
+        if (!EXTERNAL_SCHEMA.equals(JsonReader.text(m, "schema")) || !(v10 || v11)) {
             throw new ExecRefused(ErrorCode.EXEC_PACKAGE_INVALID);
         }
         String name = JsonReader.text(m, "name");
         String pkgVersion = JsonReader.text(m, "packageVersion");
         String entry = JsonReader.text(m, "entry");
-        String python = JsonReader.text(m, "python");
-        if (name == null || !name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,79}") || pkgVersion == null || !pkgVersion.matches("[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}")
-                || python == null || !EXTERNAL_PYTHON_REQ.matcher(python).matches()) {
+        if (name == null || !name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,79}") || pkgVersion == null || !pkgVersion.matches("[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}")) {
             throw new ExecRefused(ErrorCode.EXEC_PACKAGE_INVALID);
+        }
+        // 1.0: requisito obrigatorio, nas formas da 1.0. 1.1: a CHAVE pode faltar (sem restricao declarada); presente, tem de
+        // ser um texto valido - valor nulo, vazio ou de outro tipo nunca e lido como "sem restricao"
+        String python = null;
+        if (v10 || m.containsKey("python")) {
+            python = JsonReader.text(m, "python");
+            Optional<PythonRequirement> req = PythonRequirement.parse(python);
+            if (req.isEmpty() || (v10 && req.get().exact())) throw new ExecRefused(ErrorCode.EXEC_PACKAGE_INVALID);
         }
         List<?> deps = JsonReader.list(m, "dependencies");
         if (deps == null || deps.size() > 200) throw new ExecRefused(ErrorCode.EXEC_PACKAGE_INVALID);
@@ -188,9 +202,9 @@ public record ExecutionPackage(Path dir, String name, Map<String, String> files,
         return false;
     }
 
-    /** {@code python} no formato do descritor externo (o mesmo que {@link #inspect} aceita). */
+    /** {@code python} numa forma do descritor externo (1.0 ou 1.1). Ver {@link PythonRequirement}. */
     public static boolean validPythonRequirement(String requirement) {
-        return requirement != null && EXTERNAL_PYTHON_REQ.matcher(requirement).matches();
+        return PythonRequirement.valid(requirement);
     }
 
     /** Dependencia no formato do descritor externo ({@code nome==versao}, extras opcionais). */
@@ -198,20 +212,21 @@ public record ExecutionPackage(Path dir, String name, Map<String, String> files,
         return dependency != null && EXTERNAL_DEP.matcher(dependency).matches();
     }
 
-    /** {@code python} do descritor ({@code >=3.10,<3.14}, {@code ==3.12.*}, {@code ~=3.11}) atende a versao {@code major.minor}? */
-    public static boolean pythonSatisfies(String requirement, int major, int minor) {
-        Matcher m = EXTERNAL_PYTHON_REQ.matcher(requirement == null ? "" : requirement);
-        if (!m.matches()) return false;
-        int rM = Integer.parseInt(m.group(2));
-        int rm = Integer.parseInt(m.group(3));
-        int cmp = Integer.compare(major * 100 + minor, rM * 100 + rm);
-        boolean ok = switch (m.group(1)) {
-            case ">=" -> cmp >= 0;
-            case "==" -> cmp == 0;
-            default -> major == rM && cmp >= 0; // ~=X.Y: mesma versao maior, menor >= Y
-        };
-        if (ok && m.group(5) != null) ok = major * 100 + minor < Integer.parseInt(m.group(6)) * 100 + Integer.parseInt(m.group(7));
-        return ok;
+    /**
+     * A versao {@code X.Y.Z} do interpretador atende ao requisito do descritor? Sem requisito ({@code null}): atende - o
+     * pacote nao declara restricao (o ambiente ainda precisa responder a sondagem e ter as dependencias declaradas).
+     * Requisito ilegivel nunca atende.
+     */
+    public static boolean pythonSatisfies(String requirement, String version) {
+        if (version == null || !version.matches("[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}")) return false;
+        if (requirement == null) return true;
+        return PythonRequirement.parse(requirement).map(r -> r.accepts(version)).orElse(false);
+    }
+
+    /** A versao do descritor que o pacote precisa: 1.1 sem requisito de Python ou com versao exata; senao 1.0. */
+    public static String descriptorVersionFor(String pythonRequirement) {
+        return pythonRequirement == null || PythonRequirement.parse(pythonRequirement).map(PythonRequirement::exact).orElse(false)
+                ? DESCRIPTOR_VERSION_11 : DESCRIPTOR_VERSION_10;
     }
 
     private static Map<String, String> files(Map<String, Object> declared) throws ExecRefused {

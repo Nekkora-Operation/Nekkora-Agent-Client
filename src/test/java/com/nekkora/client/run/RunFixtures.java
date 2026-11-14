@@ -122,9 +122,11 @@ final class RunFixtures {
             Files.writeString(f, e.getValue(), StandardCharsets.UTF_8);
             hashes.put(e.getKey(), ExecutionPackage.fileHash(e.getValue().getBytes(StandardCharsets.UTF_8)));
         }
-        StringBuilder b = new StringBuilder("{\n  \"schema\": \"nekkora-agent/external-python-package\",\n  \"version\": \"1.0.0\",\n  \"name\": \"").append(name)
-                .append("\",\n  \"packageVersion\": \"1.0.0\",\n  \"entry\": \"").append(entry).append("\",\n  \"python\": \"").append(python)
-                .append("\",\n  \"dependencies\": [");
+        // python nulo: pacote SEM restricao de Python declarada (manifesto 1.1, sem a chave)
+        StringBuilder b = new StringBuilder("{\n  \"schema\": \"nekkora-agent/external-python-package\",\n  \"version\": \"")
+                .append(ExecutionPackage.descriptorVersionFor(python)).append("\",\n  \"name\": \"").append(name)
+                .append("\",\n  \"packageVersion\": \"1.0.0\",\n  \"entry\": \"").append(entry).append("\",\n")
+                .append(python == null ? "" : "  \"python\": \"" + python + "\",\n").append("  \"dependencies\": [");
         for (int i = 0; i < dependencies.size(); i++) b.append(i == 0 ? "" : ", ").append('"').append(dependencies.get(i)).append('"');
         b.append("],\n  \"files\": {");
         int n = 0;

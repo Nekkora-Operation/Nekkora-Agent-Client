@@ -13,7 +13,7 @@ import javax.accessibility.AccessibleRole;
 import javax.swing.JComponent;
 
 /**
- * Texto curto, centralizado, quebrado por palavras numa largura maxima fixa. A altura acompanha o numero de linhas, e
+ * Texto curto, centralizado (ou a esquerda, com {@link #alignLeft()}), quebrado por palavras numa largura maxima fixa. A altura acompanha o numero de linhas, e
  * nada e cortado: a mensagem cabe inteira em qualquer tamanho de janela e escala.
  */
 public final class WrappedText extends JComponent {
@@ -22,6 +22,7 @@ public final class WrappedText extends JComponent {
 
     private final int maxWidth;
     private String text = "";
+    private boolean left;
 
     public WrappedText(int maxWidth) {
         this.maxWidth = maxWidth;
@@ -37,6 +38,13 @@ public final class WrappedText extends JComponent {
 
     public String getText() {
         return text;
+    }
+
+    /** Alinha as linhas a esquerda (formularios); o padrao, centralizado, e o das telas de entrada. */
+    public WrappedText alignLeft() {
+        left = true;
+        repaint();
+        return this;
     }
 
     /**
@@ -94,7 +102,7 @@ public final class WrappedText extends JComponent {
             int lh = lineHeight(fm);
             int y = (lh - fm.getHeight()) / 2 + fm.getAscent();
             for (String line : lines()) {
-                g2.drawString(line, (getWidth() - fm.stringWidth(line)) / 2, y);
+                g2.drawString(line, left ? 0 : (getWidth() - fm.stringWidth(line)) / 2, y);
                 y += lh;
             }
         } finally {

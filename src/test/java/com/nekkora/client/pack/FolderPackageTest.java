@@ -349,7 +349,11 @@ class FolderPackageTest {
             assertTrue(refused(() -> workshop.summary(d, "", null, "util.py", PY, null, true)).contains("AGT-PAC-035"));
             assertTrue(refused(() -> workshop.summary(d, "nome com espaço", null, "util.py", PY, null, true)).contains("AGT-PAC-035"));
             assertTrue(refused(() -> workshop.summary(d, "x", "um", "util.py", PY, null, true)).contains("AGT-PAC-036"));
-            assertTrue(refused(() -> workshop.summary(d, "x", null, "util.py", null, null, true)).contains("AGT-PAC-037"));
+            // Python: um texto que nao e um requisito e recusado; sem requisito (nulo ou em branco), o pacote e gerado
+            assertTrue(refused(() -> workshop.summary(d, "x", null, "util.py", "três ponto doze", null, true)).contains("AGT-PAC-037"));
+            assertTrue(refused(() -> workshop.summary(d, "x", null, "util.py", ">=3", null, true)).contains("AGT-PAC-037"));
+            assertEquals(null, workshop.summary(d, "x", null, "util.py", null, null, true).python());
+            assertEquals(null, workshop.summary(d, "x", null, "util.py", "  ", null, true).python());
             assertTrue(refused(() -> workshop.summary(d, "x", null, "util.py", PY, List.of("requests>=2"), true)).contains("AGT-PAC-038"));
         }
         assertEquals(List.of(), names(saida));

@@ -226,6 +226,53 @@ class PythonEnvironmentsTest {
         assertFalse(d.environments().get(0).usable());
     }
 
+    /** AGENT-CLIENT-PREPARACAO-002: pacote sem requisito de Python declarado e pacote que pede uma versao exata. */
+    @Test
+    void pacoteSemRestricaoDePythonAindaExigeSondagemEDependencias() throws Exception {
+        needsPython();
+        PythonEnvironments s = service(sources(new PythonSources.Found(PythonSources.PATH, List.of(python), false)));
+        ExecutionPackage sem = pkg("sem-restricao", null, List.of());
+        assertNull(sem.pythonRequirement());
+        Environment e = s.discover(sem, PythonProbe.Cancel.NEVER).environments().get(0);
+        assertEquals(State.COMPATIBLE, e.state(), "sem restricao declarada: a versao deste Python nao e motivo de recusa");
+        // as dependencias declaradas continuam sendo exigidas
+        Environment falta = s.discover(pkg("sem-restricao-com-dependencia", null, List.of("nekkora-fixture-ausente==9.9.9")), PythonProbe.Cancel.NEVER)
+                .environments().get(0);
+        assertEquals(State.DEPENDENCIES_PENDING, falta.state());
+        assertFalse(falta.usable());
+        // um interpretador que nao responde a sondagem nao vira opcao, com ou sem requisito
+        Path naoResponde = Files.writeString(tmp.resolve(windows ? "python.exe" : "python"), "nao e um Python");
+        PythonEnvironments.Discovery d = service(sources(new PythonSources.Found(PythonSources.PATH, List.of(naoResponde), false))).discover(sem,
+                PythonProbe.Cancel.NEVER);
+        assertTrue(d.environments().isEmpty(), "sem resposta, nao ha ambiente: " + d.environments());
+
+        // versao exata: so a versao inteira atende
+        String v = e.version();
+        assertEquals(State.COMPATIBLE, s.discover(pkg("exata-igual", "==" + v, List.of()), PythonProbe.Cancel.NEVER).environments().get(0).state());
+        String[] p = v.split("\\.");
+        String outra = p[0] + "." + p[1] + "." + (Integer.parseInt(p[2]) + 1);
+        assertEquals(State.VERSION_INCOMPATIBLE, s.discover(pkg("exata-outra", "==" + outra, List.of()), PythonProbe.Cancel.NEVER).environments().get(0).state());
+    }
+
+    @Test
+    void pacoteSemRestricaoDePythonExecutaPeloAmbienteEscolhido() throws Exception {
+        needsPython();
+        ExecutionPackage p = ExecutionPackage.inspect(RunFixtures.pkg(tmp.resolve("pacotes").resolve("livre"), "livre", Map.of("main.py", ONDE), "main.py", null,
+                List.of()));
+        Path dados = tmp.resolve("dados");
+        Path saida = Files.createDirectories(tmp.resolve("saida"));
+        RunController c = controller(dados);
+        try {
+            c.approvals().approve(p, java.time.Instant.now());
+            c.start(new RunController.Request(p.dir(), RunFixtures.context(p), python, saida, null));
+            long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+            while (c.isRunning() && System.nanoTime() < limit) Thread.sleep(50);
+            assertEquals(ExecutionState.SUCCEEDED, c.current().orElseThrow().record().state());
+        } finally {
+            c.close();
+        }
+    }
+
     @Test
     void aliasDaStoreNaoESondadoECandidatoQueNaoRespondeNaoViraOpcao() throws Exception {
         needsPython();

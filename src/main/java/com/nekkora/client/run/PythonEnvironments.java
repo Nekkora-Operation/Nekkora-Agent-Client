@@ -251,7 +251,7 @@ public final class PythonEnvironments {
 
     private Environment environment(Kind kind, String folderName, PythonProbe.Info info, ExecutionPackage pkg) {
         String id = id(kind, info.python());
-        if (!ExecutionPackage.pythonSatisfies(pkg.pythonRequirement(), info.major(), info.minor())) {
+        if (!ExecutionPackage.pythonSatisfies(pkg.pythonRequirement(), info.version())) {
             return new Environment(id, kind, folderName, info.python(), info.version(), State.VERSION_INCOMPATIBLE, List.of());
         }
         if (pkg.dependencies().isEmpty()) {

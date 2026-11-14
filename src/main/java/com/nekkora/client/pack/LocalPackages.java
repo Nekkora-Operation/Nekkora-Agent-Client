@@ -504,7 +504,7 @@ public final class LocalPackages {
             String linked = JsonReader.text(m, "linkedAutomationId");
             return Optional.of(new Item(context, fingerprint, Objects.requireNonNull(JsonReader.text(m, "name")),
                     Objects.requireNonNull(JsonReader.text(m, "packageVersion")), Objects.requireNonNull(JsonReader.text(m, "entry")),
-                    Objects.requireNonNull(JsonReader.text(m, "python")), deps, JsonReader.text(m, "localName"),
+                    JsonReader.text(m, "python"), deps, JsonReader.text(m, "localName"),
                     linked == null ? null : PackageContext.uuid(linked), Instant.parse(JsonReader.text(m, "addedAt")), dir, provenance(m)));
         } catch (IOException | JsonReader.Invalid | RuntimeException e) {
             return Optional.empty();
