@@ -291,7 +291,7 @@ class RunDesktopTest {
         enter(a, fin);
         importar("meu-script", GRAVA, List.of());
         RunForm f = abrir("meu-script");
-        assertTrue(read(f::scopeText).contains("Nada é enviado à Platform") && read(f::scopeText).contains("Nada começa até você clicar em Iniciar execução"));
+        assertTrue(read(f::scopeText).contains("Nada desta execução é enviado à Platform") && read(f::scopeText).contains("Nada começa até você clicar em Iniciar execução"));
         assertTrue(read(f::packageText).startsWith("meu-script · versão do pacote 1.0.0 · entrada main.py"), read(f::packageText));
         assertFalse(read(() -> f.startButton().isEnabled()), "abrir a preparacao nao habilita o inicio");
         assertTrue(runner.current().isEmpty());
@@ -395,6 +395,72 @@ class RunDesktopTest {
         String estado = Files.readString(registros.resolve(s.id()).resolve("estado.json"));
         assertTrue(estado.contains(a.id().toString()) && estado.contains(fin.id().toString()), "organizacao e ambiente do inicio no registro");
         assertFalse(Files.exists(tmp.resolve("dados").resolve("plataforma")), "nenhuma pasta de integracao");
+    }
+
+    /**
+     * AGENT-CLIENT-PACOTES-001 T04: executar no Agent e SEMPRE local, mesmo com a conta conectada e com um estado de
+     * pareamento e de autorizacao de monitoramento no disco (FIXTURE: este aplicativo nao pareia; os arquivos imitam o que
+     * um vinculo deixaria). Nada desta execucao vai a Platform, nenhuma fila de envio nasce, e reiniciar, voltar a "ter rede"
+     * ou trocar de organizacao nao a transforma em remota.
+     */
+    @Test
+    void execucaoIniciadaNoAgentNaoEnviaNemEnfileiraNadaMesmoComPareamentoEAutorizacaoEmFixture() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        Path dados = tmp.resolve("dados");
+        Path plataforma = Files.createDirectories(dados.resolve("plataforma"));
+        Files.writeString(plataforma.resolve("vinculo.json"), "{\"fixture\":true,\"organizationId\":\"" + a.id() + "\",\"workerId\":\"" + java.util.UUID.randomUUID() + "\"}");
+        Files.writeString(plataforma.resolve("autorizacoes.json"), "{\"fixture\":true,\"items\":[{\"mode\":\"EXTERNAL_MONITORED\",\"workspaceId\":\"" + fin.id() + "\"}]}");
+        String fixtureAntes = Files.readString(plataforma.resolve("vinculo.json")) + Files.readString(plataforma.resolve("autorizacoes.json"));
+        enter(a, fin);
+        RunForm f = preparado("grava", GRAVA);
+        List<String> antes = List.copyOf(session.directory.calls);
+        edt(() -> f.startButton().doClick(0));
+        await("execucao terminada", () -> runner.current().map(Runner.Status::finished).orElse(false));
+        Runner.Status s = runner.current().orElseThrow();
+        assertTrue(s.succeeded(), s.state() + " " + s.detail());
+        answer();
+
+        // 1. trafego: NENHUMA chamada a Platform por causa da execucao (o que ha antes e login, catalogo e listas)
+        assertEquals(antes, session.directory.calls, "zero envio: nem estado, nem evento, nem termino");
+        assertTrue(session.directory.calls.stream().allMatch(c -> c.startsWith("workspaces") || c.startsWith("automations") || c.startsWith("versions")),
+                "so consultas de catalogo: " + session.directory.calls);
+        // 2. disco: o registro diz a origem local; nenhuma fila de envio; a fixture de pareamento nao foi lida para enviar nem alterada
+        String estado = Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json"));
+        assertTrue(estado.contains("\"origin\": \"LOCAL_AGENT\""), estado);
+        assertEquals(fixtureAntes, Files.readString(plataforma.resolve("vinculo.json")) + Files.readString(plataforma.resolve("autorizacoes.json")));
+        List<String> suspeitos = new ArrayList<>();
+        List<String> naPlataforma = new ArrayList<>();
+        try (java.util.stream.Stream<Path> all = Files.walk(dados)) {
+            for (Path p : all.toList()) {
+                String rel = dados.relativize(p).toString().replace('\\', '/').toLowerCase();
+                if (rel.matches(".*(fila|outbox|queue|spool|pendente|pending|envio|upload|monitor|remote|remot).*")) {
+                    suspeitos.add(rel);
+                }
+                if (rel.startsWith("plataforma/")) {
+                    naPlataforma.add(rel);
+                }
+            }
+        }
+        assertEquals(List.of(), suspeitos, "nenhuma fila ou pendencia de envio no disco");
+        assertEquals(List.of("plataforma/autorizacoes.json", "plataforma/vinculo.json"), naPlataforma.stream().sorted().toList(), "nada novo junto do vinculo de fixture");
+
+        // 3. "a rede voltou" / reinicio: um aplicativo novo sobre os mesmos dados reconcilia e NAO envia nada depois
+        SessionProbe sessao = () -> new SessionProbe.Session(true, 1, false, null);
+        Runner depois = new Runner(workshop.packages(), new RunController(new RunStore(dados.resolve("execucoes"), AtomicWriter.DEFAULT),
+                new ApprovalLedger(ApprovalLedger.defaultFile(dados), AtomicWriter.DEFAULT), sessao, Clock.systemUTC(), dados));
+        depois.reconcile();
+        answer();
+        assertEquals(antes, session.directory.calls, "reiniciar nao envia retroativamente");
+        assertTrue(Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json")).contains("\"origin\": \"LOCAL_AGENT\""));
+        depois.close();
+
+        // 4. trocar de organizacao depois: o registro continua do contexto original e continua local
+        edt(() -> window.actions().closeRun());
+        edt(() -> window.contextView().backButton().doClick(0));
+        answer();
+        String registro = Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json"));
+        assertTrue(registro.contains(a.id().toString()) && registro.contains(fin.id().toString()) && registro.contains("\"origin\": \"LOCAL_AGENT\""));
+        assertTrue(session.directory.calls.stream().noneMatch(c -> c.startsWith("rename") || c.startsWith("download")));
     }
 
     @Test

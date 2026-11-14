@@ -213,6 +213,35 @@ class RunRecordTest {
         assertEquals(List.of(rw), runs.list().in(otherWorkspace.where()).records());
     }
 
+    /**
+     * AGENT-CLIENT-PACOTES-001 T04: a origem da execucao e gravada e so existe uma - iniciada neste aplicativo. Um registro
+     * que se diga de outra origem (um arquivo forjado "da Platform") nao e lido; registro antigo, sem o campo, continua local.
+     */
+    @Test
+    void origemEGravadaComoLocalEOrigemForjadaNaoELida() throws Exception {
+        ExecutionId id = ExecutionId.random();
+        runs.save(ExecutionRecord.ready(id, ctx(), T0));
+        Path f = runs.dir(id).resolve("estado.json");
+        String good = Files.readString(f, StandardCharsets.UTF_8);
+        assertEquals("LOCAL_AGENT", ExecutionRecord.ORIGIN);
+        assertTrue(good.contains("\"origin\": \"LOCAL_AGENT\""), good);
+        for (String forjada : List.of("PLATFORM_REQUEST", "PLATFORM", "platform", "LOCAL_UI", "", "local_agent")) {
+            Files.writeString(f, good.replace("\"origin\": \"LOCAL_AGENT\"", "\"origin\": \"" + forjada + "\""), StandardCharsets.UTF_8);
+            assertTrue(runs.record(id).isEmpty(), "origem '" + forjada + "' nao e deste aplicativo");
+            assertEquals(List.of(), runs.list().records());
+        }
+        // registro anterior ao campo: era, e continua, uma execucao local
+        Files.writeString(f, good.replaceAll("  \"origin\": \"LOCAL_AGENT\",\n", ""), StandardCharsets.UTF_8);
+        assertFalse(Files.readString(f, StandardCharsets.UTF_8).contains("origin"));
+        assertEquals(id, runs.record(id).orElseThrow().id());
+        // gravar de novo devolve a origem local ao arquivo; nao ha como gravar outra
+        runs.save(runs.record(id).orElseThrow());
+        assertTrue(Files.readString(f, StandardCharsets.UTF_8).contains("\"origin\": \"LOCAL_AGENT\""));
+        for (java.lang.reflect.Method m : ExecutionRecord.class.getMethods()) {
+            assertFalse(m.getName().toLowerCase().contains("origin"), "a origem nao e um campo que se troque: " + m.getName());
+        }
+    }
+
     /** Registro sem contexto completo e valido e ILEGIVEL: nunca aparece sem dono nem com dono presumido. */
     @Test
     void registroSemContextoValidoNaoELido() throws Exception {

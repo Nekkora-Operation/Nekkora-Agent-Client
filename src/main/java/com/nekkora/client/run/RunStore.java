@@ -202,6 +202,9 @@ public final class RunStore {
             if (!Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
             Map<String, Object> m = StrictJson.parseObject(Files.readString(f, StandardCharsets.UTF_8));
             if (!ExecutionRecord.SCHEMA.equals(m.get("schema")) || !ExecutionRecord.VERSION.equals(m.get("version"))) return Optional.empty();
+            // origem: ausente em registros anteriores ao campo (todos locais); presente, so a deste aplicativo. Um arquivo que se
+            // diga "da Platform" (ou qualquer outra coisa) nao foi escrito aqui e nao vira execucao
+            if (m.get("origin") != null && !ExecutionRecord.ORIGIN.equals(m.get("origin"))) return Optional.empty();
             ProcessOwner owner = null;
             if (m.get("process") instanceof Map<?, ?> p && p.get("pid") instanceof Long pid && p.get("start") instanceof Long start
                     && p.get("executableDigest") instanceof String exe && exe.matches("sha256:[0-9a-f]{64}")) {
@@ -247,6 +250,7 @@ public final class RunStore {
         StringBuilder b = new StringBuilder("{\n");
         field(b, "schema", ExecutionRecord.SCHEMA);
         field(b, "version", ExecutionRecord.VERSION);
+        field(b, "origin", ExecutionRecord.ORIGIN);
         field(b, "id", r.id().value());
         RunContext c = r.context();
         b.append("  \"context\": {\"organizationId\": ").append(StrictJson.quote(c.organizationId().toString())).append(", \"workspaceId\": ")

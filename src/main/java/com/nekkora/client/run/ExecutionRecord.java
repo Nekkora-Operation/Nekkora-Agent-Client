@@ -13,12 +13,20 @@ import java.util.Objects;
  * {@link RunStore} recusa gravar, na pasta de uma execucao, um registro com outro contexto.
  *
  * <p>O registro e LOCAL: fica so no disco desta maquina. Este nucleo nao envia nada a Platform.
+ *
+ * <p><b>Origem</b> (AGENT-CLIENT-PACOTES-001 T04): toda execucao deste aplicativo e {@link #ORIGIN} - iniciada pela pessoa
+ * NESTE aplicativo. A origem nao e um parametro: nenhum metodo de {@link RunController} ou {@code Runner} a recebe, e nao
+ * existe aqui execucao "da Platform". O valor e gravado no registro para que ele diga, por si, de onde veio; um registro
+ * no disco com OUTRA origem nao foi escrito por este aplicativo e e recusado na leitura ({@link RunStore#load}). Estar
+ * logado, ter organizacao escolhida, estar online ou voltar a ter rede nao muda isso, e nada e enviado depois.
  */
 public record ExecutionRecord(ExecutionId id, RunContext context, ExecutionState state, ErrorCode code, Instant created, Instant started, Instant ended,
                               ProcessOwner owner, Integer exitCode, int suspensions, int locks, boolean adopted, long outputBytes, Cancellation cancellation) {
 
     public static final String SCHEMA = "nekkora-agent-client/execution";
     public static final String VERSION = "1.0.0";
+    /** A unica origem que este aplicativo produz e aceita: execucao iniciada nele, com registros so locais. */
+    public static final String ORIGIN = "LOCAL_AGENT";
 
     /** Quem pediu o cancelamento. */
     public enum CancelSource {
