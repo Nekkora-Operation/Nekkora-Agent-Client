@@ -128,6 +128,7 @@ public final class NavText {
     public static final String PKG_VERSION_PLACEHOLDER = "Selecione uma versão publicada";
     public static final String PKG_VERSIONS_LOADING = "Consultando as versões…";
     public static final String PKG_VERSIONS_FAILED = "Versões não consultadas";
+    public static final String PKG_VERSIONS_RETRY = "Tentar novamente";
     public static final String PKG_VERSIONS_NONE = "Nenhuma versão publicada com pacote para baixar.";
     public static final String PKG_PROGRESS = "Progresso do download";
     public static final String PKG_DOWNLOAD_DENIED = "Sua conta não pode baixar pacotes neste ambiente: é preciso poder executar ou gerenciar a automação.";
