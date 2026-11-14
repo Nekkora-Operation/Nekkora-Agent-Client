@@ -26,10 +26,10 @@ public interface SignInAttempts {
         /** A Platform confirmou a entrada. So aqui existe sessao. */
         void signedIn(Session session);
 
-        /** A pessoa cancelou no navegador. */
-        void cancelled();
-
-        /** A tentativa terminou sem entrada. */
+        /**
+         * A tentativa terminou sem entrada, com o resultado ja classificado pelo que o contrato de fato mostrou (recusa da
+         * pessoa no navegador: {@link Notice#DECLINED}).
+         */
         void failed(Notice reason);
     }
 

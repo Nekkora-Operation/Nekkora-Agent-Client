@@ -221,21 +221,49 @@ class WindowDesktopTest {
             evidence(p + "-aguardando");
 
             edt(() -> v.cancelButton().doClick(0));
-            assertEquals(SignInState.INITIAL, flow.state());
-            assertEquals("", read(v::messageText), "cancelar nao mostra erro");
+            assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state());
+            assertEquals("Entrada cancelada.", read(v::messageText), "cancelar no aplicativo: aviso neutro");
+            assertEquals(Themes.color(theme.textSecondary()), read(() -> v.message().getForeground()), "cancelamento nao usa a cor de erro");
+            assertEquals("Aviso da entrada", read(() -> v.message().getAccessibleContext().getAccessibleDescription()));
             assertTrue(read(() -> v.signInButton().isEnabled()));
             assertFalse(read(() -> v.spinner().spinning()), "spinner parado fora da espera");
+            assertFalse(read(() -> v.cancelButton().isVisible()));
+            evidence(p + "-cancelled");
 
-            for (Notice n : new Notice[] {Notice.EXPIRED, Notice.BROWSER_FAILED, Notice.NETWORK, Notice.SERVER, Notice.TLS, Notice.INVALID_RETURN}) {
+            Rectangle logo = read(() -> SwingUtilities.convertRectangle(all(v, LogoView.class).get(0).getParent(), all(v, LogoView.class).get(0).getBounds(), v));
+            for (Notice n : new Notice[] {Notice.DECLINED, Notice.ACCESS_DENIED, Notice.SERVER, Notice.NETWORK, Notice.EXPIRED, Notice.INVALID_RETURN, Notice.TLS,
+                    Notice.BROWSER_FAILED, Notice.TIMEOUT, Notice.RATE_LIMITED, Notice.UNAVAILABLE, Notice.RETURN_UNAVAILABLE}) {
                 edt(() -> v.signInButton().doClick(0));
+                assertEquals("", read(v::messageText), n + ": a nova tentativa limpa a mensagem anterior");
+                edt(() -> fake.last().listener.browserOpened());
+                assertEquals("Aguardando login no navegador...", read(() -> v.getAccessibleContext().getAccessibleDescription()));
                 edt(() -> fake.last().listener.failed(n));
+                // resultado terminal: mensagem certa, loading parado, Entrar liberado, continua na entrada
                 assertEquals(SignInText.of(n), read(v::messageText));
+                assertEquals(ClientWindow.SIGN_IN, read(window::showing), n + ": nao abre a tela inicial");
                 assertTrue(read(() -> v.signInButton().isEnabled()), n + ": pode tentar de novo");
+                assertFalse(read(() -> v.spinner().isVisible() || v.spinner().spinning()), n + ": loading encerrado");
+                assertEquals("", read(v::progressText), n + ": sem \"aguardando\"");
+                assertFalse(read(() -> v.cancelButton().isVisible()), n + ": sem Cancelar");
+                assertEquals(1, fake.last().cancelled, n + ": recursos da tentativa liberados");
                 assertFalse(SignInText.of(n).matches("(?s).*(Exception|\\bat \\w+\\.|https?://|\\d{3}).*"), "sem detalhe tecnico: " + SignInText.of(n));
+                // estado identificado sem depender da cor
+                boolean neutro = SignInText.neutral(n);
+                assertEquals(neutro ? "Aviso da entrada" : "Erro na entrada", read(() -> v.message().getAccessibleContext().getAccessibleDescription()));
+                assertEquals(SignInText.of(n), read(() -> v.message().getAccessibleContext().getAccessibleName()));
+                assertEquals(SignInText.of(n), read(() -> v.getAccessibleContext().getAccessibleDescription()));
+                assertEquals(Themes.color(neutro ? theme.textSecondary() : theme.dangerText()), read(() -> v.message().getForeground()));
+                // a mensagem fica inteira, abaixo do botao, sem encostar no logo nem sair da area dela
+                WrappedText msg = read(v::message);
+                assertEquals(SignInText.of(n), String.join(" ", read(msg::lines)), n + ": nenhuma palavra cortada");
+                Rectangle mb = read(() -> SwingUtilities.convertRectangle(msg.getParent(), msg.getBounds(), v));
+                Rectangle bb = read(() -> SwingUtilities.convertRectangle(v.signInButton().getParent(), v.signInButton().getBounds(), v));
+                Rectangle area = read(() -> SwingUtilities.convertRectangle(msg.getParent().getParent(), msg.getParent().getBounds(), v));
+                assertTrue(mb.y >= bb.y + bb.height, n + ": mensagem abaixo de Entrar");
+                assertTrue(mb.y + mb.height <= area.y + area.height, n + ": mensagem dentro da area reservada (" + mb.height + " de " + area.height + ")");
+                assertFalse(mb.intersects(logo) || mb.intersects(bb), n + ": sem sobreposicao");
                 evidence(p + "-" + n.name().toLowerCase().replace('_', '-'));
             }
-            assertEquals("O tempo para entrar terminou. Tente novamente.", SignInText.of(Notice.EXPIRED));
-            assertEquals("Não foi possível confirmar o login. Inicie uma nova tentativa.", SignInText.of(Notice.INVALID_RETURN));
 
             // sucesso confirmado: tela inicial VAZIA
             edt(() -> v.signInButton().doClick(0));
@@ -315,7 +343,7 @@ class WindowDesktopTest {
         assertEquals(v.signInButton(), read(() -> window.getRootPane().getDefaultButton()), "Enter aciona Entrar na tela de entrada");
         edt(() -> v.cancelButton().dispatchEvent(new KeyEvent(v.cancelButton(), KeyEvent.KEY_PRESSED, System.currentTimeMillis(), 0, KeyEvent.VK_SPACE, ' ')));
         edt(() -> v.cancelButton().dispatchEvent(new KeyEvent(v.cancelButton(), KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, KeyEvent.VK_SPACE, ' ')));
-        assertEquals(SignInState.INITIAL, flow.state(), "Espaco em Cancelar cancela");
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state(), "Espaco em Cancelar cancela");
         assertTrue(read(() -> KeyboardFocusManager.getCurrentKeyboardFocusManager() != null));
     }
 

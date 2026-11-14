@@ -194,7 +194,7 @@ class BrowserSignInTest {
         flow.start();
         awaitNotice(Notice.INVALID_RETURN);
         assertEquals(0, platform.sessions.size(), "PKCE: o verificador desta tentativa nao abre o codigo de outra");
-        assertEquals("Não foi possível confirmar o login. Inicie uma nova tentativa.", com.nekkora.client.ui.SignInText.of(flow.state().notice()));
+        assertEquals("Não foi possível validar a entrada com segurança. Inicie uma nova tentativa.", com.nekkora.client.ui.SignInText.of(flow.state().notice()));
     }
 
     @Test
@@ -205,7 +205,7 @@ class BrowserSignInTest {
         URI primeira = browser.lastPage();
         String retornoDaPrimeira = platform.authorize(primeira);
         flow.cancel();
-        assertEquals(SignInState.INITIAL, flow.state());
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state());
         flow.start();
         awaitPhase(Phase.WAITING);
         URI segunda = browser.lastPage();
@@ -257,13 +257,139 @@ class BrowserSignInTest {
     // ------------------------------------------------------------------ cancelamento, prazo, falhas
 
     @Test
-    void recusaNoNavegadorVoltaAoInicioSemErro() throws Exception {
+    void recusaNoNavegadorTerminaComAMensagemDeEntradaNaoAutorizada() throws Exception {
         browser.decide = (page, redirect) -> platform.deny(page);
         flow.start();
-        await("cancelado", () -> seen.size() >= 3);
-        assertEquals(SignInState.INITIAL, flow.state());
+        awaitNotice(Notice.DECLINED);
+        assertEquals("Entrada não autorizada. Você pode tentar novamente quando quiser.", com.nekkora.client.ui.SignInText.of(flow.state().notice()));
         assertTrue(visit(0).body().contains("Entrada cancelada"));
+        assertEquals(0, platform.requestsTo("POST /api/v1/desktop/token").size(), "sem codigo, nada vai a API");
+        assertFalse(seen.stream().anyMatch(s -> s.phase() == Phase.SIGNED_IN));
+        int port = Integer.parseInt(FakePlatform.query(browser.lastPage().getRawQuery()).get("redirect_uri").replaceAll(".*:(\\d+)/callback", "$1"));
+        await("retorno local fechado depois da recusa", () -> FakeBrowser.get("http://127.0.0.1:" + port + "/callback").status() == -1);
+    }
+
+    @Test
+    void recusaSemACorrelacaoDaTentativaNaoEncerraNada() throws Exception {
+        browser.decide = (page, redirect) -> null;
+        flow.start();
+        awaitPhase(Phase.WAITING);
+        Map<String, String> q = FakePlatform.query(browser.lastPage().getRawQuery());
+        String retorno = q.get("redirect_uri");
+        String iss = "&iss=" + java.net.URLEncoder.encode(platform.issuer(), java.nio.charset.StandardCharsets.UTF_8);
+        for (String ruim : List.of(
+                "error=access_denied", // parametro solto
+                "error=access_denied" + iss, // sem state
+                "error=access_denied&state=" + Pkce.generate().state() + iss, // state de outra tentativa
+                "error=access_denied&state=" + q.get("state"), // sem emissor
+                "error=access_denied&state=" + q.get("state") + "&iss=" + java.net.URLEncoder.encode("https://outro.exemplo.test", java.nio.charset.StandardCharsets.UTF_8),
+                "error=server_error&error_description=falha&state=" + q.get("state") + iss, // parametro fora do contrato
+                "error=access_denied&message=" + java.net.URLEncoder.encode("Acesso negado", java.nio.charset.StandardCharsets.UTF_8) + "&state=" + q.get("state") + iss)) {
+            assertEquals(400, FakeBrowser.get(retorno + "?" + ruim).status(), ruim);
+        }
+        Thread.sleep(150);
+        assertEquals(new SignInState(Phase.WAITING, Notice.NONE), flow.state(), "a tentativa legitima continua esperando, sem mensagem");
+        // e ainda pode ser concluida pela pessoa
+        assertEquals(200, FakeBrowser.get(platform.authorize(browser.lastPage())).status());
+        awaitPhase(Phase.SIGNED_IN);
+    }
+
+    @Test
+    void erroDesconhecidoComACorrelacaoCertaEncerraComoRetornoInvalidoNuncaComoRecusaOuErroDoServidor() throws Exception {
+        browser.decide = (page, redirect) -> redirect.split("\\?")[0] + "?error=server_error&state=" + FakePlatform.query(page.getRawQuery()).get("state")
+                + "&iss=" + java.net.URLEncoder.encode(platform.issuer(), java.nio.charset.StandardCharsets.UTF_8);
+        flow.start();
+        awaitNotice(Notice.INVALID_RETURN);
         assertEquals(0, platform.requestsTo("POST /api/v1/desktop/token").size());
+    }
+
+    @Test
+    void acessoNegadoPelaPlatformSoComAEvidenciaDoContrato() throws Exception {
+        // SIMULADO: a Platform atual nao tem regra que negue uma conta nesta etapa; aqui o servidor simulado responde o 403 do contrato
+        platform.tokenStatus = 403;
+        platform.tokenBody = "{\"error\":\"forbidden\"}";
+        flow.start();
+        awaitNotice(Notice.ACCESS_DENIED);
+        assertEquals("Acesso não permitido. Sua conta não está autorizada a entrar neste aplicativo.",
+                com.nekkora.client.ui.SignInText.of(Notice.ACCESS_DENIED));
+        assertTrue(visit(0).body().contains("Não foi possível confirmar o login"));
+        assertEquals(0, platform.sessions.size());
+
+        // um 403 que nao e o do contrato (pagina de um intermediario) nao vira "acesso negado"
+        platform.tokenContentType = "text/html";
+        platform.tokenBody = "<html>403 Forbidden</html>";
+        flow.start();
+        awaitNotice(Notice.INVALID_RETURN);
+        assertFalse(seen.stream().anyMatch(s -> s.phase() == Phase.SIGNED_IN));
+    }
+
+    @Test
+    void semConexaoNaTrocaEFalhaDeConexao() throws Exception {
+        // a API fica fora do ar depois de a pessoa autorizar: a troca nao conecta
+        flow.close();
+        signIn.close();
+        java.net.ServerSocket livre = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByAddress(new byte[] {127, 0, 0, 1}));
+        int porta = livre.getLocalPort();
+        livre.close();
+        java.util.Properties p = new java.util.Properties();
+        p.setProperty(PlatformOrigin.BROWSER_PROPERTY, platform.issuer());
+        p.setProperty(PlatformOrigin.API_PROPERTY, "https://localhost:" + porta);
+        PlatformOrigin semApi = PlatformOrigin.resolve(p);
+        signIn = new BrowserSignIn(semApi, new PlatformApi(semApi, platform.clientTrust, Duration.ofSeconds(2), Duration.ofSeconds(2)), browser,
+                new BrowserSignIn.Timing(Duration.ofSeconds(20), Duration.ZERO));
+        flow = new SignInFlow(signIn, Runnable::run);
+        flow.addListener(seen::add);
+        flow.start();
+        awaitNotice(Notice.NETWORK);
+        assertEquals("Não foi possível conectar à Platform. Verifique sua conexão e tente novamente.", com.nekkora.client.ui.SignInText.of(Notice.NETWORK));
+        assertEquals(0, platform.tokenBodies.size());
+        assertFalse(seen.stream().anyMatch(s -> s.phase() == Phase.SIGNED_IN));
+    }
+
+    @Test
+    void depoisDeCadaErroANovaTentativaUsaIdentificadoresNovosEEntra() throws Exception {
+        // 1) recusa no navegador
+        browser.decide = (page, redirect) -> platform.deny(page);
+        flow.start();
+        awaitNotice(Notice.DECLINED);
+        // 2) erro do servidor na troca
+        browser.decide = (page, redirect) -> redirect;
+        platform.tokenStatus = 500;
+        platform.tokenBody = "{\"error\":\"internal\"}";
+        flow.start();
+        awaitNotice(Notice.SERVER);
+        assertEquals("Não foi possível concluir a entrada. A Platform encontrou um problema. Tente novamente em instantes.",
+                com.nekkora.client.ui.SignInText.of(Notice.SERVER));
+        // 3) a Platform volta: nova tentativa, do zero
+        platform.tokenStatus = null;
+        platform.tokenBody = null;
+        flow.start();
+        awaitPhase(Phase.SIGNED_IN);
+
+        assertEquals(3, browser.opened.size(), "uma aba por tentativa");
+        java.util.Set<String> states = new java.util.HashSet<>();
+        java.util.Set<String> challenges = new java.util.HashSet<>();
+        for (URI page : browser.opened) {
+            Map<String, String> q = FakePlatform.query(page.getRawQuery());
+            states.add(q.get("state"));
+            challenges.add(q.get("code_challenge"));
+        }
+        assertEquals(3, states.size(), "state novo a cada tentativa");
+        assertEquals(3, challenges.size(), "desafio PKCE novo a cada tentativa");
+        // os dois verificadores que chegaram a API sao diferentes, e cada um e o do desafio da propria tentativa
+        assertEquals(2, platform.tokenBodies.size());
+        String v2 = FakePlatform.query(platform.tokenBodies.get(0)).get("code_verifier");
+        String v3 = FakePlatform.query(platform.tokenBodies.get(1)).get("code_verifier");
+        assertNotEquals(v2, v3);
+        assertEquals(FakePlatform.query(browser.opened.get(1).getRawQuery()).get("code_challenge"), Pkce.s256(v2));
+        assertEquals(FakePlatform.query(browser.opened.get(2).getRawQuery()).get("code_challenge"), Pkce.s256(v3));
+        assertNotEquals(FakePlatform.query(platform.tokenBodies.get(0)).get("code"), FakePlatform.query(platform.tokenBodies.get(1)).get("code"));
+        // os retornos locais das tentativas que falharam ja estao fechados
+        for (int i = 0; i < 2; i++) {
+            String antigo = FakePlatform.query(browser.opened.get(i).getRawQuery()).get("redirect_uri");
+            await("retorno " + i + " fechado", () -> FakeBrowser.get(antigo).status() == -1);
+        }
+        assertEquals(1, platform.sessions.size());
     }
 
     @Test
@@ -273,7 +399,7 @@ class BrowserSignInTest {
         awaitPhase(Phase.WAITING);
         String retorno = platform.authorize(browser.lastPage());
         flow.cancel();
-        assertEquals(SignInState.INITIAL, flow.state());
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state());
         assertEquals(-1, FakeBrowser.get(retorno).status(), "depois de cancelar, o retorno nao e mais recebido");
         assertEquals(0, platform.requestsTo("POST /api/v1/desktop/token").size());
     }
@@ -284,11 +410,11 @@ class BrowserSignInTest {
         flow.start();
         await("troca em andamento", () -> platform.tokenBodies.size() == 1);
         flow.cancel();
-        assertEquals(SignInState.INITIAL, flow.state());
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state());
         // a API termina a troca e emite a sessao; o aplicativo nao a usa e a encerra
         await("sessao tardia encerrada", () -> platform.revoked.size() == 1);
         assertEquals(0, platform.sessions.size());
-        assertEquals(SignInState.INITIAL, flow.state(), "resposta atrasada nao abre a tela inicial");
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state(), "resposta atrasada nao abre a tela inicial");
         assertFalse(seen.stream().anyMatch(s -> s.phase() == Phase.SIGNED_IN));
     }
 
@@ -302,7 +428,7 @@ class BrowserSignInTest {
         awaitPhase(Phase.WAITING);
         String retorno = platform.authorize(browser.lastPage());
         awaitNotice(Notice.EXPIRED);
-        assertEquals("O tempo para entrar terminou. Tente novamente.", com.nekkora.client.ui.SignInText.of(Notice.EXPIRED));
+        assertEquals("O tempo para entrar terminou. Clique em Entrar para iniciar uma nova tentativa.", com.nekkora.client.ui.SignInText.of(Notice.EXPIRED));
         await("retorno fechado apos o prazo", () -> FakeBrowser.get(retorno).status() == -1);
         assertEquals(0, platform.sessions.size(), "retorno depois do prazo nao vira sessao");
     }

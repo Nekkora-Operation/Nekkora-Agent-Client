@@ -118,14 +118,16 @@ class PlatformApiTest {
     @Test
     void cadaStatusTemASuaClassificacao() {
         Object[][] casos = {{500, Notice.SERVER}, {502, Notice.SERVER}, {503, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE},
-                {400, Notice.INVALID_RETURN}, {401, Notice.INVALID_RETURN}, {403, Notice.INVALID_RETURN}, {302, Notice.INVALID_RETURN}};
+                {400, Notice.INVALID_RETURN}, {401, Notice.INVALID_RETURN}, {403, Notice.INVALID_RETURN}, {302, Notice.INVALID_RETURN},
+                {418, Notice.INVALID_RETURN}};
         for (Object[] c : casos) {
             platform.tokenStatus = (Integer) c[0];
             platform.tokenBody = "{\"error\":\"x\"}";
             assertEquals(c[1], failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "troca " + c[0]);
         }
         PlatformApi.Token t = new PlatformApi.Token(FakePlatform.token(), 900);
-        Object[][] sessao = {{401, Notice.SESSION_EXPIRED}, {500, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE}, {403, Notice.SERVER}};
+        Object[][] sessao = {{401, Notice.SESSION_EXPIRED}, {500, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE}, {403, Notice.INVALID_RETURN},
+                {302, Notice.INVALID_RETURN}};
         for (Object[] c : sessao) {
             platform.sessionStatus = (Integer) c[0];
             platform.sessionBody = "{\"error\":\"x\"}";
@@ -134,6 +136,33 @@ class PlatformApiTest {
     }
 
     /** 200 com corpo fora do contrato nunca vira sessao. */
+    @Test
+    void acessoNegadoSoPeloQuatroZeroTresDoContrato() {
+        PlatformApi.Token t = new PlatformApi.Token(FakePlatform.token(), 900);
+        // o 403 do contrato da API: application/json e exatamente {"error":"forbidden"}
+        platform.tokenStatus = 403;
+        platform.tokenBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.ACCESS_DENIED, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)));
+        platform.sessionStatus = 403;
+        platform.sessionBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.ACCESS_DENIED, failure(() -> api.session(t)));
+        // qualquer outro 403 nao e essa evidencia
+        for (String body : new String[] {"{\"error\":\"access_denied\"}", "{\"error\":\"forbidden\",\"reason\":\"x\"}", "{\"message\":\"forbidden\"}", "forbidden",
+                "<html>403 Forbidden</html>", "", "[]", "{\"error\":403}"}) {
+            platform.tokenBody = body;
+            assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), body);
+        }
+        platform.tokenContentType = "text/html";
+        platform.tokenBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "tipo de conteudo");
+        // e "forbidden" com outro status tambem nao: 400 e codigo recusado, 401 nao e do contrato da troca
+        platform.tokenContentType = "application/json";
+        for (int status : new int[] {400, 401}) {
+            platform.tokenStatus = status;
+            assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "status " + status);
+        }
+    }
+
     @Test
     void respostaDeSucessoMalformadaNaoEAceita() {
         String tok = FakePlatform.token();

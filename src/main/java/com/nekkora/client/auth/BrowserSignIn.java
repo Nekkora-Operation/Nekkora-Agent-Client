@@ -151,7 +151,8 @@ public final class BrowserSignIn implements SignInAttempts, AutoCloseable {
         private CompletableFuture<Page> returned(Outcome outcome) {
             CompletableFuture<Page> page = new CompletableFuture<>();
             if (outcome instanceof Denied) {
-                finish(Listener::cancelled);
+                // recusa confirmada: veio pelo retorno local com o state e o emissor DESTA tentativa
+                finish(l -> l.failed(Notice.DECLINED));
                 page.complete(Page.FAILED);
             } else if (outcome instanceof Code code) {
                 String redirectUri = receiver.redirectUri();

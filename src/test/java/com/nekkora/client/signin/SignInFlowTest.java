@@ -66,20 +66,72 @@ class SignInFlowTest {
     }
 
     @Test
-    void cancelarVoltaAoInicioSemMensagem() {
+    void cancelarNoAplicativoVoltaAoInicioComAvisoNeutro() {
         flow.start();
         FakeAttempt a = fake.last();
         a.listener.browserOpened();
         flow.cancel();
-        assertEquals(SignInState.INITIAL, flow.state());
+        assertEquals(s(Phase.IDLE, Notice.CANCELLED), flow.state());
         assertEquals(1, a.cancelled);
         flow.cancel();
         assertEquals(1, a.cancelled, "cancelar sem tentativa em curso nao faz nada");
-        // cancelamento vindo do navegador (a pessoa recusou): tambem sem mensagem
+        assertEquals(s(Phase.IDLE, Notice.CANCELLED), flow.state());
+        // cancelar antes de o navegador abrir tambem vale, e a tentativa nao fica viva
+        flow.start();
+        assertEquals(s(Phase.OPENING_BROWSER, Notice.NONE), flow.state(), "a nova tentativa limpa o aviso anterior");
+        flow.cancel();
+        assertEquals(s(Phase.IDLE, Notice.CANCELLED), flow.state());
+        assertEquals(1, fake.last().cancelled);
+    }
+
+    @Test
+    void recusaNoNavegadorEResultadoDaTentativaNaoCancelamento() {
+        flow.start();
+        FakeAttempt a = fake.last();
+        a.listener.browserOpened();
+        a.listener.failed(Notice.DECLINED);
+        assertEquals(s(Phase.IDLE, Notice.DECLINED), flow.state());
+        assertEquals(1, a.cancelled, "recursos da tentativa liberados");
+        // depois do resultado, nada mais daquela tentativa muda a tela
+        a.listener.failed(Notice.SERVER);
+        a.listener.signedIn(new FakeSession());
+        assertEquals(s(Phase.IDLE, Notice.DECLINED), flow.state());
+    }
+
+    @Test
+    void cancelarDepoisDoResultadoNaoApagaAMensagem() {
         flow.start();
         fake.last().listener.browserOpened();
-        fake.last().listener.cancelled();
-        assertEquals(SignInState.INITIAL, flow.state());
+        fake.last().listener.failed(Notice.SERVER);
+        flow.cancel();
+        assertEquals(s(Phase.IDLE, Notice.SERVER), flow.state(), "sem tentativa em curso, Cancelar nao faz nada");
+    }
+
+    @Test
+    void depoisDeCadaResultadoUmaNovaTentativaEntra() {
+        for (Notice n : new Notice[] {Notice.DECLINED, Notice.ACCESS_DENIED, Notice.SERVER, Notice.NETWORK, Notice.EXPIRED, Notice.INVALID_RETURN,
+                Notice.TLS}) {
+            SignInFlow f = new SignInFlow(fake, Runnable::run);
+            f.start();
+            FakeAttempt falhou = fake.last();
+            falhou.listener.browserOpened();
+            falhou.listener.failed(n);
+            assertEquals(s(Phase.IDLE, n), f.state());
+            f.start();
+            FakeAttempt nova = fake.last();
+            assertFalse(nova == falhou, n + ": tentativa nova, nao a anterior");
+            assertEquals(s(Phase.OPENING_BROWSER, Notice.NONE), f.state(), n + ": mensagem limpa");
+            // o que chegar da tentativa que falhou nao decide a nova
+            FakeSession daAntiga = new FakeSession();
+            falhou.listener.signedIn(daAntiga);
+            falhou.listener.failed(Notice.NETWORK);
+            assertEquals(1, daAntiga.ended, n + ": sessao atrasada descartada");
+            assertEquals(s(Phase.OPENING_BROWSER, Notice.NONE), f.state());
+            nova.listener.browserOpened();
+            nova.listener.signedIn(new FakeSession());
+            assertEquals(s(Phase.SIGNED_IN, Notice.NONE), f.state(), n + ": a nova tentativa entra");
+            f.close();
+        }
     }
 
     @Test
@@ -90,11 +142,11 @@ class SignInFlowTest {
         flow.cancel();
         FakeSession tardia = new FakeSession();
         antiga.listener.signedIn(tardia);
-        assertEquals(SignInState.INITIAL, flow.state(), "a tela inicial nao abre");
+        assertEquals(s(Phase.IDLE, Notice.CANCELLED), flow.state(), "a tela inicial nao abre");
         assertEquals(1, tardia.ended, "a sessao que chegou tarde e encerrada, nao guardada");
         antiga.listener.failed(Notice.NETWORK);
         antiga.listener.browserOpened();
-        assertEquals(SignInState.INITIAL, flow.state(), "nenhum aviso atrasado muda a tela");
+        assertEquals(s(Phase.IDLE, Notice.CANCELLED), flow.state(), "nenhum aviso atrasado muda a tela");
     }
 
     @Test
@@ -118,7 +170,7 @@ class SignInFlowTest {
 
     @Test
     void cadaFalhaVoltaAoInicioComOProprioAvisoEPermiteNovaTentativa() {
-        for (Notice n : new Notice[] {Notice.EXPIRED, Notice.BROWSER_FAILED, Notice.RETURN_UNAVAILABLE, Notice.NETWORK, Notice.TIMEOUT, Notice.TLS,
+        for (Notice n : new Notice[] {Notice.DECLINED, Notice.ACCESS_DENIED, Notice.EXPIRED, Notice.BROWSER_FAILED, Notice.RETURN_UNAVAILABLE, Notice.NETWORK, Notice.TIMEOUT, Notice.TLS,
                 Notice.SERVER, Notice.RATE_LIMITED, Notice.INVALID_RETURN, Notice.UNAVAILABLE}) {
             flow.start();
             FakeAttempt a = fake.last();
