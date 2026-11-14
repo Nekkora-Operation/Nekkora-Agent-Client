@@ -412,7 +412,7 @@ class PlatformDirectoryTest {
     @Test
     void versoesComOQueConferirNoDownloadECapacidadeDeBaixar() throws Exception {
         String pkg = "{\"name\":\"relatorio\",\"version\":\"1.1.0\",\"fingerprint\":\"" + FP + "\",\"sha256\":\"" + SHA + "\",\"sizeBytes\":4096}";
-        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV2, 2, "DRAFT", "null") + "," + versao(PV1, 1, "PUBLISHED", pkg) + "],\"nextCursor\":null}");
+        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV2, 2, "draft", "null") + "," + versao(PV1, 1, "published", pkg) + "],\"nextCursor\":null}");
         List<Automation.Version> l = directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT));
         assertEquals(2, l.size());
         assertFalse(l.get(0).published());
@@ -420,12 +420,12 @@ class PlatformDirectoryTest {
         assertEquals(new Automation.Version(java.util.UUID.fromString(PV1), 1, true, "relatorio", "1.1.0", FP, SHA, 4096), l.get(1));
         assertTrue(l.get(1).downloadable());
         // Platform anterior ao contrato /3: sem sha256 e tamanho, a versao aparece e NAO e baixavel
-        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV1, 1, "PUBLISHED",
+        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV1, 1, "published",
                 "{\"name\":\"relatorio\",\"version\":\"1.1.0\",\"fingerprint\":\"" + FP + "\"}") + "],\"nextCursor\":null}");
         assertFalse(directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT)).get(0).downloadable());
         // fora do contrato: estado desconhecido, sha256 que nao e hex, tamanho absurdo
-        for (String ruim : new String[] {versao(PV1, 1, "ARCHIVED", "null"), versao(PV1, 1, "PUBLISHED", "{\"sha256\":\"xyz\"}"),
-                versao(PV1, 1, "PUBLISHED", "{\"sha256\":\"" + SHA + "\",\"sizeBytes\":99999999999}"), versao(PV1, 0, "PUBLISHED", "null")}) {
+        for (String ruim : new String[] {versao(PV1, 1, "PUBLISHED", "null"), versao(PV1, 1, "archived", "null"), versao(PV1, 1, "published", "{\"sha256\":\"xyz\"}"),
+                versao(PV1, 1, "published", "{\"sha256\":\"" + SHA + "\",\"sizeBytes\":99999999999}"), versao(PV1, 0, "published", "null")}) {
             platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + ruim + "],\"nextCursor\":null}");
             assertEquals(Failure.INVALID, failure(() -> directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT))), ruim);
         }
