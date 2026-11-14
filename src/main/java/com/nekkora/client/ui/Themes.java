@@ -73,6 +73,34 @@ public final class Themes {
         d.put("ToolTip.background", t.surface().toHex());
         d.put("ToolTip.foreground", t.text().toHex());
         d.put("ToolTip.border", "4,8,4,8," + t.border().toHex());
+        // menu do usuario: superficie, texto e divisor dos tokens (o FlatLaf pinta o resto)
+        d.put("PopupMenu.background", t.surface().toHex());
+        d.put("PopupMenu.borderColor", t.border().toHex());
+        d.put("MenuItem.background", t.surface().toHex());
+        d.put("MenuItem.foreground", t.text().toHex());
+        d.put("MenuItem.selectionBackground", t.surfaceHover().toHex());
+        d.put("MenuItem.selectionForeground", t.text().toHex());
+        d.put("MenuItem.disabledForeground", t.textMuted().toHex());
+        d.put("Separator.foreground", t.border().toHex());
+        d.put("ComboBox.background", t.surface().toHex());
+        d.put("ComboBox.foreground", t.text().toHex());
+        d.put("ComboBox.buttonBackground", t.surface().toHex());
+        d.put("ComboBox.buttonArrowColor", t.textSecondary().toHex());
+        d.put("ComboBox.disabledBackground", t.bg().toHex());
+        d.put("ComboBox.disabledForeground", t.textMuted().toHex());
+        d.put("ComboBox.selectionBackground", t.surfaceHover().toHex());
+        d.put("ComboBox.selectionForeground", t.text().toHex());
+        d.put("ComboBox.popupBackground", t.surface().toHex());
+        d.put("Component.borderColor", t.border().toHex());
+        d.put("Component.disabledBorderColor", t.border().toHex());
+        d.put("Component.focusedBorderColor", t.accent().toHex());
+        d.put("Component.focusColor", t.focusRing().toHex());
+        d.put("List.background", t.surface().toHex());
+        d.put("List.foreground", t.text().toHex());
+        d.put("List.selectionBackground", t.surfaceHover().toHex());
+        d.put("List.selectionForeground", t.text().toHex());
+        d.put("ScrollBar.track", t.bg().toHex());
+        d.put("ScrollBar.thumb", t.border().toHex());
         return d;
     }
 

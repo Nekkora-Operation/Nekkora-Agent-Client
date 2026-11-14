@@ -170,10 +170,18 @@ class ThemeTokensTest {
     @Test
     void fundacaoIgualADaLib() throws Exception {
         Map<String, String> f = declarations(resource("foundation.css"));
+        assertEquals("0.75rem", f.get("--nk-font-size-xs"));
+        assertEquals(12, ClientTheme.FONT_SIZE_XS);
         assertEquals("0.8125rem", f.get("--nk-font-size-sm"));
         assertEquals(13, ClientTheme.FONT_SIZE_SM);
         assertEquals("0.875rem", f.get("--nk-font-size-md"));
         assertEquals(14, ClientTheme.FONT_SIZE_MD);
+        assertEquals("1rem", f.get("--nk-font-size-lg"));
+        assertEquals(16, ClientTheme.FONT_SIZE_LG);
+        assertEquals("1.125rem", f.get("--nk-font-size-xl"));
+        assertEquals(18, ClientTheme.FONT_SIZE_XL);
+        assertEquals(rem(f.get("--nk-space-5")), ClientTheme.SPACE_5);
+        assertEquals(f.get("--nk-radius-lg"), ClientTheme.RADIUS_LG + "px");
         assertEquals(rem(f.get("--nk-space-2")), ClientTheme.SPACE_2);
         assertEquals(rem(f.get("--nk-space-3")), ClientTheme.SPACE_3);
         assertEquals(rem(f.get("--nk-space-4")), ClientTheme.SPACE_4);

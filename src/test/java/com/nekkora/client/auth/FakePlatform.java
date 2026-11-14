@@ -65,6 +65,16 @@ final class FakePlatform implements AutoCloseable {
     volatile String tokenContentType = "application/json";
     volatile Integer sessionStatus;
     volatile String sessionBody;
+    /** Navegacao: o que /me e /organizations devolvem; {@code readStatus}/{@code readBody} substituem a resposta normal. */
+    volatile String displayName = "Ana Souza";
+    volatile String organizationsBody = "{\"items\":[]}";
+    volatile Integer readStatus;
+    volatile String readBody;
+    volatile String readContentType = "application/json";
+    final List<String> readAuthorizations = new CopyOnWriteArrayList<>();
+    /** Navegacao, rotas com organizacao: caminho + "?" + consulta -> corpo. Sem a chave: 404. */
+    final Map<String, String> pages = new ConcurrentHashMap<>();
+    final List<String> pageRequests = new CopyOnWriteArrayList<>();
 
     FakePlatform() throws Exception {
         char[] pw = "changeit".toCharArray();
@@ -151,7 +161,7 @@ final class FakePlatform implements AutoCloseable {
     String authorize(URI page) {
         Map<String, String> q = query(page.getRawQuery());
         if (!"/entrar/aplicativo".equals(page.getPath()) || q.size() != 7 || !"code".equals(q.get("response_type"))
-                || !"nekkora-agent-client".equals(q.get("client_id")) || !"identity".equals(q.get("scope"))
+                || !"nekkora-agent-client".equals(q.get("client_id")) || !"identity navigation".equals(q.get("scope"))
                 || !"S256".equals(q.get("code_challenge_method")) || !q.get("code_challenge").matches("[A-Za-z0-9_-]{43}")
                 || !q.get("state").matches("[A-Za-z0-9_-]{22,128}") || !q.get("redirect_uri").matches("http://127\\.0\\.0\\.1:[1-9][0-9]{3,4}/callback")) {
             throw new IllegalArgumentException("pedido fora do contrato: " + page);
@@ -194,9 +204,14 @@ final class FakePlatform implements AutoCloseable {
                 reply(x, 418, "text/plain", "o aplicativo nao envia cookies");
                 return;
             }
+            if ("GET".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/")) {
+                page(x);
+                return;
+            }
             switch (x.getRequestMethod() + " " + path) {
                 case "POST /api/v1/desktop/token" -> token(x);
                 case "GET /api/v1/desktop/session" -> session(x);
+                case "GET /api/v1/desktop/me", "GET /api/v1/desktop/organizations" -> read(x, path);
                 case "POST /api/v1/desktop/session/revoke" -> {
                     String t = bearer(x);
                     if (t != null && sessions.remove(t) != null) {
@@ -248,7 +263,7 @@ final class FakePlatform implements AutoCloseable {
         String t = token();
         sessions.put(t, g.email());
         usedCodes.put(f.get("code"), t);
-        reply(x, 200, "application/json", "{\"access_token\":\"" + t + "\",\"token_type\":\"Bearer\",\"expires_in\":" + expiresIn + ",\"scope\":\"identity\"}");
+        reply(x, 200, "application/json", "{\"access_token\":\"" + t + "\",\"token_type\":\"Bearer\",\"expires_in\":" + expiresIn + ",\"scope\":\"identity navigation\"}");
     }
 
     private void session(HttpExchange x) throws IOException {
@@ -262,7 +277,47 @@ final class FakePlatform implements AutoCloseable {
             reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
             return;
         }
-        reply(x, 200, "application/json", "{\"account\":{\"email\":\"" + who + "\"},\"scope\":\"identity\",\"expiresIn\":" + expiresIn + "}");
+        reply(x, 200, "application/json", "{\"account\":{\"email\":\"" + who + "\"},\"scope\":\"identity navigation\",\"expiresIn\":" + expiresIn + "}");
+    }
+
+    private void page(HttpExchange x) throws IOException {
+        String key = x.getRequestURI().getPath() + "?" + x.getRequestURI().getRawQuery();
+        pageRequests.add(key);
+        readAuthorizations.add(String.valueOf(x.getRequestHeaders().getFirst("Authorization")));
+        if (readStatus != null || readBody != null) {
+            reply(x, readStatus == null ? 200 : readStatus, readContentType, readBody == null ? "{}" : readBody);
+            return;
+        }
+        String t = bearer(x);
+        if (t == null || sessions.get(t) == null) {
+            reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
+            return;
+        }
+        String body = pages.get(key);
+        if (body == null) {
+            reply(x, 404, "application/json", "{\"error\":\"not_found\"}");
+            return;
+        }
+        reply(x, 200, "application/json", body);
+    }
+
+    private void read(HttpExchange x, String path) throws IOException {
+        readAuthorizations.add(String.valueOf(x.getRequestHeaders().getFirst("Authorization")));
+        if (readStatus != null || readBody != null) {
+            reply(x, readStatus == null ? 200 : readStatus, readContentType, readBody == null ? "{}" : readBody);
+            return;
+        }
+        String t = bearer(x);
+        String who = t == null ? null : sessions.get(t);
+        if (who == null) {
+            reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
+            return;
+        }
+        if (path.endsWith("/me")) {
+            reply(x, 200, "application/json", "{\"email\":\"" + who + "\",\"displayName\":" + (displayName == null ? "null" : "\"" + displayName + "\"") + "}");
+        } else {
+            reply(x, 200, "application/json", organizationsBody);
+        }
     }
 
     private static String bearer(HttpExchange x) {

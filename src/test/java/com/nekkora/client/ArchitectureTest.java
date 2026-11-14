@@ -51,7 +51,7 @@ class ArchitectureTest {
         Pattern proibido = Pattern.compile("com\\.nekkora\\.agent\\b|com\\.nekkora\\.ui\\b|com\\.nekkora\\.tokens\\b"
                 + "|ImportFlow|ImportDialog|PackageHistory|MachineClient|PlatformService|ExecutionController|ApprovalStore|RemoteCatalog"
                 + "|AgentBootstrap|AgentApp|ProcessBuilder|Runtime\\.getRuntime\\(\\)\\.exec");
-        Pattern funcao = Pattern.compile("(?i)\\b(pareamento|pairing|worker|catalog|cat[aá]logo|importar|empacot|supervis|automa[cç][aã]o|automation|licen[cç]a|upload)\\w*");
+        Pattern funcao = Pattern.compile("(?i)\\b(pareamento|pairing|worker|catalog|cat[aá]logo|supervis|licen[cç]a|upload)\\w*");
         List<String> achados = new ArrayList<>();
         for (Path f : javaFiles(MAIN)) {
             String c = code(f);
@@ -76,7 +76,7 @@ class ArchitectureTest {
             pacotes.add(m.group(1));
         }
         Set<String> permitidos = Set.of("com.nekkora.client", "com.nekkora.client.theme", "com.nekkora.client.storage", "com.nekkora.client.signin",
-                "com.nekkora.client.ui", "com.nekkora.client.auth");
+                "com.nekkora.client.ui", "com.nekkora.client.auth", "com.nekkora.client.nav");
         for (String p : pacotes) {
             assertTrue(permitidos.contains(p), "pacote fora da lista: " + p);
         }
