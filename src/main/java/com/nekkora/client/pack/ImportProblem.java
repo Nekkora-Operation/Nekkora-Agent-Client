@@ -86,7 +86,18 @@ public final class ImportProblem extends Exception {
         FOLDER_IS_APP("AGT-PAC-083", "Escolha a pasta do projeto, não uma pasta do próprio aplicativo."),
         FOLDER_CANCELLED("AGT-PAC-084", "Operação cancelada. Nada foi gerado e a pasta do projeto não foi alterada."),
         DESTINATION_INVALID("AGT-PAC-085", "Escolha onde salvar o pacote: um arquivo .zip numa pasta que existe."),
-        DESTINATION_EXISTS("AGT-PAC-086", "Já existe um arquivo com esse nome no destino escolhido. Nada foi substituído.");
+        DESTINATION_EXISTS("AGT-PAC-086", "Já existe um arquivo com esse nome no destino escolhido. Nada foi substituído."),
+        // NOVOS (AGENT-CLIENT-PACOTES-001 T02): pacote escolhido nesta maquina e pacote baixado da Platform
+        LOCAL_PICK_INVALID("AGT-PAC-090", "Escolha um arquivo .zip de pacote ou uma pasta."),
+        LOCAL_PICK_NOT_FOUND("AGT-PAC-091", "O arquivo ou a pasta escolhida não existe ou não pôde ser aberto."),
+        LOCAL_CODE_FOLDER("AGT-PAC-092", "Esta pasta tem o código de um projeto Python, mas ainda não é um pacote (não tem nekkora-external.json). Use “Gerar pacote novo” para criar o pacote a partir dela. Nada foi associado à automação."),
+        LOCAL_ZIP_NOT_PACKAGE("AGT-PAC-093", "Este ZIP não é um pacote (não tem nekkora-external.json na raiz). Se ele tem o código de um projeto, extraia para uma pasta e use “Gerar pacote novo”."),
+        LOCAL_FOLDER_NOT_PACKAGE("AGT-PAC-094", "Esta pasta não é um pacote nem um projeto Python que possa virar pacote."),
+        DOWNLOAD_MISMATCH("AGT-PAC-095", "O pacote baixado não confere com o que a Platform informou (tamanho, SHA-256 ou impressão digital). O arquivo foi descartado e nada foi instalado. Tente baixar de novo."),
+        DOWNLOAD_INVALID("AGT-PAC-096", "O pacote baixado não confere com o que a Platform informou: o arquivo não é um pacote válido. Ele foi descartado e nada foi instalado."),
+        DOWNLOAD_NOT_MANAGED("AGT-PAC-097", "Este arquivo não é um download em andamento deste aplicativo."),
+        DOWNLOAD_STORE_FAILED("AGT-PAC-098", "Não foi possível gravar na pasta de pacotes baixados do aplicativo. Nada foi deixado pela metade."),
+        DOWNLOAD_CANCELLED("AGT-PAC-099", "Download cancelado. O arquivo parcial foi descartado e nada foi instalado.");
 
         private final String code;
         private final String text;
