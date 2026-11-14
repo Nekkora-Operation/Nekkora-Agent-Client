@@ -128,7 +128,7 @@ public final class ClientWindow extends JFrame {
             if (navigation != null) {
                 navigation.loadOrganizations();
             }
-        }, build);
+        }, this::refresh, build);
         contextView = new ContextView(() -> {
             if (navigation != null && !blockedByRun(NavText.RUNNING_BLOCKS_CONTEXT)) {
                 navigation.back();
@@ -141,7 +141,7 @@ public final class ClientWindow extends JFrame {
             if (navigation != null) {
                 navigation.loadAutomations();
             }
-        }, build);
+        }, this::refresh, build);
         actions = workshop == null ? null : new LocalActions(workshop, runner, background, new LocalActions.Host() {
             @Override
             public JFrame frame() {
@@ -272,7 +272,8 @@ public final class ClientWindow extends JFrame {
         avatar.setVisible(false);
         avatar.setProfile(null);
         organizationsView.show(Loadable.loading());
-        contextView.show(null, Loadable.idle(), null, Loadable.idle());
+        organizationsView.showRefresh(Navigation.Refresh.NONE, false);
+        contextView.show(new Navigation.State(Loadable.idle(), Loadable.idle(), null, Loadable.idle(), null, Loadable.idle()));
         to(SIGN_IN);
     }
 
@@ -282,6 +283,8 @@ public final class ClientWindow extends JFrame {
         }
         avatar.setProfile(state.profile().isReady() ? state.profile().value() : null);
         organizationsView.show(state.organizations());
+        organizationsView.showRefresh(state.selected() == null ? state.refresh() : Navigation.Refresh.NONE,
+                state.organizations().status() != Loadable.Status.LOADING && state.organizations().status() != Loadable.Status.IDLE);
         Navigation.Context context = state.context();
         if (!same(context, localContext)) {
             // outro contexto (ou nenhum): os pacotes, o aviso e o formulario do anterior saem da tela antes de qualquer coisa
@@ -297,6 +300,16 @@ public final class ClientWindow extends JFrame {
         }
         contextView.show(state);
         to(state.selected() != null ? CONTEXT : ORGANIZATIONS);
+    }
+
+    /**
+     * "Atualizar": consulta de novo os dados da tela atual, com a sessao que ja existe (nao entra de novo, nao renova nada).
+     * Uma execucao local em andamento nao e tocada: ela guarda o proprio contexto desde o inicio.
+     */
+    private void refresh() {
+        if (navigation != null) {
+            navigation.refresh();
+        }
     }
 
     /** Troca de ambiente pedida no seletor. Com execucao em andamento, e bloqueada e o seletor volta ao ambiente dela. */

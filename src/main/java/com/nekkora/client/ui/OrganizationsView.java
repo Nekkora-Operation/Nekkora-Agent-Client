@@ -47,18 +47,27 @@ final class OrganizationsView extends JPanel {
     private final CardGrid grid = new CardGrid();
     private final JScrollPane scroll = new JScrollPane(grid, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
     private final AppFooter footer;
+    private final RefreshControl refresh;
     private final Consumer<Organization> onChoose;
     private String showing = LOADING;
     private List<Organization> shown = List.of();
 
-    OrganizationsView(Consumer<Organization> onChoose, Runnable onRetry, BuildInfo build) {
+    OrganizationsView(Consumer<Organization> onChoose, Runnable onRetry, Runnable onRefresh, BuildInfo build) {
         super(new BorderLayout());
         this.onChoose = onChoose;
+        this.refresh = new RefreshControl(onRefresh, 320);
         setOpaque(true);
         getAccessibleContext().setAccessibleName(NavText.ORGANIZATIONS_TITLE);
 
         title.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_6, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_4));
-        add(title, BorderLayout.NORTH);
+        // cabecalho da area de conteudo: titulo, "Atualizar" e o resultado da atualizacao; fora da area rolavel
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        refresh.button().setAlignmentX(Component.CENTER_ALIGNMENT);
+        JPanel noteRow = centered(refresh.note());
+        noteRow.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_2, ClientTheme.SPACE_4, 0, ClientTheme.SPACE_4));
+        JPanel header = column(title, refresh.button(), noteRow);
+        header.setBorder(BorderFactory.createEmptyBorder(0, 0, ClientTheme.SPACE_2, 0));
+        add(header, BorderLayout.NORTH);
 
         JPanel loading = centered(row(spinner, loadingText));
         retry.addActionListener(e -> onRetry.run());
@@ -158,6 +167,17 @@ final class OrganizationsView extends JPanel {
         }
         grid.revalidate();
         scroll.getVerticalScrollBar().setValue(0);
+    }
+
+    /** O estado da ultima atualizacao pedida. {@code available}: a lista ja carregou (ou falhou) ao menos uma vez. */
+    void showRefresh(com.nekkora.client.nav.Navigation.Refresh state, boolean available) {
+        refresh.show(state, available);
+        revalidate();
+        repaint();
+    }
+
+    RefreshControl refresh() {
+        return refresh;
     }
 
     /** Leva o foco ao primeiro alvo do estado atual: o primeiro cartao, ou "Tentar novamente". */

@@ -100,6 +100,7 @@ final class ContextView extends JPanel {
     private final ActionButton importZip = new ActionButton(NavText.IMPORT_ZIP, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
     private final ButtonRow actionsBar = new ButtonRow();
     private final AppFooter footer;
+    private final RefreshControl refresh;
 
     private final Consumer<Workspace> onWorkspace;
     private transient Actions actions;
@@ -109,9 +110,11 @@ final class ContextView extends JPanel {
     private List<Workspace> shownWorkspaces;
     private Automation.Listing shownListing;
 
-    ContextView(Runnable onBack, Consumer<Workspace> onWorkspace, Runnable onRetryWorkspaces, Runnable onRetryAutomations, BuildInfo build) {
+    ContextView(Runnable onBack, Consumer<Workspace> onWorkspace, Runnable onRetryWorkspaces, Runnable onRetryAutomations, Runnable onRefresh,
+                BuildInfo build) {
         super(new BorderLayout());
         this.onWorkspace = onWorkspace;
+        this.refresh = new RefreshControl(onRefresh, 380);
         setOpaque(true);
         back.describe(NavText.BACK);
         back.addActionListener(e -> onBack.run());
@@ -121,6 +124,9 @@ final class ContextView extends JPanel {
         header.setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_3, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_4));
         header.add(back, BorderLayout.WEST);
         header.add(name, BorderLayout.CENTER);
+        // "Atualizar" no cabecalho, a direita: sempre a vista, sem rolar a lista
+        JPanel refreshSlot = centered(refresh.button());
+        header.add(refreshSlot, BorderLayout.EAST);
 
         // seletor de ambiente
         workspaceLabel.setLabelFor(workspaces);
@@ -157,6 +163,8 @@ final class ContextView extends JPanel {
         top.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
         top.add(workspaceNote);
         top.add(status);
+        refresh.note().setAlignmentX(Component.LEFT_ALIGNMENT);
+        top.add(refresh.note());
         JPanel north = new JPanel(new BorderLayout());
         north.setOpaque(false);
         north.add(header, BorderLayout.NORTH);
@@ -291,6 +299,16 @@ final class ContextView extends JPanel {
 
     void show(Navigation.State state) {
         show(state.selected(), state.workspaces(), state.workspace(), state.automations());
+        // a linha so diz o que e desta tela: a organizacao que saiu do alcance e dita no seletor de organizacoes
+        Navigation.Refresh r = state.refresh();
+        boolean mine = r.outcome() != Navigation.Refresh.Outcome.ORGANIZATION_LOST;
+        refresh.show(mine ? r : Navigation.Refresh.NONE, state.selected() != null && state.workspaces().status() != Loadable.Status.LOADING);
+        revalidate();
+        repaint();
+    }
+
+    RefreshControl refresh() {
+        return refresh;
     }
 
     /** Mostra o estado. Na fila de eventos. */

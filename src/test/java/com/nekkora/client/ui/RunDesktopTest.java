@@ -477,6 +477,51 @@ class RunDesktopTest {
         assertEquals(a.id(), fim.organizationId(), "cancelada no contexto em que comecou, sem reatribuicao");
     }
 
+    /**
+     * AGENT-CLIENT-NAVEGACAO-002 T01: atualizar com uma execucao em andamento nao inicia, interrompe, reatribui nem
+     * modifica a execucao - nem quando a atualizacao descobre que o ambiente saiu do alcance da pessoa.
+     */
+    @Test
+    void atualizarComExecucaoEmAndamentoNaoTocaNaExecucao() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        ContextView v = window.contextView();
+        enter(a, fin);
+        RunForm f = preparado("lento", LENTO);
+        edt(() -> f.startButton().doClick(0));
+        await("em andamento", () -> runner.running().isPresent());
+        answer();
+        Runner.Status antes = runner.running().orElseThrow();
+
+        // 1. atualizacao comum: versao nova publicada na Platform
+        session.directory.automations.put(fin.id(), FakeDirectory.listing(true, true, FakeDirectory.automation(1, "Conciliação bancária", 9, "9.9.9")));
+        edt(() -> v.refresh().button().doClick(0));
+        answer();
+        assertEquals("Dados atualizados.", read(() -> v.refresh().noteText()));
+        Runner.Status depois = runner.running().orElseThrow();
+        assertEquals(antes.organizationId(), depois.organizationId());
+        assertEquals(antes.workspaceId(), depois.workspaceId());
+        assertEquals(antes.state(), depois.state(), "a execucao segue como estava");
+        assertTrue(blocked.isEmpty(), "atualizar no mesmo contexto nao e troca de contexto: nada a bloquear");
+        assertTrue(read(() -> f.cancelButton().isVisible()), "a tela da execucao continua acompanhando");
+
+        // 2. a atualizacao descobre que o ambiente saiu do alcance: a tela larga o ambiente, a execucao NAO e morta
+        session.directory.workspaces.put(a.id(), List.of(fis));
+        edt(() -> v.refresh().button().doClick(0));
+        answer();
+        assertEquals("Você não tem mais acesso ao ambiente “Financeiro”. Selecione outro ambiente.", read(() -> v.refresh().noteText()));
+        Runner.Status ainda = runner.running().orElseThrow();
+        assertEquals(a.id(), ainda.organizationId(), "continua no contexto em que comecou, sem reatribuicao");
+        assertEquals(fin.id(), ainda.workspaceId());
+        // e continua protegida: uma segunda execucao e recusada e sair pergunta
+        confirmExit = false;
+        edt(window::requestExit);
+        assertEquals(1, exitQuestions.size());
+        assertEquals(0, closes.get());
+        assertTrue(runner.running().isPresent());
+        runner.close();
+        assertEquals("Cancelada", runner.current().orElseThrow().state());
+    }
+
     @Test
     void cancelarPelaTelaEncerraOProcessoERegistraComoCancelada() throws Exception {
         assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
