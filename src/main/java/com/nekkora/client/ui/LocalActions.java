@@ -75,6 +75,8 @@ final class LocalActions implements ContextView.Actions {
     /** Cada busca ou conferencia tem a sua vez: a resposta de uma vez anterior nao mexe na tela. */
     private long pythonTurn;
     private java.util.concurrent.atomic.AtomicBoolean pythonCancel = new java.util.concurrent.atomic.AtomicBoolean();
+    /** So nos testes: a area util da tela a considerar (simula tela pequena ou escala alta). Nulo: a da tela de verdade. */
+    java.awt.Rectangle usableArea;
     /** Os testes abrem os formularios sem bloquear a fila de eventos. */
     boolean modal = true;
     private JDialog dialog;
@@ -90,7 +92,7 @@ final class LocalActions implements ContextView.Actions {
                 if (runForm != null && s.id().equals(runId)) {
                     runForm.showStatus(s);
                     if (s.finished() && runDialog != null) {
-                        runDialog.pack(); // o resultado ocupa mais linhas que o andamento
+                        fitRunDialog(); // o resultado ocupa mais linhas que o andamento
                     }
                 }
             }));
@@ -932,10 +934,29 @@ final class LocalActions implements ContextView.Actions {
         }, this::chooseOutput, this::approve, this::start, () -> runner.cancel(), this::closeRun);
         JDialog d = new JDialog(host.frame(), NavText.RUN_TITLE, false);
         d.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
-        d.setContentPane(f);
+        // em tela pequena ou escala alta (150%, 200%) a preparacao e mais alta que a area util: ela rola, em vez de sair da tela
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(f, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        d.setContentPane(scroll);
+        // quem navega pelo teclado ve o que tem o foco: a rolagem acompanha
+        java.beans.PropertyChangeListener follow = e -> {
+            if (e.getNewValue() instanceof javax.swing.JComponent c && SwingUtilities.isDescendingFrom(c, f)) {
+                c.scrollRectToVisible(new java.awt.Rectangle(0, 0, c.getWidth(), c.getHeight()));
+            }
+        };
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner", follow);
+        d.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", follow);
+            }
+        });
         d.pack();
         d.setLocationRelativeTo(host.frame());
         runDialog = d;
+        fitRunDialog();
         runForm = f;
         runTarget = target;
         runId = null;
@@ -956,7 +977,7 @@ final class LocalActions implements ContextView.Actions {
             SwingUtilities.invokeLater(() -> {
                 if (runForm == f) {
                     f.showPackage(ok, why);
-                    d.pack();
+                    fitRunDialog();
                     if (ok != null) {
                         runChecked = ok;
                         searchPythons(true);
@@ -1030,7 +1051,7 @@ final class LocalActions implements ContextView.Actions {
 
     private void presentPythons(RunForm f, String lead, boolean leadIsError) {
         f.showPythons(pythonOptions(), chosenPythonId, pythonMessage(lead), pythonMessageIsError(lead, leadIsError));
-        runDialog.pack();
+        fitRunDialog();
     }
 
     /** A pessoa mexeu na selecao da lista: e uma escolha explicita dela (escolher nao aprova nem inicia nada). */
@@ -1042,7 +1063,7 @@ final class LocalActions implements ContextView.Actions {
         Runner.PythonOption o = f.chosenPython();
         chosenPythonId = o == null ? null : o.id();
         f.showPythonMessage(pythonMessage(null), pythonMessageIsError(null, false));
-        runDialog.pack();
+        fitRunDialog();
     }
 
     /**
@@ -1066,7 +1087,7 @@ final class LocalActions implements ContextView.Actions {
         String folder = pythonFolder;
         String before = chosenPythonId;
         f.showPythonSearching(NavText.PY_SEARCHING);
-        runDialog.pack();
+        fitRunDialog();
         background.execute(() -> {
             Runner.PythonList found = null;
             Runner.ProjectPythons project = null;
@@ -1143,7 +1164,7 @@ final class LocalActions implements ContextView.Actions {
         pythonCancel = cancel;
         long mine = ++pythonTurn;
         f.showPythonSearching(NavText.PY_SEARCHING_FOLDER);
-        runDialog.pack();
+        fitRunDialog();
         background.execute(() -> {
             Runner.ProjectPythons project = null;
             String problem = null;
@@ -1245,7 +1266,7 @@ final class LocalActions implements ContextView.Actions {
             SwingUtilities.invokeLater(() -> {
                 if (runForm == f) {
                     f.showOutput(out, why);
-                    runDialog.pack();
+                    fitRunDialog();
                 }
             });
         });
@@ -1273,7 +1294,7 @@ final class LocalActions implements ContextView.Actions {
                 if (runForm == f) {
                     f.setBusy(false);
                     f.showApproved(why == null, why);
-                    runDialog.pack();
+                    fitRunDialog();
                 }
             });
         });
@@ -1316,9 +1337,42 @@ final class LocalActions implements ContextView.Actions {
                     runId = s.id();
                     f.showStatus(s);
                 }
-                runDialog.pack();
+                fitRunDialog();
             });
         });
+    }
+
+    /**
+     * A janela da preparacao no tamanho do conteudo, mas nunca maior que a area util da tela (sem a barra de tarefas) nem
+     * fora dela: se o conteudo nao couber, a janela fica com a altura da tela e o conteudo rola.
+     */
+    private void fitRunDialog() {
+        JDialog d = runDialog;
+        if (d == null) {
+            return;
+        }
+        d.pack();
+        java.awt.GraphicsConfiguration gc = d.getGraphicsConfiguration();
+        if (gc == null) {
+            return;
+        }
+        java.awt.Rectangle area = gc.getBounds();
+        java.awt.Insets in = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
+        area = new java.awt.Rectangle(area.x + in.left, area.y + in.top, area.width - in.left - in.right, area.height - in.top - in.bottom);
+        if (usableArea != null) {
+            area = usableArea;
+        }
+        java.awt.Dimension size = d.getSize();
+        if (size.height > area.height) {
+            size.height = area.height;
+            // a barra de rolagem ocupa largura: o texto continua inteiro
+            size.width = Math.min(area.width, size.width + javax.swing.UIManager.getInt("ScrollBar.width") + 4);
+        }
+        size.width = Math.min(size.width, area.width);
+        d.setSize(size);
+        int x = Math.max(area.x, Math.min(d.getX(), area.x + area.width - size.width));
+        int y = Math.max(area.y, Math.min(d.getY(), area.y + area.height - size.height));
+        d.setLocation(x, y);
     }
 
     /** Fecha a janela da execucao. NAO cancela nada: a execucao em andamento segue, e as salvaguardas valem. */

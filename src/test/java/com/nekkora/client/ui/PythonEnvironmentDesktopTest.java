@@ -589,4 +589,42 @@ class PythonEnvironmentDesktopTest {
         assertNotNull(read(f::chosenPython), "o ambiente continua o escolhido: nenhum outro e posto no lugar");
         assertFalse(read(() -> f.startButton().isEnabled()));
     }
+
+    // ------------------------------------------------------------------ tela pequena / escala alta
+
+    @Test
+    void emAreaMenorQueAPreparacaoAJanelaCabeNaTelaEOConteudoRola() throws Exception {
+        // 150% numa tela de 1080 linhas deixa cerca de 690 de altura util; 200%, cerca de 515
+        edt(() -> window.actions().usableArea = new java.awt.Rectangle(0, 0, 960, 515));
+        importar("relatorio", ONDE, List.of());
+        RunForm f = abrir("relatorio");
+        java.awt.Window w = read(() -> SwingUtilities.getWindowAncestor(f));
+        java.awt.Rectangle b = read(w::getBounds);
+        assertTrue(b.height <= 515 && b.width <= 960 && b.x >= 0 && b.y >= 0 && b.x + b.width <= 960 && b.y + b.height <= 515, "a janela fica dentro da area util: " + b);
+        javax.swing.JScrollPane scroll = read(() -> (javax.swing.JScrollPane) SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, f));
+        assertNotNull(scroll);
+        assertTrue(read(() -> scroll.getVerticalScrollBar().isVisible()), "o conteudo nao cabe: rola");
+        assertFalse(read(() -> scroll.getHorizontalScrollBar().isVisible()), "sem rolagem horizontal: o texto continua inteiro");
+        assertTrue(read(() -> f.getWidth() >= f.getMinimumSize().width), "a largura do conteudo nao foi cortada pela barra");
+        // o que esta abaixo da dobra e alcancavel: a rolagem leva ate o botao de iniciar
+        edt(() -> f.startButton().scrollRectToVisible(new java.awt.Rectangle(0, 0, f.startButton().getWidth(), f.startButton().getHeight())));
+        java.awt.Rectangle visivel = read(() -> scroll.getViewport().getViewRect());
+        java.awt.Rectangle botao = read(() -> SwingUtilities.convertRectangle(f.startButton().getParent(), f.startButton().getBounds(), f));
+        assertTrue(visivel.contains(botao), "Iniciar execucao visivel depois de rolar: " + visivel + " / " + botao);
+        // o foco pelo teclado tambem traz o controle para a vista
+        edt(() -> scroll.getViewport().setViewPosition(new java.awt.Point(0, 0)));
+        edt(() -> f.closeButton().requestFocusInWindow());
+        await("a rolagem acompanha o foco", () -> {
+            try {
+                return read(() -> scroll.getViewport().getViewRect().contains(SwingUtilities.convertRectangle(f.closeButton().getParent(), f.closeButton().getBounds(), f)));
+            } catch (Exception e) {
+                return false;
+            }
+        });
+        // em area folgada, a mesma janela volta a ter o tamanho do conteudo, sem barra
+        edt(() -> window.actions().usableArea = new java.awt.Rectangle(0, 0, 1920, 2000));
+        edt(() -> f.searchAgainButton().doClick(0));
+        listados(f);
+        assertFalse(read(() -> scroll.getVerticalScrollBar().isVisible()));
+    }
 }
