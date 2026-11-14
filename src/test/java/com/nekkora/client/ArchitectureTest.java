@@ -76,7 +76,7 @@ class ArchitectureTest {
             pacotes.add(m.group(1));
         }
         Set<String> permitidos = Set.of("com.nekkora.client", "com.nekkora.client.theme", "com.nekkora.client.storage", "com.nekkora.client.signin",
-                "com.nekkora.client.ui", "com.nekkora.client.auth");
+                "com.nekkora.client.ui", "com.nekkora.client.auth", "com.nekkora.client.nav");
         for (String p : pacotes) {
             assertTrue(permitidos.contains(p), "pacote fora da lista: " + p);
         }

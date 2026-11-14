@@ -44,7 +44,7 @@ class SignInTextTest {
 
     @Test
     void soOQueAPessoaDecidiuOuOTempoCausouENeutro() {
-        assertEquals(EnumSet.of(Notice.NONE, Notice.CANCELLED, Notice.DECLINED, Notice.EXPIRED, Notice.SESSION_EXPIRED),
+        assertEquals(EnumSet.of(Notice.NONE, Notice.CANCELLED, Notice.DECLINED, Notice.EXPIRED, Notice.SESSION_EXPIRED, Notice.SIGNED_OUT),
                 EnumSet.copyOf(java.util.Arrays.stream(Notice.values()).filter(SignInText::neutral).toList()));
         assertEquals("", SignInText.kind(Notice.NONE));
         assertEquals("Aviso da entrada", SignInText.kind(Notice.CANCELLED));

@@ -6,6 +6,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
+import com.nekkora.client.nav.Directory;
 import com.nekkora.client.signin.SignInAttempts.Attempt;
 import com.nekkora.client.signin.SignInAttempts.Session;
 import com.nekkora.client.signin.SignInState.Notice;
@@ -107,6 +108,33 @@ public final class SignInFlow {
         }
         if (s != null) {
             s.check();
+        }
+    }
+
+    /** As consultas da sessao atual, ou nulo se a pessoa nao entrou. */
+    public Directory directory() {
+        synchronized (lock) {
+            return state.phase() == Phase.SIGNED_IN && session != null ? session.directory() : null;
+        }
+    }
+
+    /**
+     * "Terminar sessao": descarta o token agora, pede o encerramento a Platform (melhor esforco, sem esperar a resposta)
+     * e volta para a entrada. O aplicativo afirma so o que e certo: a sessao acabou NESTE aplicativo.
+     */
+    public void signOut() {
+        Session s;
+        synchronized (lock) {
+            if (closed || state.phase() != Phase.SIGNED_IN) {
+                return;
+            }
+            generation++;
+            s = session;
+            session = null;
+            set(new SignInState(Phase.IDLE, Notice.SIGNED_OUT));
+        }
+        if (s != null) {
+            s.end();
         }
     }
 

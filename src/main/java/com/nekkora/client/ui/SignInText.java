@@ -38,6 +38,7 @@ public final class SignInText {
             case BROWSER_FAILED -> "Não foi possível abrir o navegador. Confira se há um navegador padrão neste computador e tente novamente.";
             case RETURN_UNAVAILABLE -> "Não foi possível preparar o retorno do login neste computador. Tente novamente.";
             case SESSION_EXPIRED -> "Sua sessão terminou. Entre novamente.";
+            case SIGNED_OUT -> "Sessão terminada neste aplicativo.";
         };
     }
 
@@ -47,7 +48,7 @@ public final class SignInText {
      */
     public static boolean neutral(Notice notice) {
         return switch (notice) {
-            case NONE, CANCELLED, DECLINED, EXPIRED, SESSION_EXPIRED -> true;
+            case NONE, CANCELLED, DECLINED, EXPIRED, SESSION_EXPIRED, SIGNED_OUT -> true;
             default -> false;
         };
     }

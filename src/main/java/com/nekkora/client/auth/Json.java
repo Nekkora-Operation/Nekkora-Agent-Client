@@ -21,7 +21,12 @@ final class Json {
     }
 
     static Object parse(String text) {
-        if (text == null || text.length() > 16_384) {
+        return parse(text, 16_384);
+    }
+
+    /** {@code max}: tamanho maximo aceito, em caracteres (as listas da navegacao sao maiores que as respostas da entrada). */
+    static Object parse(String text, int max) {
+        if (text == null || text.length() > max) {
             throw new IllegalArgumentException("json");
         }
         Json p = new Json(text);
@@ -37,7 +42,12 @@ final class Json {
     /** O objeto da raiz, ou erro se a raiz nao for um objeto. */
     @SuppressWarnings("unchecked")
     static Map<String, Object> object(String text) {
-        Object v = parse(text);
+        return object(text, 16_384);
+    }
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> object(String text, int max) {
+        Object v = parse(text, max);
         if (!(v instanceof Map)) {
             throw new IllegalArgumentException("json");
         }

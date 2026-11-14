@@ -1,5 +1,6 @@
 package com.nekkora.client.signin;
 
+import com.nekkora.client.nav.Directory;
 import com.nekkora.client.signin.SignInState.Notice;
 
 /**
@@ -43,5 +44,8 @@ public interface SignInAttempts {
 
         /** Confere a sessao com a Platform agora, sem bloquear quem chama. */
         void check();
+
+        /** O que esta sessao pode consultar na Platform (organizacoes, ambientes, automacoes da pessoa). */
+        Directory directory();
     }
 }

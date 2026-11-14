@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
 
+import com.nekkora.client.nav.Directory;
 import com.nekkora.client.signin.SignInState.Notice;
 
 /**
@@ -37,7 +38,13 @@ import com.nekkora.client.signin.SignInState.Notice;
 public final class PlatformApi {
 
     public static final String CLIENT_ID = "nekkora-agent-client";
-    public static final String SCOPE = "identity";
+    /**
+     * O que o aplicativo pede: a propria identidade e a navegacao (organizacoes, ambientes e automacoes da pessoa). A
+     * pagina de confirmacao da Platform diz isso a pessoa; o servidor devolve o escopo concedido, e so vale se for este.
+     */
+    public static final String SCOPE = "identity navigation";
+    /** Teto das respostas de leitura (paginas de ate 100 itens, ou ate 200 organizacoes). */
+    private static final int MAX_READ_CHARS = 512 * 1024;
     /** Teto que o aplicativo aceita para a sessao, em segundos (o contrato diz 900). */
     static final long MAX_SESSION_SECONDS = 900;
     private static final Pattern TOKEN = Pattern.compile("^[A-Za-z0-9_-]{43}$");
@@ -140,6 +147,56 @@ public final class PlatformApi {
         } catch (IllegalArgumentException e) {
             throw new Failure(Notice.INVALID_RETURN);
         }
+    }
+
+    /**
+     * Leitura autenticada pelo token do aplicativo (rotas {@code /api/v1/desktop/...} da navegacao). Classifica cada
+     * falha pelo que a resposta mostra; so {@code 200} com JSON de objeto e sucesso.
+     */
+    Map<String, Object> read(String path, Token token) throws Directory.Failed {
+        return call(request(path).header("Authorization", "Bearer " + token.value()).GET());
+    }
+
+    Map<String, Object> call(HttpRequest.Builder b) throws Directory.Failed {
+        HttpResponse<String> r;
+        try {
+            r = send(b);
+        } catch (Failure f) {
+            throw new Directory.Failed(switch (f.notice()) {
+                case TLS -> Directory.Failure.TLS;
+                case TIMEOUT -> Directory.Failure.TIMEOUT;
+                default -> Directory.Failure.NETWORK;
+            });
+        }
+        int s = r.statusCode();
+        if (s == 200) {
+            String type = r.headers().firstValue("Content-Type").orElse("");
+            if (!type.toLowerCase(java.util.Locale.ROOT).startsWith("application/json")) {
+                throw new Directory.Failed(Directory.Failure.INVALID);
+            }
+            try {
+                return Json.object(r.body(), MAX_READ_CHARS);
+            } catch (IllegalArgumentException e) {
+                throw new Directory.Failed(Directory.Failure.INVALID);
+            }
+        }
+        if (s == 401) {
+            throw new Directory.Failed(Directory.Failure.SESSION_ENDED);
+        }
+        if (s == 403 && forbiddenByContract(r)) {
+            throw new Directory.Failed(Directory.Failure.DENIED);
+        }
+        if (s == 404) {
+            throw new Directory.Failed(Directory.Failure.NOT_FOUND);
+        }
+        if (s == 429) {
+            throw new Directory.Failed(Directory.Failure.RATE_LIMITED);
+        }
+        if (s >= 500) {
+            throw new Directory.Failed(Directory.Failure.SERVER);
+        }
+        // qualquer outro status (inclusive 403 que nao e o do contrato): nao e resposta do contrato
+        throw new Directory.Failed(Directory.Failure.INVALID);
     }
 
     /** Encerra a sessao na Platform. Melhor esforco: {@code false} se a Platform nao confirmou. */

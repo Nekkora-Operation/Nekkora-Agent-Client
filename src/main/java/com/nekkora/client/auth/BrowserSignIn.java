@@ -144,7 +144,7 @@ public final class BrowserSignIn implements SignInAttempts, AutoCloseable {
         private URI authorizeUri(String redirectUri) {
             return URI.create(origin.authorizePage() + "?response_type=code&client_id=" + PlatformApi.CLIENT_ID + "&redirect_uri=" + enc(redirectUri)
                     + "&state=" + enc(pkce.state()) + "&code_challenge=" + enc(pkce.challenge()) + "&code_challenge_method=S256&scope="
-                    + PlatformApi.SCOPE);
+                    + enc(PlatformApi.SCOPE).replace("+", "%20"));
         }
 
         /** Chamado pelo retorno local, uma unica vez, com o que o navegador trouxe para ESTA tentativa. */

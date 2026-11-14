@@ -46,6 +46,8 @@ public record SignInState(Phase phase, Notice notice) {
         INVALID_RETURN,
         /** A sessao acabou (prazo ou encerramento na conta). */
         SESSION_EXPIRED,
+        /** A pessoa escolheu "Terminar sessao" no aplicativo. Neutro. */
+        SIGNED_OUT,
         /** Entrar pelo navegador nao esta disponivel (aplicativo ou Platform sem o recurso). */
         UNAVAILABLE
     }

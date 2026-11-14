@@ -172,12 +172,16 @@ public enum ClientTheme {
     public static final int FONT_SIZE_XS = 12;
     public static final int FONT_SIZE_SM = 13;
     public static final int FONT_SIZE_MD = 14;
+    public static final int FONT_SIZE_LG = 16;
+    public static final int FONT_SIZE_XL = 18;
     public static final int SPACE_2 = 8;
     public static final int SPACE_3 = 12;
     public static final int SPACE_4 = 16;
+    public static final int SPACE_5 = 20;
     public static final int SPACE_6 = 24;
     public static final int SPACE_8 = 32;
     public static final int RADIUS_MD = 8;
+    public static final int RADIUS_LG = 12;
     public static final int CONTROL_SM = 32;
     public static final int CONTROL_MD = 40;
     public static final int FOCUS_RING_WIDTH = 3;
