@@ -12,13 +12,25 @@ Parar
   Feche a janela. O login nao fica guardado: na proxima abertura, Entrar volta a
   ser necessario.
 
-O que o aplicativo guarda
-  Somente a preferencia de tema (Sakura Dark ou Nekkora Light), em
-  %LOCALAPPDATA%\Nekkora\AgentClient\preferencias.properties
+Depois de entrar
+  Escolha a organizacao e o ambiente. A lista mostra as automacoes do ambiente.
+  Importar (.zip) traz um pacote pronto para este computador; Nova automacao
+  prepara um pacote a partir de um .zip de codigo. Executar abre a preparacao
+  (Python escolhido por voce, pasta de saida, aprovacao) e so entao voce inicia.
+  Tudo isso e local: nada e enviado a Platform e nada e instalado.
+
+O que o aplicativo guarda (em %LOCALAPPDATA%\Nekkora\AgentClient)
+  - a preferencia de tema (preferencias.properties);
+  - os pacotes que voce importou ou preparou, separados por organizacao e
+    ambiente (pasta pacotes);
+  - as aprovacoes de pacote e o registro local das execucoes (pastas execucao
+    e execucoes).
+  O login NAO e guardado.
 
 O que ele nao faz
-  Nao le nem altera o Nekkora Agent ja instalado, nao inicia automacoes e nao
-  pareia a maquina.
+  Nao le nem altera o Nekkora Agent ja instalado, nao pareia a maquina com a
+  Platform, nao recebe gatilhos remotos e nao envia registros de monitoramento.
+  Nao instala Python nem dependencias.
 
 Versao, commit e bibliotecas: VERSOES.txt
 Licencas: pasta legal\
