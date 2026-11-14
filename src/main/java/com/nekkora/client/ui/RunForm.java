@@ -8,17 +8,26 @@ import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListModel;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.ListSelectionModel;
 
 import com.nekkora.client.run.Runner;
 import com.nekkora.client.theme.ClientTheme;
 
 /**
  * Preparacao e acompanhamento de UMA execucao local. Nada comeca ao abrir: "Iniciar execucao" so habilita com o pacote
- * conferido, um Python escolhido pela pessoa e compativel, a pasta de saida e a aprovacao explicita deste conteudo.
+ * conferido, um ambiente Python escolhido e totalmente compativel, a pasta de saida e a aprovacao explicita deste conteudo.
  * O formulario diz, no alto, que a execucao e so local e que nada vai para a Platform.
+ *
+ * <p><b>Ambiente Python</b> (AGENT-CLIENT-PYTHON-001): uma LISTA dos ambientes encontrados - a pessoa nao digita nem procura
+ * o {@code python.exe}. As instalacoes deste computador vem da descoberta limitada; "Selecionar pasta da automacao" acrescenta
+ * os ambientes virtuais daquela pasta, no alto da lista. O caminho de cada um aparece na dica do item e no detalhe do
+ * escolhido. O formulario so apresenta: quem busca, confere e decide a selecao e {@link LocalActions}.
  */
 final class RunForm extends JPanel {
 
@@ -27,8 +36,12 @@ final class RunForm extends JPanel {
     private final JLabel title = new JLabel(NavText.RUN_TITLE);
     private final WrappedText scope = new WrappedText(400);
     private final WrappedText packageLine = new WrappedText(400);
-    private final JTextField python = new JTextField(26);
-    private final GhostButton choosePython = GhostButton.text(NavText.CHOOSE);
+    private final WrappedText pythonHint = new WrappedText(400);
+    private final DefaultListModel<Runner.PythonOption> pythonModel = new DefaultListModel<>();
+    private final JList<Runner.PythonOption> pythons = new JList<>(pythonModel);
+    private final JScrollPane pythonScroll = new JScrollPane(pythons);
+    private final ActionButton selectFolder = ActionButton.compact(NavText.PY_SELECT_FOLDER, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
+    private final GhostButton searchAgain = GhostButton.text(NavText.PY_SEARCH_AGAIN);
     private final WrappedText pythonLine = new WrappedText(400);
     private final JTextField output = new JTextField(26);
     private final GhostButton chooseOutput = GhostButton.text(NavText.CHOOSE);
@@ -42,26 +55,69 @@ final class RunForm extends JPanel {
     private final List<JLabel> labels = new java.util.ArrayList<>();
 
     private boolean packageOk;
-    private boolean pythonOk;
+    private boolean searching;
+    private boolean settingPythons;
+    private String checkingId;
     private boolean outputOk;
     private boolean approved;
     private boolean busy;
     private boolean running;
 
-    RunForm(Runnable onChoosePython, Runnable onChooseOutput, Runnable onApprove, Runnable onStart, Runnable onCancel, Runnable onClose) {
+    /** O que a pessoa faz na secao "Ambiente Python". */
+    interface PythonEvents {
+        /** A pessoa escolheu (ou tirou a escolha de) um item da lista. */
+        void chosen();
+
+        void selectFolder();
+
+        void searchAgain();
+    }
+
+    RunForm(PythonEvents python, Runnable onChooseOutput, Runnable onApprove, Runnable onStart, Runnable onCancel, Runnable onClose) {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBorder(BorderFactory.createEmptyBorder(ClientTheme.SPACE_5, ClientTheme.SPACE_5, ClientTheme.SPACE_4, ClientTheme.SPACE_5));
         setOpaque(true);
         scope.setText(NavText.RUN_SCOPE);
         packageLine.setText(NavText.RUN_CHECKING);
         approvalText.setText(NavText.RUN_APPROVAL_TEXT);
-        python.setEditable(false);
         output.setEditable(false);
-        python.getAccessibleContext().setAccessibleName("Interpretador Python");
         output.getAccessibleContext().setAccessibleName("Pasta de saída");
-        choosePython.getAccessibleContext().setAccessibleName("Escolher o interpretador Python");
         chooseOutput.getAccessibleContext().setAccessibleName("Escolher a pasta de saída");
-        choosePython.addActionListener(e -> onChoosePython.run());
+        pythonHint.setText(NavText.PY_HINT);
+        pythons.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        pythons.setVisibleRowCount(2);
+        pythons.getAccessibleContext().setAccessibleName(NavText.PY_LIST_NAME);
+        pythons.getAccessibleContext().setAccessibleDescription(NavText.PY_HINT);
+        pythons.setCellRenderer(new javax.swing.DefaultListCellRenderer() {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected, boolean focus) {
+                Runner.PythonOption o = (Runner.PythonOption) value;
+                boolean checking = o.id().equals(checkingId);
+                String text = checking ? NavText.pythonKind(o) + " — " + NavText.PY_CHECKING + "…" : NavText.pythonLine(o);
+                JLabel l = (JLabel) super.getListCellRendererComponent(list, text, index, selected, focus);
+                ClientTheme t = Themes.current();
+                // o ambiente do projeto vem no alto e em destaque; o que nao pode ser usado fica esmaecido (e continua selecionavel, para ver o motivo)
+                l.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, o.kind() == com.nekkora.client.run.PythonEnvironments.Kind.PROJECT));
+                if (!selected) {
+                    l.setForeground(Themes.color(o.usable() || checking ? t.text() : t.textSecondary()));
+                }
+                l.setBorder(BorderFactory.createEmptyBorder(4, ClientTheme.SPACE_2, 4, ClientTheme.SPACE_2));
+                l.setToolTipText(o.path());
+                return l;
+            }
+        });
+        pythons.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting() && !settingPythons) {
+                python.chosen();
+            }
+        });
+        selectFolder.getAccessibleContext().setAccessibleDescription("Abre um seletor de PASTA. Procura só os ambientes virtuais diretamente dentro dessa pasta.");
+        searchAgain.setToolTipText(NavText.PY_SEARCH_AGAIN_HINT);
+        searchAgain.getAccessibleContext().setAccessibleDescription(NavText.PY_SEARCH_AGAIN_HINT);
+        selectFolder.addActionListener(e -> python.selectFolder());
+        searchAgain.addActionListener(e -> python.searchAgain());
         chooseOutput.addActionListener(e -> onChooseOutput.run());
         approve.addActionListener(e -> onApprove.run());
         start.addActionListener(e -> {
@@ -83,8 +139,16 @@ final class RunForm extends JPanel {
         section("Pacote");
         add(left(packageLine));
         add(Box.createVerticalStrut(ClientTheme.SPACE_3));
-        section("Python (escolhido por você; nada é instalado)");
-        add(left(row(python, choosePython)));
+        section(NavText.PY_TITLE);
+        add(left(pythonHint));
+        add(Box.createVerticalStrut(ClientTheme.SPACE_2));
+        add(left(pythonScroll));
+        add(Box.createVerticalStrut(ClientTheme.SPACE_2));
+        JPanel pythonButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, ClientTheme.SPACE_2, 0));
+        pythonButtons.setOpaque(false);
+        pythonButtons.add(selectFolder);
+        pythonButtons.add(searchAgain);
+        add(left(pythonButtons));
         add(left(pythonLine));
         add(Box.createVerticalStrut(ClientTheme.SPACE_3));
         section("Pasta de saída");
@@ -147,13 +211,63 @@ final class RunForm extends JPanel {
         refresh();
     }
 
-    void showPython(String path, Runner.Python found, String problem) {
-        python.setText(path == null ? "" : path);
-        pythonOk = found != null;
-        pythonLine.setText(found != null ? "Python " + found.version() + ": compatível com o pacote, dependências conferidas." : problem == null ? "" : problem);
-        pythonLine.setVisible(!pythonLine.getText().isEmpty());
-        mark(pythonLine, found == null);
+    /** Uma busca (das instalacoes ou da pasta) esta em curso: a lista fica como esta, os botoes esperam. */
+    void showPythonSearching(String text) {
+        searching = true;
+        pythonLine.setText(text);
+        pythonLine.setVisible(true);
+        mark(pythonLine, false);
         refresh();
+    }
+
+    /**
+     * A lista de agora. {@code selectedId}: o ambiente escolhido (nulo = nenhum; a lista nunca escolhe sozinha).
+     * {@code message}: o que dizer abaixo da lista; {@code error}: se e um problema.
+     */
+    void showPythons(List<Runner.PythonOption> options, String selectedId, String message, boolean error) {
+        searching = false;
+        checkingId = null;
+        settingPythons = true;
+        try {
+            pythonModel.clear();
+            options.forEach(pythonModel::addElement);
+            pythons.clearSelection();
+            for (int i = 0; i < options.size(); i++) {
+                if (options.get(i).id().equals(selectedId)) {
+                    pythons.setSelectedIndex(i);
+                    pythons.ensureIndexIsVisible(i);
+                }
+            }
+            pythons.setVisibleRowCount(Math.max(2, Math.min(6, options.size())));
+        } finally {
+            settingPythons = false;
+        }
+        showPythonMessage(message, error);
+    }
+
+    void showPythonMessage(String message, boolean error) {
+        pythonLine.setText(message == null ? "" : message);
+        pythonLine.setVisible(!pythonLine.getText().isEmpty());
+        mark(pythonLine, error);
+        refresh();
+    }
+
+    /** Um item esta sendo conferido de novo (aparece como "Verificando" e nao habilita o inicio). */
+    void showPythonChecking(String id) {
+        checkingId = id;
+        pythons.repaint();
+        refresh();
+    }
+
+    /** O ambiente escolhido na lista, ou nulo. */
+    Runner.PythonOption chosenPython() {
+        return pythons.getSelectedValue();
+    }
+
+    /** O ambiente escolhido esta conferido e totalmente compativel? */
+    private boolean pythonOk() {
+        Runner.PythonOption o = pythons.getSelectedValue();
+        return !searching && o != null && o.usable() && !o.id().equals(checkingId);
     }
 
     void showOutput(String folder, String problem) {
@@ -210,7 +324,9 @@ final class RunForm extends JPanel {
 
     private void refresh() {
         boolean idle = !busy && !running;
-        choosePython.setEnabled(idle && packageOk);
+        pythons.setEnabled(idle && packageOk && !searching);
+        selectFolder.setEnabled(idle && packageOk && !searching);
+        searchAgain.setEnabled(idle && packageOk && !searching);
         chooseOutput.setEnabled(idle && packageOk);
         approve.setEnabled(idle && packageOk && !approved);
         approve.setVisible(!approved);
@@ -223,11 +339,13 @@ final class RunForm extends JPanel {
 
     /** Tudo o que a execucao exige esta conferido? */
     boolean canStart() {
-        return packageOk && pythonOk && outputOk && approved;
+        return packageOk && pythonOk() && outputOk && approved;
     }
 
+    /** O caminho do interpretador do ambiente escolhido (vazio se nenhum). */
     String pythonPath() {
-        return python.getText();
+        Runner.PythonOption o = pythons.getSelectedValue();
+        return o == null ? "" : o.path();
     }
 
     String outputFolder() {
@@ -254,8 +372,34 @@ final class RunForm extends JPanel {
         return close;
     }
 
-    GhostButton choosePythonButton() {
-        return choosePython;
+    JList<Runner.PythonOption> pythonList() {
+        return pythons;
+    }
+
+    /** As linhas da lista, como a pessoa as le. */
+    List<String> pythonLines() {
+        List<String> out = new java.util.ArrayList<>();
+        for (int i = 0; i < pythonModel.size(); i++) {
+            Runner.PythonOption o = pythonModel.get(i);
+            out.add(o.id().equals(checkingId) ? NavText.pythonKind(o) + " — " + NavText.PY_CHECKING + "…" : NavText.pythonLine(o));
+        }
+        return out;
+    }
+
+    ActionButton selectFolderButton() {
+        return selectFolder;
+    }
+
+    GhostButton searchAgainButton() {
+        return searchAgain;
+    }
+
+    String pythonHintText() {
+        return pythonHint.getText();
+    }
+
+    boolean pythonSearching() {
+        return searching;
     }
 
     String scopeText() {
@@ -287,7 +431,9 @@ final class RunForm extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : List.of(scope, packageLine, pythonLine, outputLine, approvalText, statusLine)) {
+        pythons.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
+        pythonScroll.setBorder(BorderFactory.createLineBorder(Themes.color(t.border())));
+        for (WrappedText w : List.of(scope, packageLine, pythonHint, pythonLine, outputLine, approvalText, statusLine)) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -295,7 +441,6 @@ final class RunForm extends JPanel {
             l.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, true));
             l.setForeground(Themes.color(t.text()));
         }
-        python.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
         output.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
     }
 }

@@ -77,7 +77,87 @@ public final class NavText {
             + "nova aprovação. Aprovar não inicia nada.";
     public static final String RUN_APPROVED = "Este conteúdo exato foi aprovado por você neste computador.";
     public static final String RUN_START = "Iniciar execução";
-    public static final String RUN_START_NEEDS = "Falta conferir o pacote, escolher o Python e a pasta de saída, ou aprovar o pacote.";
+    public static final String RUN_START_NEEDS = "Falta conferir o pacote, escolher um ambiente Python compatível e a pasta de saída, ou aprovar o pacote.";
+
+    // ---- ambiente Python da execucao (AGENT-CLIENT-PYTHON-001)
+    public static final String PY_TITLE = "Ambiente Python";
+    public static final String PY_HINT = "Escolha o Python que executará esta automação. Você também pode selecionar a pasta do projeto para usar seu ambiente "
+            + "virtual. Nada será instalado.";
+    public static final String PY_SELECT_FOLDER = "Selecionar pasta da automação…";
+    public static final String PY_SELECT_FOLDER_TITLE = "Selecionar a pasta da automação";
+    public static final String PY_SEARCH_AGAIN = "Buscar novamente";
+    public static final String PY_SEARCH_AGAIN_HINT = "Procura de novo as instalações de Python deste computador e confere os ambientes. Não atualiza os dados da Platform.";
+    public static final String PY_SEARCHING = "Procurando e verificando os ambientes Python deste computador…";
+    public static final String PY_SEARCHING_FOLDER = "Verificando os ambientes da pasta selecionada…";
+    public static final String PY_CHECKING = "Verificando";
+    public static final String PY_CHOOSE = "Escolha na lista o ambiente Python que executará esta automação.";
+    public static final String PY_NO_VENV = "Nenhum ambiente virtual encontrado nesta pasta. Escolha outra pasta ou utilize uma das instalações de Python listadas.";
+    public static final String PY_UNVERIFIED = "Não foi possível verificar este ambiente Python. Tente novamente ou selecione outra opção.";
+    public static final String PY_GONE = "O ambiente Python escolhido antes não foi encontrado nesta busca. Escolha outro; nenhum foi selecionado no lugar.";
+    public static final String PY_SEARCH_FAILED = "Não foi possível procurar os ambientes Python. Use Buscar novamente.";
+    public static final String PY_FOLDER_FAILED = "Não foi possível verificar esta pasta. Tente novamente ou selecione outra.";
+    public static final String PY_NOT_A_FOLDER = "O caminho selecionado não é uma pasta. Selecione a pasta da automação.";
+    public static final String PY_LIST_NAME = "Ambientes Python disponíveis";
+
+    /** A faixa de Python e as dependencias que o pacote DECLARA (o requisito real, como esta no pacote). */
+    public static String pythonRequirement(String requirement, java.util.List<String> dependencies) {
+        return "Python " + requirement + (dependencies.isEmpty() ? "" : " com " + String.join(", ", dependencies));
+    }
+
+    public static String pythonNoneCompatible(String requirement, java.util.List<String> dependencies) {
+        return "Nenhum ambiente Python compatível encontrado. Esta automação precisa de " + pythonRequirement(requirement, dependencies)
+                + ". Selecione a pasta de um projeto com ambiente compatível ou prepare uma instalação adequada.";
+    }
+
+    /** A situacao, em palavras. Dependencia em outra versao e "incompativel"; so ausencia e "ausente". */
+    public static String pythonState(com.nekkora.client.run.Runner.PythonOption o) {
+        return switch (o.state()) {
+            case COMPATIBLE -> "Compatível";
+            case VERSION_INCOMPATIBLE -> "Versão incompatível";
+            case DEPENDENCIES_PENDING -> o.pending().stream().anyMatch(p -> p.contains("instalada a versão")) ? "Dependências incompatíveis" : "Dependências ausentes";
+            case UNVERIFIED -> "Não foi possível verificar";
+        };
+    }
+
+    /** O que e este ambiente: instalacao do computador, ambiente virtual do projeto ou ambiente virtual que estava no PATH. */
+    public static String pythonKind(com.nekkora.client.run.Runner.PythonOption o) {
+        String version = o.version().isEmpty() ? "Python" : "Python " + o.version();
+        return switch (o.kind()) {
+            case INSTALLED -> version + " — instalado neste computador";
+            case PROJECT -> "Ambiente do projeto (" + o.folderName() + ") — " + version;
+            case VIRTUAL -> "Ambiente virtual (" + o.folderName() + ") — " + version;
+        };
+    }
+
+    /** A linha da lista: tipo, versao e situacao. */
+    public static String pythonLine(com.nekkora.client.run.Runner.PythonOption o) {
+        return pythonKind(o) + " — " + pythonState(o);
+    }
+
+    /** O detalhe do ambiente escolhido: o que sera usado (com o caminho, para conferencia) ou por que nao pode ser. */
+    public static String pythonDetail(com.nekkora.client.run.Runner.PythonOption o, String requirement) {
+        String where = " Caminho: " + o.path();
+        return switch (o.state()) {
+            case COMPATIBLE -> "Será usado: " + pythonKind(o) + ". Versão e dependências declaradas conferidas; o que o pacote não declara não é verificável."
+                    + where;
+            case VERSION_INCOMPATIBLE -> "Este ambiente não atende à versão que o pacote pede (Python " + requirement + ")." + where;
+            case DEPENDENCIES_PENDING -> "Requisitos declarados não atendidos neste ambiente: " + String.join("; ", o.pending())
+                    + ". Nada é instalado pelo aplicativo." + where;
+            case UNVERIFIED -> PY_UNVERIFIED + where;
+        };
+    }
+
+    public static String pythonPartial(java.util.List<String> failedSources) {
+        return failedSources.isEmpty() ? "" : " A busca foi parcial: não houve resposta de " + String.join(", ", failedSources) + ".";
+    }
+
+    public static String pythonProblem(String name, com.nekkora.client.run.PythonEnvironments.Issue issue) {
+        return switch (issue) {
+            case NOT_A_FOLDER -> PY_NOT_A_FOLDER;
+            case INCOMPLETE -> "A pasta " + name + " existe, mas não é um ambiente virtual completo (falta pyvenv.cfg ou o interpretador).";
+            case LINK_NOT_FOLLOWED -> "A pasta " + name + " é um link ou uma junção para outro lugar e não foi seguida.";
+        };
+    }
     public static final String RUN_CANCEL = "Cancelar execução";
     public static final String RUN_OUTPUT_HINT = "A execução cria uma subpasta própria aqui.";
     public static final String RUN_LOCAL_RECORD = "Registro só neste computador.";
