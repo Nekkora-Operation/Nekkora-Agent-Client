@@ -90,3 +90,38 @@ externos, arquivos, acessos) não é verificável.
 O início confere de novo, no próprio executor (`RunController.start`): o interpretador ainda existe e responde, a versão
 atende e as dependências exatas estão instaladas. Se o interpretador foi removido ou o ambiente mudou depois da
 conferência, a execução não começa. Nenhum outro ambiente é posto no lugar.
+
+## 6. A tela (preparação da execução)
+
+A seção chama-se **Ambiente Python**. Não há campo para o caminho do `python.exe`: há uma lista dos ambientes encontrados,
+cada um com tipo, versão e situação, o botão **Selecionar pasta da automação…** (seletor de pasta) e **Buscar novamente**.
+O caminho de cada ambiente aparece na dica do item e no detalhe do ambiente escolhido.
+
+### Regras de seleção
+
+| Situação | O que acontece |
+|---|---|
+| Busca ao abrir, sem escolha anterior, exatamente um ambiente totalmente compatível | ele vem selecionado, e a tela diz "Será usado: …". Selecionar não aprova nem inicia |
+| Busca ao abrir, mais de um compatível | nada vem selecionado; a pessoa escolhe |
+| Pasta indicada com um único ambiente, compatível, e nenhuma escolha feita | ele fica selecionado: foi para usá-lo que a pessoa indicou a pasta |
+| Pasta indicada com `.venv` e `venv` | os dois são listados; a pessoa escolhe |
+| Pasta indicada e já havia uma escolha | os ambientes da pasta entram no alto, em destaque; a escolha não é trocada |
+| Outra pasta indicada | os ambientes da pasta anterior saem da lista; se o escolhido era um deles, a seleção é limpa |
+| Buscar novamente | a escolha é preservada pela identidade do ambiente; se ele sumiu, a seleção é limpa e a tela explica. Nenhum outro é selecionado no lugar |
+| Desistir no seletor de pasta | lista e escolha ficam como estavam |
+
+- **Buscar novamente** repete a descoberta limitada e a conferência (inclusive a da pasta indicada). Não é o **Atualizar**
+  dos dados da Platform.
+- Enquanto uma busca corre, a lista e os botões esperam e **Iniciar execução** fica desabilitado. Toda busca termina em
+  lista, erro ou cancelamento.
+- Cada busca tem a sua vez: a resposta de outra pasta, de outra busca, de outro pacote ou de uma janela já fechada não
+  altera a tela.
+- Um ambiente não compatível pode ser selecionado para ver o motivo (e os requisitos pendentes), mas não habilita o início.
+- Se o início é recusado, o ambiente escolhido é conferido de novo e a lista passa a mostrar a situação de agora.
+- As escolhas ficam só em memória, durante a preparação aberta. Nada é gravado.
+
+### Tela pequena e escala alta
+
+A preparação é mais alta que a área útil de uma tela de 1080 linhas a 150% e a 200%. A janela nunca passa da área útil da
+tela nem sai dela: quando o conteúdo não cabe, ele rola na vertical (sem rolagem horizontal), e a rolagem acompanha o foco
+do teclado. Trocar o tema com a preparação aberta repinta o formulário.

@@ -63,6 +63,20 @@ final class LocalActions implements ContextView.Actions {
     private RunForm runForm;
     private Target runTarget;
     private String runId;
+    // ---- ambiente Python da preparacao aberta (so em memoria; nada disto e gravado)
+    /** O pacote conferido: a faixa de Python e as dependencias que ele declara. */
+    private Runner.Checked runChecked;
+    private java.util.List<Runner.PythonOption> machinePythons = java.util.List.of();
+    /** Os ambientes da pasta que a pessoa indicou. Outra pasta SUBSTITUI estes; nunca se acumulam. */
+    private java.util.List<Runner.PythonOption> projectPythons = java.util.List.of();
+    private String pythonFolder;
+    private String chosenPythonId;
+    private java.util.List<String> pythonFailedSources = java.util.List.of();
+    /** Cada busca ou conferencia tem a sua vez: a resposta de uma vez anterior nao mexe na tela. */
+    private long pythonTurn;
+    private java.util.concurrent.atomic.AtomicBoolean pythonCancel = new java.util.concurrent.atomic.AtomicBoolean();
+    /** So nos testes: a area util da tela a considerar (simula tela pequena ou escala alta). Nulo: a da tela de verdade. */
+    java.awt.Rectangle usableArea;
     /** Os testes abrem os formularios sem bloquear a fila de eventos. */
     boolean modal = true;
     private JDialog dialog;
@@ -74,11 +88,13 @@ final class LocalActions implements ContextView.Actions {
         this.background = background;
         this.host = host;
         if (runner != null) {
+            // a troca de tema muda medidas dos controles: a janela da preparacao se ajusta de novo ao conteudo e a tela
+            Themes.addListener(t -> SwingUtilities.invokeLater(this::fitRunDialog));
             runner.addListener(s -> SwingUtilities.invokeLater(() -> {
                 if (runForm != null && s.id().equals(runId)) {
                     runForm.showStatus(s);
                     if (s.finished() && runDialog != null) {
-                        runDialog.pack(); // o resultado ocupa mais linhas que o andamento
+                        fitRunDialog(); // o resultado ocupa mais linhas que o andamento
                     }
                 }
             }));
@@ -902,16 +918,51 @@ final class LocalActions implements ContextView.Actions {
         java.util.UUID version = entry.automation() != null && entry.automation().published() != null
                 && entry.local().matches(entry.automation().published().fingerprint()) ? entry.automation().published().versionId() : null;
         Target target = new Target(context, entry.local().fingerprint(), automation, version);
-        RunForm f = new RunForm(this::choosePython, this::chooseOutput, this::approve, this::start, () -> runner.cancel(), this::closeRun);
+        RunForm f = new RunForm(new RunForm.PythonEvents() {
+            @Override
+            public void chosen() {
+                pythonChosen();
+            }
+
+            @Override
+            public void selectFolder() {
+                choosePythonFolder();
+            }
+
+            @Override
+            public void searchAgain() {
+                searchPythons(false);
+            }
+        }, this::chooseOutput, this::approve, this::start, () -> runner.cancel(), this::closeRun);
         JDialog d = new JDialog(host.frame(), NavText.RUN_TITLE, false);
         d.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
-        d.setContentPane(f);
+        // em tela pequena ou escala alta (150%, 200%) a preparacao e mais alta que a area util: ela rola, em vez de sair da tela
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(f, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        d.setContentPane(scroll);
+        // quem navega pelo teclado ve o que tem o foco: a rolagem acompanha
+        java.beans.PropertyChangeListener follow = e -> {
+            if (e.getNewValue() instanceof javax.swing.JComponent c && SwingUtilities.isDescendingFrom(c, f)) {
+                c.scrollRectToVisible(new java.awt.Rectangle(0, 0, c.getWidth(), c.getHeight()));
+            }
+        };
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner", follow);
+        d.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", follow);
+            }
+        });
         d.pack();
         d.setLocationRelativeTo(host.frame());
         runDialog = d;
+        fitRunDialog();
         runForm = f;
         runTarget = target;
         runId = null;
+        resetPythons();
         d.setVisible(true);
         background.execute(() -> {
             Runner.Checked checked = null;
@@ -928,19 +979,14 @@ final class LocalActions implements ContextView.Actions {
             SwingUtilities.invokeLater(() -> {
                 if (runForm == f) {
                     f.showPackage(ok, why);
-                    d.pack();
+                    fitRunDialog();
+                    if (ok != null) {
+                        runChecked = ok;
+                        searchPythons(true);
+                    }
                 }
             });
         });
-    }
-
-    private void choosePython() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Escolher o interpretador Python");
-        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
-        if (chooser.showOpenDialog(runDialog) == JFileChooser.APPROVE_OPTION) {
-            setPython(chooser.getSelectedFile().getAbsolutePath());
-        }
     }
 
     private void chooseOutput() {
@@ -952,32 +998,252 @@ final class LocalActions implements ContextView.Actions {
         }
     }
 
-    /** O interpretador que a pessoa escolheu: conferido contra o pacote (versao e dependencias), sem instalar nada. */
-    void setPython(String path) {
+    // ------------------------------------------------------------------ ambiente Python
+
+    private void resetPythons() {
+        pythonCancel.set(true); // o que estiver em curso de uma preparacao anterior e abandonado
+        pythonCancel = new java.util.concurrent.atomic.AtomicBoolean();
+        pythonTurn++;
+        runChecked = null;
+        machinePythons = java.util.List.of();
+        projectPythons = java.util.List.of();
+        pythonFolder = null;
+        chosenPythonId = null;
+        pythonFailedSources = java.util.List.of();
+    }
+
+    /** A lista como a pessoa a ve: os ambientes do projeto primeiro, depois as instalacoes do computador. */
+    private java.util.List<Runner.PythonOption> pythonOptions() {
+        java.util.List<Runner.PythonOption> all = new java.util.ArrayList<>(projectPythons);
+        for (Runner.PythonOption o : machinePythons) {
+            // a mesma pasta pode ter chegado tambem pelo PATH: fica so a entrada do projeto
+            if (all.stream().noneMatch(p -> p.path().equalsIgnoreCase(o.path()))) {
+                all.add(o);
+            }
+        }
+        return all;
+    }
+
+    private Runner.PythonOption chosenPython() {
+        String id = chosenPythonId;
+        return id == null ? null : pythonOptions().stream().filter(o -> o.id().equals(id)).findFirst().orElse(null);
+    }
+
+    /** O que dizer abaixo da lista: o ambiente escolhido, ou o que falta. {@code lead}: o resultado da acao que acabou. */
+    private String pythonMessage(String lead) {
+        Runner.Checked c = runChecked;
+        Runner.PythonOption chosen = chosenPython();
+        String body;
+        if (c == null) {
+            body = "";
+        } else if (chosen != null) {
+            body = NavText.pythonDetail(chosen, c.pythonRequirement());
+        } else if (pythonOptions().stream().noneMatch(Runner.PythonOption::usable)) {
+            body = NavText.pythonNoneCompatible(c.pythonRequirement(), c.dependencies());
+        } else {
+            body = NavText.PY_CHOOSE;
+        }
+        return ((lead == null ? "" : lead + " ") + body + NavText.pythonPartial(pythonFailedSources)).trim();
+    }
+
+    private boolean pythonMessageIsError(String lead, boolean leadIsError) {
+        Runner.PythonOption chosen = chosenPython();
+        return (lead != null && leadIsError) || (chosen != null && !chosen.usable()) || (chosen == null && pythonOptions().stream().noneMatch(Runner.PythonOption::usable));
+    }
+
+    private void presentPythons(RunForm f, String lead, boolean leadIsError) {
+        f.showPythons(pythonOptions(), chosenPythonId, pythonMessage(lead), pythonMessageIsError(lead, leadIsError));
+        fitRunDialog();
+    }
+
+    /** A pessoa mexeu na selecao da lista: e uma escolha explicita dela (escolher nao aprova nem inicia nada). */
+    private void pythonChosen() {
         RunForm f = runForm;
-        Target t = runTarget;
-        if (f == null || t == null) {
+        if (f == null) {
             return;
         }
-        f.setBusy(true);
+        Runner.PythonOption o = f.chosenPython();
+        chosenPythonId = o == null ? null : o.id();
+        f.showPythonMessage(pythonMessage(null), pythonMessageIsError(null, false));
+        fitRunDialog();
+    }
+
+    /**
+     * Procura as instalacoes de Python deste computador (descoberta LIMITADA) e confere cada uma contra o pacote; se ha
+     * pasta indicada, confere de novo os ambientes dela. Nao e "Atualizar": nada da Platform e consultado.
+     * <p>
+     * {@code initial}: a busca ao abrir a preparacao. So nela, sem escolha anterior e com EXATAMENTE um ambiente totalmente
+     * compativel, esse ambiente vem selecionado (e a tela diz qual sera usado). Depois, a escolha e sempre da pessoa: a que
+     * existe e preservada pela identidade do ambiente; se ele sumiu, a selecao e limpa e NENHUM outro entra no lugar.
+     */
+    void searchPythons(boolean initial) {
+        RunForm f = runForm;
+        Target t = runTarget;
+        if (f == null || t == null || runChecked == null) {
+            return;
+        }
+        pythonCancel.set(true);
+        java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean();
+        pythonCancel = cancel;
+        long mine = ++pythonTurn;
+        String folder = pythonFolder;
+        String before = chosenPythonId;
+        f.showPythonSearching(NavText.PY_SEARCHING);
+        fitRunDialog();
         background.execute(() -> {
-            Runner.Python found = null;
+            Runner.PythonList found = null;
+            Runner.ProjectPythons project = null;
             String problem = null;
             try {
-                found = runner.python(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), path);
+                found = runner.pythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), cancel::get);
+                if (folder != null && !found.cancelled()) {
+                    project = runner.projectPythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
+                }
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
             } catch (RuntimeException | LinkageError e) {
-                problem = "Não foi possível conferir este interpretador.";
+                problem = NavText.PY_SEARCH_FAILED;
             }
-            Runner.Python ok = found;
+            Runner.PythonList list = found;
+            Runner.ProjectPythons ofFolder = project;
             String why = problem;
             SwingUtilities.invokeLater(() -> {
-                if (runForm == f) {
-                    f.setBusy(false);
-                    f.showPython(path, ok, why);
-                    runDialog.pack();
+                if (runForm != f || pythonTurn != mine) {
+                    return; // outra preparacao, outra busca ou a janela fechou: esta resposta nao vale mais
                 }
+                if (list == null || list.cancelled() || (ofFolder != null && ofFolder.cancelled())) {
+                    // a busca falhou: a lista anterior e a escolha anterior ficam como estavam, e a pessoa pode tentar de novo
+                    presentPythons(f, why == null ? NavText.PY_SEARCH_FAILED : why, true);
+                    return;
+                }
+                machinePythons = list.options();
+                pythonFailedSources = list.failedSources();
+                if (ofFolder != null) {
+                    projectPythons = ofFolder.options();
+                }
+                String lead = null;
+                if (before != null) {
+                    if (pythonOptions().stream().noneMatch(o -> o.id().equals(before))) {
+                        chosenPythonId = null;
+                        lead = NavText.PY_GONE;
+                    }
+                } else if (initial) {
+                    java.util.List<Runner.PythonOption> usable = pythonOptions().stream().filter(Runner.PythonOption::usable).toList();
+                    if (usable.size() == 1) {
+                        chosenPythonId = usable.get(0).id();
+                    }
+                }
+                presentPythons(f, lead, lead != null);
+            });
+        });
+    }
+
+    /** Seletor de PASTA (nao de arquivo .py nem de python.exe). Desistir preserva a lista e a escolha. */
+    private void choosePythonFolder() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(NavText.PY_SELECT_FOLDER_TITLE);
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setMultiSelectionEnabled(false);
+        if (chooser.showOpenDialog(runDialog) == JFileChooser.APPROVE_OPTION) {
+            setPythonFolder(chooser.getSelectedFile().getAbsolutePath());
+        }
+    }
+
+    /**
+     * A pasta da automacao que a pessoa indicou: os ambientes virtuais convencionais DIRETAMENTE dentro dela entram no alto
+     * da lista e SUBSTITUEM os de uma pasta anterior. Uma escolha ja feita nao e trocada. Sem escolha, e so quando a pasta
+     * tem um unico ambiente e ele e totalmente compativel, esse ambiente fica selecionado: foi para usa-lo que a pessoa
+     * indicou a pasta, e a tela diz qual sera usado. Com dois ambientes na pasta, a pessoa escolhe.
+     */
+    void setPythonFolder(String folder) {
+        RunForm f = runForm;
+        Target t = runTarget;
+        if (f == null || t == null || runChecked == null) {
+            return;
+        }
+        pythonCancel.set(true);
+        java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean();
+        pythonCancel = cancel;
+        long mine = ++pythonTurn;
+        f.showPythonSearching(NavText.PY_SEARCHING_FOLDER);
+        fitRunDialog();
+        background.execute(() -> {
+            Runner.ProjectPythons project = null;
+            String problem = null;
+            try {
+                project = runner.projectPythons(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), folder, cancel::get);
+            } catch (Runner.Refused r) {
+                problem = r.getMessage();
+            } catch (RuntimeException | LinkageError e) {
+                problem = NavText.PY_FOLDER_FAILED;
+            }
+            Runner.ProjectPythons found = project;
+            String why = problem;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm != f || pythonTurn != mine) {
+                    return;
+                }
+                if (found == null || found.cancelled()) {
+                    presentPythons(f, why == null ? NavText.PY_FOLDER_FAILED : why, true);
+                    return;
+                }
+                boolean notFolder = found.problems().stream().anyMatch(p -> p.issue() == com.nekkora.client.run.PythonEnvironments.Issue.NOT_A_FOLDER);
+                if (notFolder) {
+                    presentPythons(f, NavText.PY_NOT_A_FOLDER, true); // nada muda: os candidatos e a escolha anteriores ficam
+                    return;
+                }
+                String before = chosenPythonId;
+                boolean wasProject = before != null && projectPythons.stream().anyMatch(o -> o.id().equals(before));
+                pythonFolder = folder;
+                projectPythons = found.options();
+                java.util.List<String> said = new java.util.ArrayList<>();
+                for (com.nekkora.client.run.PythonEnvironments.Problem p : found.problems()) {
+                    said.add(NavText.pythonProblem(p.name(), p.issue()));
+                }
+                if (found.options().isEmpty() && found.problems().isEmpty()) {
+                    said.add(NavText.PY_NO_VENV);
+                }
+                if (before != null && pythonOptions().stream().noneMatch(o -> o.id().equals(before))) {
+                    chosenPythonId = null; // era um ambiente da pasta anterior, que saiu da lista
+                    if (wasProject) {
+                        said.add("O ambiente da pasta anterior saiu da lista.");
+                    }
+                } else if (before == null && found.options().size() == 1 && found.options().get(0).usable()) {
+                    chosenPythonId = found.options().get(0).id();
+                }
+                presentPythons(f, said.isEmpty() ? null : String.join(" ", said), !said.isEmpty() && found.options().isEmpty());
+            });
+        });
+    }
+
+    /** Confere de novo o ambiente escolhido (o inicio foi recusado): a lista mostra a situacao de agora, sem trocar de ambiente. */
+    private void recheckChosenPython() {
+        RunForm f = runForm;
+        Target t = runTarget;
+        String id = chosenPythonId;
+        if (f == null || t == null || id == null) {
+            return;
+        }
+        java.util.concurrent.atomic.AtomicBoolean cancel = pythonCancel;
+        long mine = ++pythonTurn;
+        f.showPythonChecking(id);
+        background.execute(() -> {
+            java.util.Optional<Runner.PythonOption> now = java.util.Optional.empty();
+            try {
+                now = runner.recheckPython(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), id, cancel::get);
+            } catch (Runner.Refused | RuntimeException | LinkageError e) {
+                // fica como estava; a frase do inicio recusado ja diz o que houve
+            }
+            java.util.Optional<Runner.PythonOption> checked = now;
+            SwingUtilities.invokeLater(() -> {
+                if (runForm != f || pythonTurn != mine) {
+                    return;
+                }
+                checked.ifPresent(o -> {
+                    machinePythons = machinePythons.stream().map(x -> x.id().equals(o.id()) ? o : x).toList();
+                    projectPythons = projectPythons.stream().map(x -> x.id().equals(o.id()) ? o : x).toList();
+                });
+                presentPythons(f, null, false);
             });
         });
     }
@@ -1002,7 +1268,7 @@ final class LocalActions implements ContextView.Actions {
             SwingUtilities.invokeLater(() -> {
                 if (runForm == f) {
                     f.showOutput(out, why);
-                    runDialog.pack();
+                    fitRunDialog();
                 }
             });
         });
@@ -1030,7 +1296,7 @@ final class LocalActions implements ContextView.Actions {
                 if (runForm == f) {
                     f.setBusy(false);
                     f.showApproved(why == null, why);
-                    runDialog.pack();
+                    fitRunDialog();
                 }
             });
         });
@@ -1068,13 +1334,47 @@ final class LocalActions implements ContextView.Actions {
                 f.setBusy(false);
                 if (s == null) {
                     f.showStartProblem(why);
+                    recheckChosenPython(); // o ambiente pode ter mudado desde a conferencia: a lista passa a dizer a situacao de agora
                 } else {
                     runId = s.id();
                     f.showStatus(s);
                 }
-                runDialog.pack();
+                fitRunDialog();
             });
         });
+    }
+
+    /**
+     * A janela da preparacao no tamanho do conteudo, mas nunca maior que a area util da tela (sem a barra de tarefas) nem
+     * fora dela: se o conteudo nao couber, a janela fica com a altura da tela e o conteudo rola.
+     */
+    private void fitRunDialog() {
+        JDialog d = runDialog;
+        if (d == null) {
+            return;
+        }
+        d.pack();
+        java.awt.GraphicsConfiguration gc = d.getGraphicsConfiguration();
+        if (gc == null) {
+            return;
+        }
+        java.awt.Rectangle area = gc.getBounds();
+        java.awt.Insets in = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
+        area = new java.awt.Rectangle(area.x + in.left, area.y + in.top, area.width - in.left - in.right, area.height - in.top - in.bottom);
+        if (usableArea != null) {
+            area = usableArea;
+        }
+        java.awt.Dimension size = d.getSize();
+        if (size.height > area.height) {
+            size.height = area.height;
+            // a barra de rolagem ocupa largura: o texto continua inteiro
+            size.width = Math.min(area.width, size.width + javax.swing.UIManager.getInt("ScrollBar.width") + 4);
+        }
+        size.width = Math.min(size.width, area.width);
+        d.setSize(size);
+        int x = Math.max(area.x, Math.min(d.getX(), area.x + area.width - size.width));
+        int y = Math.max(area.y, Math.min(d.getY(), area.y + area.height - size.height));
+        d.setLocation(x, y);
     }
 
     /** Fecha a janela da execucao. NAO cancela nada: a execucao em andamento segue, e as salvaguardas valem. */
@@ -1088,6 +1388,7 @@ final class LocalActions implements ContextView.Actions {
         runForm = null;
         runTarget = null;
         runId = null;
+        resetPythons();
         if (d != null) {
             d.dispose();
         }

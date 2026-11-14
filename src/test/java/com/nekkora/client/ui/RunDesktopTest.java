@@ -39,6 +39,8 @@ import com.nekkora.client.pack.AtomicWriter;
 import com.nekkora.client.pack.PackFixtures;
 import com.nekkora.client.pack.Workshop;
 import com.nekkora.client.run.ApprovalLedger;
+import com.nekkora.client.run.PythonEnvironments;
+import com.nekkora.client.run.PythonSources;
 import com.nekkora.client.run.RunController;
 import com.nekkora.client.run.RunStore;
 import com.nekkora.client.run.Runner;
@@ -72,6 +74,8 @@ class RunDesktopTest {
     private ClientWindow window;
     private Workshop workshop;
     private Runner runner;
+    /** Os candidatos que a "descoberta" devolve neste teste (as fontes reais da maquina ficam de fora). */
+    private final List<Path> candidatos = new java.util.concurrent.CopyOnWriteArrayList<>();
     private FakeSession session;
     private final AtomicInteger closes = new AtomicInteger();
     private final List<String> blocked = new ArrayList<>();
@@ -91,8 +95,13 @@ class RunDesktopTest {
         workshop = new Workshop(dados);
         // sessao interativa "presente": o que se testa aqui e a tela e o executor, nao a sonda de sessao do Windows
         SessionProbe sessao = () -> new SessionProbe.Session(true, 1, false, null);
-        runner = new Runner(workshop.packages(), new RunController(new RunStore(dados.resolve("execucoes"), AtomicWriter.DEFAULT),
-                new ApprovalLedger(ApprovalLedger.defaultFile(dados), AtomicWriter.DEFAULT), sessao, Clock.systemUTC(), dados));
+        RunController controller = new RunController(new RunStore(dados.resolve("execucoes"), AtomicWriter.DEFAULT),
+                new ApprovalLedger(ApprovalLedger.defaultFile(dados), AtomicWriter.DEFAULT), sessao, Clock.systemUTC(), dados);
+        if (PYTHON != null && !PYTHON.isBlank()) {
+            candidatos.add(Path.of(PYTHON));
+        }
+        runner = new Runner(workshop.packages(), controller,
+                new PythonEnvironments(cancel -> List.of(new PythonSources.Found(PythonSources.PATH, List.copyOf(candidatos), false)), controller.probeDir()));
         SwingUtilities.invokeAndWait(() -> {
             Themes.apply(ClientTheme.SAKURA_DARK);
             flow = new SignInFlow(fake, r -> {
@@ -178,6 +187,17 @@ class RunDesktopTest {
             Thread.sleep(50);
             answer();
         }
+    }
+
+    /** A busca dos ambientes Python (processos reais, fora da fila de eventos) terminou e a lista esta na tela. */
+    private void aguardarPythons(RunForm f) throws Exception {
+        await("ambientes Python listados", () -> {
+            try {
+                return !read(f::pythonSearching) && read(() -> f.searchAgainButton().isEnabled());
+            } catch (Exception e) {
+                return false;
+            }
+        });
     }
 
     private void enter(Organization o, Workspace w) throws Exception {
@@ -305,12 +325,15 @@ class RunDesktopTest {
         assertTrue(runner.current().isEmpty(), "aprovar nao inicia");
         assertFalse(read(() -> f.startButton().isEnabled()), "falta Python e pasta de saida");
 
-        // interpretador invalido: recusado com explicacao
+        // um arquivo chamado python.exe que nao e um interpretador: nao vira opcao, e a tela diz o que a automacao precisa
         Path naoPython = Files.writeString(tmp.resolve("python.exe"), "nao sou um interpretador");
-        edt(() -> window.actions().setPython(naoPython.toString()));
-        answer();
-        assertFalse(read(f::pythonText).isBlank());
-        assertFalse(read(f::pythonText).startsWith("Python "), read(f::pythonText));
+        candidatos.clear();
+        candidatos.add(naoPython);
+        edt(() -> f.searchAgainButton().doClick(0));
+        aguardarPythons(f);
+        assertEquals(List.of(), read(f::pythonLines));
+        assertTrue(read(f::pythonText).contains("Nenhum ambiente Python compatível encontrado. Esta automação precisa de Python "), read(f::pythonText));
+        assertNull(read(f::chosenPython), "o ambiente de antes sumiu: nenhum outro e selecionado no lugar");
         assertFalse(read(() -> f.startButton().isEnabled()));
         // pasta de saida inexistente
         edt(() -> window.actions().setOutput(tmp.resolve("nao-existe").toString()));
@@ -349,15 +372,10 @@ class RunDesktopTest {
         RunForm f = abrir(name);
         edt(() -> f.approveButton().doClick(0));
         answer();
-        edt(() -> window.actions().setPython(PYTHON));
-        await("python conferido", () -> {
-            try {
-                return !read(f::pythonText).isBlank();
-            } catch (Exception e) {
-                return false;
-            }
-        });
-        assertTrue(read(f::pythonText).startsWith("Python "), read(f::pythonText));
+        // a unica instalacao compativel da descoberta inicial vem selecionada, e a tela diz qual sera usada
+        aguardarPythons(f);
+        assertEquals(1, (int) read(() -> f.pythonLines().size()));
+        assertTrue(read(f::pythonText).startsWith("Será usado: Python "), read(f::pythonText));
         Path saida = Files.createDirectories(tmp.resolve("saida"));
         edt(() -> window.actions().setOutput(saida.toString()));
         answer();
@@ -471,15 +489,13 @@ class RunDesktopTest {
         RunForm f = abrir("com-dependencia");
         edt(() -> f.approveButton().doClick(0));
         answer();
-        edt(() -> window.actions().setPython(PYTHON));
-        await("python conferido", () -> {
-            try {
-                return !read(f::pythonText).isBlank();
-            } catch (Exception e) {
-                return false;
-            }
-        });
-        assertTrue(read(f::pythonText).contains("AGT-EXT-022"), read(f::pythonText));
+        aguardarPythons(f);
+        assertTrue(read(f::pythonLines).get(0).endsWith("— Dependências ausentes"), read(f::pythonLines).toString());
+        assertNull(read(f::chosenPython), "o que nao e totalmente compativel nao vem selecionado");
+        assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9"), "sem ambiente compativel, a tela diz o requisito real: " + read(f::pythonText));
+        edt(() -> f.pythonList().setSelectedIndex(0));
+        assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9 (não instalado)"), read(f::pythonText));
+        assertTrue(read(f::pythonText).contains("Nada é instalado pelo aplicativo"));
         Path saida = Files.createDirectories(tmp.resolve("saida"));
         edt(() -> window.actions().setOutput(saida.toString()));
         answer();
