@@ -169,6 +169,7 @@ public enum ClientTheme {
 
     // ------------------------------------------------------------------ fundacao (foundation.css), em px logicos
 
+    public static final int FONT_SIZE_XS = 12;
     public static final int FONT_SIZE_SM = 13;
     public static final int FONT_SIZE_MD = 14;
     public static final int SPACE_2 = 8;

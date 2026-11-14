@@ -1,5 +1,6 @@
 package com.nekkora.client.ui;
 
+import com.nekkora.client.BuildInfo;
 import com.nekkora.client.signin.SignInState.Notice;
 
 /** Textos da tela de entrada. Curtos, em portugues, sem termos tecnicos, codigos ou enderecos. */
@@ -54,6 +55,14 @@ public final class SignInText {
     /** Como o estado da mensagem e identificado para leitores de tela (a cor nao e o unico sinal). */
     public static String kind(Notice notice) {
         return notice == Notice.NONE ? "" : neutral(notice) ? "Aviso da entrada" : "Erro na entrada";
+    }
+
+    /**
+     * Linha da versao no rodape. O numero vem dos metadados do build; sem eles, a linha diz que e uma execucao de
+     * desenvolvimento, e nunca um numero de release.
+     */
+    public static String version(BuildInfo build) {
+        return build.version().map(v -> "Versão " + v).orElse("Versão de desenvolvimento");
     }
 
     public static String themeToggle(String current, String other) {

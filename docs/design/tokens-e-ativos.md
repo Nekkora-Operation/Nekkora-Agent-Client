@@ -41,6 +41,7 @@ equivalente da lib:
 | `Spinner` | `.nk-spinner` | 20 px; traço `max(2px, tamanho/10)`; trilho `accent-soft`; arco `accent`; volta em 0,8 s |
 | Texto de andamento | — | `text-secondary`, `font-size-sm` (13) |
 | Mensagem de erro | — | `danger-text`, `font-size-sm`, `line-height` 1,5 |
+| Rodapé da entrada | `.nk-auth__footer` | `text-secondary`, `font-size-xs` (12), centralizado |
 | Espaços | `--nk-space-*` | 8, 12, 16, 24, 32 |
 | Dica (tooltip) | — | `surface`, `text`, `border` |
 
