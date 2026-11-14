@@ -82,7 +82,7 @@ public final class SignInFlow {
         }
     }
 
-    /** Cancelar durante a espera: volta ao inicio, sem mensagem de erro. */
+    /** Cancelar durante a espera: volta ao inicio com o aviso neutro de cancelamento, nunca com erro. */
     public void cancel() {
         Attempt a;
         synchronized (lock) {
@@ -92,7 +92,7 @@ public final class SignInFlow {
             generation++;
             a = attempt;
             attempt = null;
-            set(SignInState.INITIAL);
+            set(new SignInState(Phase.IDLE, Notice.CANCELLED));
         }
         if (a != null) {
             a.cancel();
@@ -209,11 +209,6 @@ public final class SignInFlow {
                 a.cancel();
             }
             s.onEnded(() -> sessionEnded(mine));
-        }
-
-        @Override
-        public void cancelled() {
-            finish(mine, Notice.NONE);
         }
 
         @Override

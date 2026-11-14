@@ -12,6 +12,7 @@ import javax.swing.JMenuBar;
 import javax.swing.JPanel;
 import javax.swing.WindowConstants;
 
+import com.nekkora.client.BuildInfo;
 import com.nekkora.client.signin.SignInFlow;
 import com.nekkora.client.signin.SignInState;
 import com.nekkora.client.signin.SignInState.Phase;
@@ -37,11 +38,16 @@ public final class ClientWindow extends JFrame {
     private String showing = SIGN_IN;
 
     public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose) {
+        this(flow, onThemeChosen, onClose, BuildInfo.load());
+    }
+
+    /** {@code build}: o que o rodape da entrada mostra (os testes passam o caso sem metadados). */
+    public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose, BuildInfo build) {
         super(SignInText.APP_NAME);
         setIconImages(BrandAssets.appIcons());
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
-        signInView = new SignInView(flow::start, flow::cancel);
+        signInView = new SignInView(flow::start, flow::cancel, build);
         content.add(signInView, SIGN_IN);
         content.add(homeView, HOME);
         setContentPane(content);
