@@ -167,7 +167,10 @@ class WindowDesktopTest {
         // os botoes da janela: Entrar, Cancelar (oculto) e a troca de tema, alem dos controles da barra de titulo
         List<String> proprios = read(() -> all(window.getRootPane(), JButton.class).stream()
                 .filter(b -> b instanceof PrimaryButton || b instanceof GhostButton).map(b -> b.getClass().getSimpleName()).sorted().toList());
-        assertEquals(List.of("GhostButton", "GhostButton", "PrimaryButton"), proprios);
+        // (as telas de depois da entrada ja existem, ocultas: "voltar" e "Tentar novamente" entram na conta)
+        assertEquals(List.of("GhostButton", "GhostButton", "GhostButton", "PrimaryButton", "PrimaryButton"), proprios);
+        assertFalse(read(() -> window.avatar().isVisible()), "sem entrada, sem avatar");
+        assertFalse(read(() -> window.organizationsView().isShowing() || window.contextView().isShowing()));
         assertEquals(7, read(() -> window.getIconImages().size()), "icone oficial em todos os tamanhos");
         evidence("sakura-dark-inicial");
     }
@@ -198,7 +201,7 @@ class WindowDesktopTest {
     /** O rodape esta inteiro dentro da tela, no pe dela, abaixo de tudo o que a entrada mostra, sem encostar em nada. */
     private void assertFooterClear(String quando) throws Exception {
         SignInView v = window.signInView();
-        SignInFooter f = read(v::footer);
+        AppFooter f = read(v::footer);
         assertTrue(read(f::isShowing), quando + ": rodape visivel");
         Rectangle fb = read(() -> SwingUtilities.convertRectangle(f.getParent(), f.getBounds(), v));
         int h = read(v::getHeight);
@@ -265,12 +268,15 @@ class WindowDesktopTest {
             edt(() -> window.setSize(antes));
             edt(window::validate);
         }
-        // depois de entrar, a tela inicial continua vazia: o rodape e so da entrada
+        // depois de entrar: o seletor de organizacoes, com o MESMO rodape (versao e direitos) no pe
         edt(() -> v.signInButton().doClick(0));
         edt(() -> fake.last().listener.signedIn(new FakeSession()));
-        assertEquals(ClientWindow.HOME, read(window::showing));
+        assertEquals(ClientWindow.ORGANIZATIONS, read(window::showing));
         assertFalse(read(() -> v.footer().isShowing()));
-        assertEquals(0, read(() -> all(window.getContentPane(), HomeView.class).get(0).getComponentCount()));
+        AppFooter depois = read(() -> window.organizationsView().footer());
+        assertTrue(read(depois::isShowing));
+        assertEquals(esperado, read(() -> depois.versionLabel().getText()));
+        assertEquals(read(() -> v.footer().rightsLabel().getText()), read(() -> depois.rightsLabel().getText()));
     }
 
     @Test
@@ -365,15 +371,13 @@ class WindowDesktopTest {
                 evidence(p + "-" + n.name().toLowerCase().replace('_', '-'));
             }
 
-            // sucesso confirmado: tela inicial VAZIA
+            // sucesso confirmado: sai da entrada para o seletor de organizacoes
             edt(() -> v.signInButton().doClick(0));
             FakeSession session = new FakeSession();
             edt(() -> fake.last().listener.signedIn(session));
-            assertEquals(ClientWindow.HOME, read(window::showing));
-            HomeView home = read(() -> all(window.getContentPane(), HomeView.class).get(0));
-            assertEquals(0, read(home::getComponentCount), "tela inicial sem nenhum componente");
-            assertTrue(read(home::isShowing));
-            evidence(p + "-inicio-vazio");
+            assertEquals(ClientWindow.ORGANIZATIONS, read(window::showing));
+            assertTrue(read(() -> window.organizationsView().isShowing()));
+            assertFalse(read(v::isShowing), "a tela de entrada sai");
 
             // sessao encerrada: volta para a entrada, com aviso
             edt(session::expire);

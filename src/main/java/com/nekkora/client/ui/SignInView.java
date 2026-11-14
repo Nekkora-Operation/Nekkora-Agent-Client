@@ -20,7 +20,7 @@ import com.nekkora.client.theme.ClientTheme;
  * Tela de entrada: logo completa no centro, "Entrar" abaixo e, sob o botao, uma area de altura fixa para o andamento
  * (spinner, "Aguardando login no navegador..." e "Cancelar") ou para a mensagem do resultado da ultima tentativa
  * (erro, recusa, prazo ou cancelamento). Sem e-mail, senha,
- * codigo ou identificador tecnico: a entrada acontece no navegador. No pe da tela, o rodape ({@link SignInFooter}).
+ * codigo ou identificador tecnico: a entrada acontece no navegador. No pe da tela, o rodape ({@link AppFooter}).
  */
 public final class SignInView extends JPanel {
 
@@ -37,7 +37,7 @@ public final class SignInView extends JPanel {
     private final JLabel progress = new JLabel();
     private final WrappedText message = new WrappedText(MESSAGE_WIDTH);
     private final JPanel progressRow = new JPanel(new FlowLayout(FlowLayout.CENTER, ClientTheme.SPACE_2, 0));
-    private final SignInFooter footer;
+    private final AppFooter footer;
     private SignInState shown = SignInState.INITIAL;
 
     public SignInView(Runnable onSignIn, Runnable onCancel, BuildInfo build) {
@@ -86,7 +86,7 @@ public final class SignInView extends JPanel {
         center.setOpaque(false);
         center.add(column);
         add(center, BorderLayout.CENTER);
-        footer = new SignInFooter(build);
+        footer = new AppFooter(build);
         add(footer, BorderLayout.SOUTH);
 
         Themes.addListener(t -> restyle());
@@ -118,7 +118,7 @@ public final class SignInView extends JPanel {
         return message;
     }
 
-    SignInFooter footer() {
+    AppFooter footer() {
         return footer;
     }
 

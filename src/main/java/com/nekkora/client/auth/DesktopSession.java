@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.nekkora.client.nav.Directory;
 import com.nekkora.client.signin.SignInAttempts;
 import com.nekkora.client.signin.SignInState.Notice;
 
@@ -50,6 +51,12 @@ final class DesktopSession implements SignInAttempts.Session {
     /** A conta que entrou, como a Platform informou. */
     String email() {
         return email;
+    }
+
+    /** As consultas desta sessao. Um {@code 401} em qualquer uma encerra a sessao, como na conferencia. */
+    @Override
+    public Directory directory() {
+        return new PlatformDirectory(api, token::get, this::expired);
     }
 
     @Override

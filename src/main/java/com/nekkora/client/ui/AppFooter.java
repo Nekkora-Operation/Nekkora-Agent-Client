@@ -11,19 +11,19 @@ import com.nekkora.client.BuildInfo;
 import com.nekkora.client.theme.ClientTheme;
 
 /**
- * Rodape da tela de entrada: versao e, abaixo dela, a linha de direitos da Nekkora. Identificacao discreta, sempre visivel nos estados da entrada (inicial,
- * aguardando e resultado). Nao e botao nem link, e nao aparece na tela inicial depois da entrada.
+ * Rodape das telas: versao e, abaixo dela, a linha de direitos da Nekkora. Identificacao discreta, sempre visivel nos estados da entrada (inicial,
+ * aguardando e resultado) e nas telas de depois dela. Nao e botao nem link.
  * <p>
  * Estilo do rodape de autenticacao da lib ({@code .nk-auth__footer}): {@code font-size-xs} e {@code text-secondary}.
  */
-final class SignInFooter extends JPanel {
+final class AppFooter extends JPanel {
 
     private static final long serialVersionUID = 1L;
 
     private final JLabel version = new JLabel();
     private final JLabel rights = new JLabel();
 
-    SignInFooter(BuildInfo build) {
+    AppFooter(BuildInfo build) {
         setOpaque(false);
         setFocusable(false);
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));

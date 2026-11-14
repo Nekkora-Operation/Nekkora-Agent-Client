@@ -176,6 +176,12 @@ class ThemeTokensTest {
         assertEquals(13, ClientTheme.FONT_SIZE_SM);
         assertEquals("0.875rem", f.get("--nk-font-size-md"));
         assertEquals(14, ClientTheme.FONT_SIZE_MD);
+        assertEquals("1rem", f.get("--nk-font-size-lg"));
+        assertEquals(16, ClientTheme.FONT_SIZE_LG);
+        assertEquals("1.125rem", f.get("--nk-font-size-xl"));
+        assertEquals(18, ClientTheme.FONT_SIZE_XL);
+        assertEquals(rem(f.get("--nk-space-5")), ClientTheme.SPACE_5);
+        assertEquals(f.get("--nk-radius-lg"), ClientTheme.RADIUS_LG + "px");
         assertEquals(rem(f.get("--nk-space-2")), ClientTheme.SPACE_2);
         assertEquals(rem(f.get("--nk-space-3")), ClientTheme.SPACE_3);
         assertEquals(rem(f.get("--nk-space-4")), ClientTheme.SPACE_4);
