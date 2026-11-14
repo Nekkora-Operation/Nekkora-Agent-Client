@@ -15,7 +15,7 @@ import com.nekkora.client.nav.Profile;
 import com.nekkora.client.nav.Workspace;
 
 /**
- * As consultas da pessoa a Platform (contrato desktop-navigation/1), com o token da sessao do aplicativo. So leitura do
+ * As consultas da pessoa a Platform (contratos desktop-navigation/1 e /2), com o token da sessao do aplicativo. So leitura do
  * que o servidor autoriza a cada chamada: o aplicativo nao declara organizacao, papel nem conta, e nao guarda nada disto
  * em disco.
  * <p>
@@ -48,9 +48,14 @@ final class PlatformDirectory implements Directory {
     }
 
     @Override
-    public List<Organization> organizations() throws Failed {
+    public Organizations organizations() throws Failed {
         Map<String, Object> o = get("/api/v1/desktop/organizations");
         if (!(o.get("items") instanceof List<?> items)) {
+            throw new Failed(Failure.INVALID);
+        }
+        // contrato /2: asOf = "request" (lista resolvida nesta consulta). Ausente: Platform do contrato /1. Outro valor nao e do contrato.
+        Object asOf = o.get("asOf");
+        if (asOf != null && !"request".equals(asOf)) {
             throw new Failed(Failure.INVALID);
         }
         List<Organization> out = new ArrayList<>();
@@ -74,7 +79,7 @@ final class PlatformDirectory implements Directory {
             }
             out.add(new Organization(id, name, (String) handle, awaiting));
         }
-        return out;
+        return new Organizations(out, asOf != null);
     }
 
     /** Teto de paginas lidas de uma lista (paginas de 100): acima disso a tela avisa que a lista esta incompleta. */

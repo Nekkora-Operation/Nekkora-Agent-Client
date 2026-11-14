@@ -124,6 +124,44 @@ public final class NavText {
     }
 
     /** Por que a consulta nao trouxe o resultado. Nunca e o texto de "lista vazia". */
+    // ---- atualizar (AGENT-CLIENT-NAVEGACAO-002)
+    public static final String REFRESH = "Atualizar";
+    public static final String REFRESHING = "Atualizando…";
+    public static final String REFRESH_TIP = "Consultar de novo, na Platform, os dados desta tela";
+    public static final String REFRESHED = "Dados atualizados.";
+    public static final String REFRESH_FAILED = "Não foi possível atualizar. Tente novamente.";
+    public static final String REFRESH_STALE = "Os dados na tela são os de antes e não foram atualizados.";
+    public static final String REFRESH_OLD_PLATFORM = "Lista consultada, mas esta versão da Platform só mostra organizações novas depois de entrar de novo.";
+
+    public static String lostOrganization(String name) {
+        return "Você não tem mais acesso à organização \u201c" + name + "\u201d. Ela saiu da lista.";
+    }
+
+    public static String lostWorkspace(String name) {
+        return "Você não tem mais acesso ao ambiente \u201c" + name + "\u201d. Selecione outro ambiente.";
+    }
+
+    /** A orientacao especifica de uma atualizacao que falhou (vazia quando nao ha o que acrescentar). */
+    public static String refreshGuidance(Failure failure) {
+        return switch (failure) {
+            case NETWORK -> "Verifique sua conexão.";
+            case TIMEOUT -> "A Platform não respondeu a tempo.";
+            case TLS -> "Não foi possível estabelecer uma conexão segura com a Platform.";
+            case SERVER -> "A Platform encontrou um problema; aguarde alguns instantes.";
+            case RATE_LIMITED -> "Muitas consultas seguidas: aguarde um pouco.";
+            case DENIED -> "Sua conta não tem permissão para esta consulta.";
+            case INVALID -> "A Platform respondeu de um jeito inesperado.";
+            case SESSION_ENDED -> "Sua sessão terminou. Entre novamente.";
+            case NOT_FOUND, REJECTED, CONFLICT -> "";
+        };
+    }
+
+    /** Atualizacao que falhou: o que houve, a orientacao e o aviso de que a tela mostra os dados de antes. */
+    public static String refreshFailed(Failure failure) {
+        String guidance = refreshGuidance(failure);
+        return REFRESH_FAILED + (guidance.isEmpty() ? "" : " " + guidance) + " " + REFRESH_STALE;
+    }
+
     public static String of(Failure failure) {
         return switch (failure) {
             case NETWORK -> "Não foi possível conectar à Platform. Verifique sua conexão e tente novamente.";

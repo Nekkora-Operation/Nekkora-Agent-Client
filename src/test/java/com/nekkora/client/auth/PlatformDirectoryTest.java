@@ -69,10 +69,22 @@ class PlatformDirectoryTest {
         platform.displayName = null;
         assertNull(directory.profile().displayName(), "nome ausente e aceito; o avatar usa o desenho neutro");
 
-        assertEquals(List.of(), directory.organizations(), "vazio legitimo: 200 com items vazio");
+        assertEquals(List.of(), directory.organizations().items(), "vazio legitimo: 200 com items vazio");
         platform.organizationsBody = "{\"items\":[" + org(A, "Acme", "acme", "ATIVADA") + "," + org(B, "Acme", null, "AGUARDANDO_ATIVACAO") + "]}";
-        List<Organization> list = directory.organizations();
+        assertFalse(directory.organizations().current(), "sem asOf: Platform do contrato /1, lista do momento do login");
+        List<Organization> list = directory.organizations().items();
         assertEquals(2, list.size());
+        // contrato /2: asOf = "request" diz que a lista foi resolvida nesta consulta; qualquer outro valor nao e do contrato
+        String semAsOf = platform.organizationsBody;
+        platform.organizationsBody = semAsOf.substring(0, semAsOf.length() - 1) + ",\"asOf\":\"request\"}";
+        assertTrue(directory.organizations().current());
+        assertEquals(list, directory.organizations().items());
+        for (String outro : new String[] {"\"approval\"", "true", "1", "\"\""}) {
+            platform.organizationsBody = semAsOf.substring(0, semAsOf.length() - 1) + ",\"asOf\":" + outro + "}";
+            com.nekkora.client.nav.Directory.Failed f = org.junit.jupiter.api.Assertions.assertThrows(com.nekkora.client.nav.Directory.Failed.class, directory::organizations, outro);
+            assertEquals(Failure.INVALID, f.failure(), outro);
+        }
+        platform.organizationsBody = semAsOf;
         assertEquals(new Organization(java.util.UUID.fromString(A), "Acme", "acme", false), list.get(0));
         assertTrue(list.get(1).awaitingActivation());
         assertEquals("Acme", list.get(1).name(), "homonimas chegam as duas, na ordem da Platform");
@@ -90,7 +102,7 @@ class PlatformDirectoryTest {
             b.append(i > 1 ? "," : "").append(org(String.format("00000000-0000-4000-8000-%012d", i), "Organização com um nome bem comprido " + i, "org-" + i, "ATIVADA"));
         }
         platform.organizationsBody = b.append("]}").toString();
-        assertEquals(200, directory.organizations().size());
+        assertEquals(200, directory.organizations().items().size());
     }
 
     @Test

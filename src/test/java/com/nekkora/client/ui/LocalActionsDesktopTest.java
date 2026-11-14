@@ -393,6 +393,42 @@ class LocalActionsDesktopTest {
         assertEquals(List.of("Apuração"), names());
     }
 
+    /**
+     * AGENT-CLIENT-NAVEGACAO-002 T01: atualizar reconcilia a lista da Platform com o que ja esta neste computador. O
+     * pacote local nao e apagado, baixado de novo nem trocado, e um formulario aberto no mesmo contexto continua aberto.
+     */
+    @Test
+    void atualizarMantemOsPacotesLocaisEOFormularioAberto() throws Exception {
+        ContextView v = window.contextView();
+        enter(a, fin);
+        Path zip = PackFixtures.packageZip(tmp.resolve("zips"), "minimo", "folha-local", "0.3.0", "main.py");
+        edt(() -> window.actions().importZip(zip.toString()));
+        answer();
+        List<Workshop.LocalItem> antes = workshop.list(a.id(), fin.id());
+        assertEquals(1, antes.size());
+        assertEquals(List.of("Conciliação bancária", "folha-local"), names());
+        // formulario de renomear aberto sobre o item local
+        JButton editar = row("folha-local").actions().get(1);
+        edt(() -> editar.doClick(0));
+        Object aberto = read(() -> window.actions().form());
+        assertTrue(aberto instanceof RenameForm);
+
+        // na Platform: versao nova publicada e automacao nova
+        session.directory.automations.put(fin.id(), FakeDirectory.listing(true, true, FakeDirectory.automation(1, "Conciliação bancária", 4, "1.3.0"),
+                FakeDirectory.automation(6, "Nova na Platform", 1, "0.1.0")));
+        session.directory.calls.clear();
+        edt(() -> v.refresh().button().doClick(0));
+        answer();
+        assertEquals("Dados atualizados.", read(() -> v.refresh().noteText()));
+        assertEquals(List.of("Conciliação bancária", "Nova na Platform", "folha-local"), names(), "Platform na ordem dela; depois, o que so existe aqui");
+        assertEquals("Versão publicada 4 · versão do pacote 1.3.0", read(() -> v.rows().get(0).details().get(0)));
+        assertEquals("Pacote não está neste computador", read(() -> v.rows().get(0).details().get(1)), "a versao nova nao trouxe pacote: nada foi baixado");
+        assertEquals(antes, workshop.list(a.id(), fin.id()), "o pacote local e o mesmo: nem apagado, nem reimportado, nem trocado");
+        assertTrue(read(() -> window.actions().form()) == aberto, "o formulario aberto no mesmo contexto continua aberto");
+        assertTrue(session.directory.renames.isEmpty());
+        assertFalse(session.directory.calls.stream().anyMatch(c -> c.startsWith("rename")), "atualizar nao renomeia");
+    }
+
     @Test
     void renomearItemLocalMudaSoONomeNesteComputador() throws Exception {
         ContextView v = window.contextView();

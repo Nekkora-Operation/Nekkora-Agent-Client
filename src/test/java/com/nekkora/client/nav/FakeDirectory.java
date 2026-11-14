@@ -17,6 +17,8 @@ public final class FakeDirectory implements Directory {
     public volatile Failure profileFailure;
     public volatile List<Organization> organizations = List.of();
     public volatile Failure organizationsFailure;
+    /** Falso: "Platform" do contrato anterior, que nao resolve a lista a cada consulta. */
+    public volatile boolean organizationsCurrent = true;
     public volatile RuntimeException crash;
     /** Por organizacao e por ambiente: o que a "Platform" devolve. Chave ausente = fora do alcance (NOT_FOUND). */
     public final java.util.Map<UUID, List<Workspace>> workspaces = new java.util.concurrent.ConcurrentHashMap<>();
@@ -37,7 +39,7 @@ public final class FakeDirectory implements Directory {
     }
 
     @Override
-    public List<Organization> organizations() throws Failed {
+    public Organizations organizations() throws Failed {
         organizationCalls.incrementAndGet();
         if (crash != null) {
             throw crash;
@@ -45,7 +47,7 @@ public final class FakeDirectory implements Directory {
         if (organizationsFailure != null) {
             throw new Failed(organizationsFailure);
         }
-        return organizations;
+        return new Organizations(organizations, organizationsCurrent);
     }
 
     @Override

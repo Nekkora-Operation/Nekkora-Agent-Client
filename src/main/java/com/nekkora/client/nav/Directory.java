@@ -14,8 +14,22 @@ public interface Directory {
     /** A propria identidade, como a Platform a conhece. */
     Profile profile() throws Failed;
 
-    /** As organizacoes de que a pessoa participa agora, na ordem da Platform (nome e, no empate, identificador). */
-    List<Organization> organizations() throws Failed;
+    /**
+     * As organizacoes de que a pessoa participa, na ordem da Platform (nome e, no empate, identificador), e se a lista e
+     * a de AGORA ({@link Organizations#current()}).
+     */
+    Organizations organizations() throws Failed;
+
+    /**
+     * A lista de organizacoes como a Platform a devolveu. {@code current}: a Platform resolveu a lista nesta consulta
+     * (contrato desktop-navigation/2). Falso: Platform do contrato anterior, em que a lista e a do momento do login - o
+     * que a pessoa perdeu sai dela, mas uma organizacao nova so aparece depois de entrar de novo.
+     */
+    record Organizations(List<Organization> items, boolean current) {
+        public Organizations {
+            items = List.copyOf(items);
+        }
+    }
 
     /**
      * Os ambientes ATIVOS da organizacao que a pessoa pode acessar, na ordem da Platform. A organizacao e conferida pelo

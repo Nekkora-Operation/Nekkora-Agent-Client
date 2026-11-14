@@ -46,12 +46,23 @@ public final class ActionButton extends JButton {
 
     private final Kind kind;
     private final Glyph glyph;
+    private final boolean compact;
     private boolean loading;
 
     public ActionButton(String text, Kind kind, Glyph glyph) {
+        this(text, kind, glyph, false);
+    }
+
+    /** Tamanho sm da lib ({@code .nk-button--sm}: altura control-sm, padding space-3, fonte sm, intervalo de 6 px), para cabecalhos. */
+    public static ActionButton compact(String text, Kind kind, Glyph glyph) {
+        return new ActionButton(text, kind, glyph, true);
+    }
+
+    private ActionButton(String text, Kind kind, Glyph glyph, boolean compact) {
         super(text);
         this.kind = kind;
         this.glyph = glyph;
+        this.compact = compact;
         restyle();
         setRolloverEnabled(true);
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -82,7 +93,11 @@ public final class ActionButton extends JButton {
         setBorderPainted(false);
         setFocusPainted(false);
         setOpaque(false);
-        setFont(Themes.font(ClientTheme.FONT_SIZE_MD, true));
+        setFont(Themes.font(compact ? ClientTheme.FONT_SIZE_SM : ClientTheme.FONT_SIZE_MD, true));
+    }
+
+    private int gap() {
+        return compact ? 6 : ClientTheme.SPACE_2;
     }
 
     @Override
@@ -94,12 +109,17 @@ public final class ActionButton extends JButton {
     @Override
     public Dimension getPreferredSize() {
         FontMetrics fm = getFontMetrics(getFont());
-        int w = ICON + ClientTheme.SPACE_2 + fm.stringWidth(getText()) + 2 * ClientTheme.SPACE_4;
-        return new Dimension(w + 2 * RING, ClientTheme.CONTROL_MD + 2 * RING);
+        int w = ICON + gap() + fm.stringWidth(getText()) + 2 * (compact ? ClientTheme.SPACE_3 : ClientTheme.SPACE_4);
+        return new Dimension(w + 2 * RING, (compact ? ClientTheme.CONTROL_SM : ClientTheme.CONTROL_MD) + 2 * RING);
     }
 
     @Override
     public Dimension getMinimumSize() {
+        return getPreferredSize();
+    }
+
+    @Override
+    public Dimension getMaximumSize() {
         return getPreferredSize();
     }
 
@@ -155,11 +175,11 @@ public final class ActionButton extends JButton {
             g2.setColor(Themes.color(foreground()));
             g2.setFont(getFont());
             FontMetrics fm = g2.getFontMetrics();
-            int content = ICON + ClientTheme.SPACE_2 + fm.stringWidth(getText());
+            int content = ICON + gap() + fm.stringWidth(getText());
             int down = isEnabled() && getModel().isPressed() ? 1 : 0;
             int x = (w - content) / 2;
             paintGlyph(g2, glyph, x, (h - ICON) / 2f + down);
-            g2.drawString(getText(), x + ICON + ClientTheme.SPACE_2, (h - fm.getHeight()) / 2 + fm.getAscent() + down);
+            g2.drawString(getText(), x + ICON + gap(), (h - fm.getHeight()) / 2 + fm.getAscent() + down);
         } finally {
             g2.dispose();
         }
