@@ -113,7 +113,8 @@ Client                               Navegador (Web)                         API
 - Parâmetro repetido, `state` ausente ou diferente (comparação em tempo constante), `iss` diferente da origem
   configurada: resposta de erro ao navegador, **a tentativa legítima continua esperando**. Mais de 20 requisições
   inválidas encerram a tentativa com "retorno inválido".
-- Com `state` certo: `error=access_denied` → cancelado; `code` → troca com a API por TLS validado.
+- Com `state` e `iss` certos: `error=access_denied` → a pessoa recusou a entrada no navegador; `code` → troca com a
+  API por TLS validado. Um `error` sem essa correlação é só mais uma requisição inválida.
 - A página só diz "Login concluído. Você pode voltar ao Nekkora Agent." **depois** de a API confirmar a troca e a
   sessão. Sem credenciais na página; `Cache-Control: no-store`; `Referrer-Policy: no-referrer`.
 - Resultado incerto na troca (tempo esgotado, conexão caída): a tentativa termina; nada é reaproveitado.
@@ -155,3 +156,31 @@ Client                               Navegador (Web)                         API
 3. **Só `127.0.0.1`.** `::1` não é aceito nesta etapa.
 4. **Ligar em produção** (`NEKKORA_LOGIN_DESKTOP`) é ato de implantação, fora desta missão.
 5. **Persistência de login, renovação e escolha de organização** não existem nesta etapa.
+
+## 11. Resultado da tentativa no aplicativo (AGENT-CLIENT-LOGIN-002)
+
+O contrato `desktop-login/1` não mudou. O que mudou é o que o aplicativo mostra quando a tentativa termina sem entrada:
+uma frase em linha, abaixo de **Entrar**, escolhida pelo que o contrato de fato mostrou. Nada é deduzido.
+
+| O que o aplicativo observou | Resultado | Mensagem |
+|---|---|---|
+| Retorno local com `error=access_denied`, `state` e `iss` desta tentativa | recusa da pessoa | Entrada não autorizada. Você pode tentar novamente quando quiser. |
+| `403` da API com `application/json` e corpo exatamente `{"error":"forbidden"}`, na troca ou na conferência da sessão | acesso negado pela Platform | Acesso não permitido. Sua conta não está autorizada a entrar neste aplicativo. |
+| `5xx` na troca ou na conferência da sessão | erro no servidor | Não foi possível concluir a entrada. A Platform encontrou um problema. Tente novamente em instantes. |
+| Conexão recusada ou interrompida | falha de conexão | Não foi possível conectar à Platform. Verifique sua conexão e tente novamente. |
+| Prazo da tentativa (5 min) sem retorno | expirou | O tempo para entrar terminou. Clique em Entrar para iniciar uma nova tentativa. |
+| Retorno com a correlação certa mas sem sentido; mais de 20 retornos inválidos; código recusado (`400`); resposta fora do contrato (inclusive `403` que não é o da linha acima) | retorno inválido | Não foi possível validar a entrada com segurança. Inicie uma nova tentativa. |
+| Falha de certificado ou de TLS | conexão insegura | Não foi possível estabelecer uma conexão segura com a Platform. Tente novamente mais tarde. |
+| **Cancelar** no próprio aplicativo | neutro | Entrada cancelada. |
+
+- **Acesso negado pela Platform não acontece com a API atual** (`1fe35f5`): nenhuma rota do aplicativo responde `403`,
+  porque não existe regra que negue uma conta nesta etapa. A classificação existe e é testada com servidor simulado;
+  criar essa regra seria permissão nova, fora desta missão.
+- **O que acontece só no navegador não chega ao aplicativo.** Senha ou código errado, sessão restrita por código de
+  recuperação, ou erro da API ao autorizar ficam na página da Web, onde a pessoa corrige e continua. O aplicativo segue
+  em "Aguardando login no navegador...", com **Cancelar** disponível, e termina no prazo com a mensagem de tempo
+  esgotado. Não há consulta periódica à API para descobrir o que houve.
+- Em todo resultado terminal: o indicador para, **Entrar** volta a ficar disponível, o retorno local e o prazo da
+  tentativa são encerrados, e as referências ao `state` e ao verificador são descartadas. A tentativa seguinte gera
+  `state`, verificador e porta novos; o que chegar da anterior é descartado.
+- A mensagem é identificada também para leitores de tela ("Erro na entrada" ou "Aviso da entrada"), não só pela cor.

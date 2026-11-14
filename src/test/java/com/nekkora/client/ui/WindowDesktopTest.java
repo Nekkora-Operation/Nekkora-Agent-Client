@@ -193,6 +193,106 @@ class WindowDesktopTest {
         assertEquals(852.0 / 128.0, BrandAssets.lockup(ClientTheme.NEKKORA_LIGHT, 44).getWidth() / 128.0, 0.01);
     }
 
+    // ------------------------------------------------------------------ rodape
+
+    /** O rodape esta inteiro dentro da tela, no pe dela, abaixo de tudo o que a entrada mostra, sem encostar em nada. */
+    private void assertFooterClear(String quando) throws Exception {
+        SignInView v = window.signInView();
+        SignInFooter f = read(v::footer);
+        assertTrue(read(f::isShowing), quando + ": rodape visivel");
+        Rectangle fb = read(() -> SwingUtilities.convertRectangle(f.getParent(), f.getBounds(), v));
+        int h = read(v::getHeight);
+        int w = read(v::getWidth);
+        assertEquals(h, fb.y + fb.height, quando + ": rodape no pe da tela");
+        assertTrue(fb.x >= 0 && fb.x + fb.width <= w && fb.y >= 0, quando + ": rodape inteiro");
+        for (JLabel l : read(() -> all(f, JLabel.class))) {
+            Rectangle lb = read(() -> SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), v));
+            assertTrue(lb.x >= 0 && lb.x + lb.width <= w && lb.y + lb.height <= h, quando + ": linha inteira: " + l.getText());
+            assertEquals(read(() -> l.getPreferredSize().width), lb.width, quando + ": texto sem corte: " + l.getText());
+            assertEquals(w / 2.0, lb.getCenterX(), 1.5, quando + ": centralizado: " + l.getText());
+        }
+        List<Component> acima = read(() -> List.<Component>of(all(v, LogoView.class).get(0), v.signInButton(), v.spinner(), v.cancelButton(), v.message()));
+        for (Component c : acima) {
+            if (!read(c::isShowing)) {
+                continue;
+            }
+            Rectangle b = read(() -> SwingUtilities.convertRectangle(c.getParent(), c.getBounds(), v));
+            assertTrue(b.y + b.height <= fb.y, quando + ": " + c.getClass().getSimpleName() + " acima do rodape (" + (b.y + b.height) + " <= " + fb.y + ")");
+        }
+    }
+
+    @Test
+    void rodapeMostraAVersaoDoBuildEmTodosOsEstadosDaEntrada() throws Exception {
+        SignInView v = window.signInView();
+        String esperado = "Versão " + com.nekkora.client.BuildInfoTest.pomVersion();
+        for (ClientTheme theme : ClientTheme.values()) {
+            edt(() -> Themes.apply(theme));
+            String p = theme.libId().equals("light") ? "nekkora-light" : "sakura-dark";
+            JLabel versao = read(() -> v.footer().versionLabel());
+            assertEquals(esperado, read(versao::getText));
+            assertFalse(read(versao::getText).matches("(?s).*([0-9a-f]{7,}|https?://|localhost|laborat|dev\\b).*"), "sem commit nem ambiente no rodape");
+            assertEquals(ClientTheme.FONT_SIZE_XS, read(() -> versao.getFont().getSize()), "fonte do rodape da lib, sem diminuir alem dela");
+            assertEquals(Themes.color(theme.textSecondary()), read(versao::getForeground));
+            assertTrue(Rgb.contrast(theme.textSecondary(), theme.bg()) >= 4.5, theme + ": contraste do rodape");
+            // direitos: abaixo da versao, mesma fonte e cor, com o ano dos metadados do build
+            JLabel direitos = read(() -> v.footer().rightsLabel());
+            int ano = com.nekkora.client.BuildInfo.load().year().orElseThrow();
+            assertEquals("© " + ano + " Nekkora. Todos os direitos reservados.", read(direitos::getText));
+            assertEquals(List.of(versao, direitos), read(() -> all(v.footer(), JLabel.class)), "so as duas linhas, nessa ordem");
+            assertTrue(read(() -> direitos.getY() >= versao.getY() + versao.getHeight()), "direitos abaixo da versao");
+            assertEquals(ClientTheme.FONT_SIZE_XS, read(() -> direitos.getFont().getSize()));
+            assertEquals(Themes.color(theme.textSecondary()), read(direitos::getForeground));
+            assertFalse(read(direitos::isFocusable));
+            assertFalse(read(versao::isFocusable) || read(() -> v.footer().isFocusable()), "o rodape nao entra na ordem do teclado");
+            assertFooterClear(p + " inicial");
+            evidence(p + "-rodape-inicial");
+
+            edt(() -> v.signInButton().doClick(0));
+            edt(() -> fake.last().listener.browserOpened());
+            assertFooterClear(p + " aguardando");
+            assertEquals(esperado, read(versao::getText));
+            evidence(p + "-rodape-aguardando");
+
+            edt(() -> fake.last().listener.failed(Notice.BROWSER_FAILED)); // a mensagem mais longa
+            assertFooterClear(p + " erro");
+            evidence(p + "-rodape-erro");
+
+            Dimension antes = read(window::getSize);
+            edt(() -> window.setSize(window.getMinimumSize()));
+            edt(window::validate);
+            assertFooterClear(p + " erro, janela minima");
+            evidence(p + "-rodape-erro-janela-minima");
+            edt(() -> window.setSize(antes));
+            edt(window::validate);
+        }
+        // depois de entrar, a tela inicial continua vazia: o rodape e so da entrada
+        edt(() -> v.signInButton().doClick(0));
+        edt(() -> fake.last().listener.signedIn(new FakeSession()));
+        assertEquals(ClientWindow.HOME, read(window::showing));
+        assertFalse(read(() -> v.footer().isShowing()));
+        assertEquals(0, read(() -> all(window.getContentPane(), HomeView.class).get(0).getComponentCount()));
+    }
+
+    @Test
+    void semMetadadosDoBuildORodapeDizDesenvolvimento() throws Exception {
+        AtomicReference<ClientWindow> outra = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            SignInFlow f = new SignInFlow(new FakeSignIn(), Runnable::run);
+            ClientWindow w = new ClientWindow(f, t -> { }, () -> { }, com.nekkora.client.BuildInfo.DEVELOPMENT);
+            w.setLocation(60, 60);
+            w.setVisible(true);
+            outra.set(w);
+        });
+        settle();
+        try {
+            assertEquals("Versão de desenvolvimento", read(() -> outra.get().signInView().footer().versionLabel().getText()));
+            assertEquals("© " + java.time.Year.now(java.time.ZoneOffset.UTC).getValue() + " Nekkora. Todos os direitos reservados.",
+                    read(() -> outra.get().signInView().footer().rightsLabel().getText()));
+        } finally {
+            SwingUtilities.invokeAndWait(() -> outra.get().dispose());
+        }
+    }
+
     // ------------------------------------------------------------------ estados
 
     @Test
@@ -221,21 +321,49 @@ class WindowDesktopTest {
             evidence(p + "-aguardando");
 
             edt(() -> v.cancelButton().doClick(0));
-            assertEquals(SignInState.INITIAL, flow.state());
-            assertEquals("", read(v::messageText), "cancelar nao mostra erro");
+            assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state());
+            assertEquals("Entrada cancelada.", read(v::messageText), "cancelar no aplicativo: aviso neutro");
+            assertEquals(Themes.color(theme.textSecondary()), read(() -> v.message().getForeground()), "cancelamento nao usa a cor de erro");
+            assertEquals("Aviso da entrada", read(() -> v.message().getAccessibleContext().getAccessibleDescription()));
             assertTrue(read(() -> v.signInButton().isEnabled()));
             assertFalse(read(() -> v.spinner().spinning()), "spinner parado fora da espera");
+            assertFalse(read(() -> v.cancelButton().isVisible()));
+            evidence(p + "-cancelled");
 
-            for (Notice n : new Notice[] {Notice.EXPIRED, Notice.BROWSER_FAILED, Notice.NETWORK, Notice.SERVER, Notice.TLS, Notice.INVALID_RETURN}) {
+            Rectangle logo = read(() -> SwingUtilities.convertRectangle(all(v, LogoView.class).get(0).getParent(), all(v, LogoView.class).get(0).getBounds(), v));
+            for (Notice n : new Notice[] {Notice.DECLINED, Notice.ACCESS_DENIED, Notice.SERVER, Notice.NETWORK, Notice.EXPIRED, Notice.INVALID_RETURN, Notice.TLS,
+                    Notice.BROWSER_FAILED, Notice.TIMEOUT, Notice.RATE_LIMITED, Notice.UNAVAILABLE, Notice.RETURN_UNAVAILABLE}) {
                 edt(() -> v.signInButton().doClick(0));
+                assertEquals("", read(v::messageText), n + ": a nova tentativa limpa a mensagem anterior");
+                edt(() -> fake.last().listener.browserOpened());
+                assertEquals("Aguardando login no navegador...", read(() -> v.getAccessibleContext().getAccessibleDescription()));
                 edt(() -> fake.last().listener.failed(n));
+                // resultado terminal: mensagem certa, loading parado, Entrar liberado, continua na entrada
                 assertEquals(SignInText.of(n), read(v::messageText));
+                assertEquals(ClientWindow.SIGN_IN, read(window::showing), n + ": nao abre a tela inicial");
                 assertTrue(read(() -> v.signInButton().isEnabled()), n + ": pode tentar de novo");
+                assertFalse(read(() -> v.spinner().isVisible() || v.spinner().spinning()), n + ": loading encerrado");
+                assertEquals("", read(v::progressText), n + ": sem \"aguardando\"");
+                assertFalse(read(() -> v.cancelButton().isVisible()), n + ": sem Cancelar");
+                assertEquals(1, fake.last().cancelled, n + ": recursos da tentativa liberados");
                 assertFalse(SignInText.of(n).matches("(?s).*(Exception|\\bat \\w+\\.|https?://|\\d{3}).*"), "sem detalhe tecnico: " + SignInText.of(n));
+                // estado identificado sem depender da cor
+                boolean neutro = SignInText.neutral(n);
+                assertEquals(neutro ? "Aviso da entrada" : "Erro na entrada", read(() -> v.message().getAccessibleContext().getAccessibleDescription()));
+                assertEquals(SignInText.of(n), read(() -> v.message().getAccessibleContext().getAccessibleName()));
+                assertEquals(SignInText.of(n), read(() -> v.getAccessibleContext().getAccessibleDescription()));
+                assertEquals(Themes.color(neutro ? theme.textSecondary() : theme.dangerText()), read(() -> v.message().getForeground()));
+                // a mensagem fica inteira, abaixo do botao, sem encostar no logo nem sair da area dela
+                WrappedText msg = read(v::message);
+                assertEquals(SignInText.of(n), String.join(" ", read(msg::lines)), n + ": nenhuma palavra cortada");
+                Rectangle mb = read(() -> SwingUtilities.convertRectangle(msg.getParent(), msg.getBounds(), v));
+                Rectangle bb = read(() -> SwingUtilities.convertRectangle(v.signInButton().getParent(), v.signInButton().getBounds(), v));
+                Rectangle area = read(() -> SwingUtilities.convertRectangle(msg.getParent().getParent(), msg.getParent().getBounds(), v));
+                assertTrue(mb.y >= bb.y + bb.height, n + ": mensagem abaixo de Entrar");
+                assertTrue(mb.y + mb.height <= area.y + area.height, n + ": mensagem dentro da area reservada (" + mb.height + " de " + area.height + ")");
+                assertFalse(mb.intersects(logo) || mb.intersects(bb), n + ": sem sobreposicao");
                 evidence(p + "-" + n.name().toLowerCase().replace('_', '-'));
             }
-            assertEquals("O tempo para entrar terminou. Tente novamente.", SignInText.of(Notice.EXPIRED));
-            assertEquals("Não foi possível confirmar o login. Inicie uma nova tentativa.", SignInText.of(Notice.INVALID_RETURN));
 
             // sucesso confirmado: tela inicial VAZIA
             edt(() -> v.signInButton().doClick(0));
@@ -315,7 +443,7 @@ class WindowDesktopTest {
         assertEquals(v.signInButton(), read(() -> window.getRootPane().getDefaultButton()), "Enter aciona Entrar na tela de entrada");
         edt(() -> v.cancelButton().dispatchEvent(new KeyEvent(v.cancelButton(), KeyEvent.KEY_PRESSED, System.currentTimeMillis(), 0, KeyEvent.VK_SPACE, ' ')));
         edt(() -> v.cancelButton().dispatchEvent(new KeyEvent(v.cancelButton(), KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, KeyEvent.VK_SPACE, ' ')));
-        assertEquals(SignInState.INITIAL, flow.state(), "Espaco em Cancelar cancela");
+        assertEquals(new SignInState(Phase.IDLE, Notice.CANCELLED), flow.state(), "Espaco em Cancelar cancela");
         assertTrue(read(() -> KeyboardFocusManager.getCurrentKeyboardFocusManager() != null));
     }
 

@@ -1,5 +1,6 @@
 package com.nekkora.client.ui;
 
+import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -10,14 +11,16 @@ import javax.swing.BoxLayout;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 
+import com.nekkora.client.BuildInfo;
 import com.nekkora.client.signin.SignInState;
 import com.nekkora.client.signin.SignInState.Phase;
 import com.nekkora.client.theme.ClientTheme;
 
 /**
  * Tela de entrada: logo completa no centro, "Entrar" abaixo e, sob o botao, uma area de altura fixa para o andamento
- * (spinner, "Aguardando login no navegador..." e "Cancelar") ou para a mensagem da ultima tentativa. Sem e-mail, senha,
- * codigo ou identificador tecnico: a entrada acontece no navegador.
+ * (spinner, "Aguardando login no navegador..." e "Cancelar") ou para a mensagem do resultado da ultima tentativa
+ * (erro, recusa, prazo ou cancelamento). Sem e-mail, senha,
+ * codigo ou identificador tecnico: a entrada acontece no navegador. No pe da tela, o rodape ({@link SignInFooter}).
  */
 public final class SignInView extends JPanel {
 
@@ -25,6 +28,8 @@ public final class SignInView extends JPanel {
 
     static final int LOGO_HEIGHT = 44;
     private static final int MESSAGE_WIDTH = 300;
+    /** Altura da area sob o botao: cabe o andamento com "Cancelar" ou a mensagem mais longa, sem empurrar o resto. */
+    static final int STATUS_HEIGHT = 92;
 
     private final PrimaryButton signIn = new PrimaryButton(SignInText.SIGN_IN);
     private final GhostButton cancel = GhostButton.text(SignInText.CANCEL);
@@ -32,12 +37,14 @@ public final class SignInView extends JPanel {
     private final JLabel progress = new JLabel();
     private final WrappedText message = new WrappedText(MESSAGE_WIDTH);
     private final JPanel progressRow = new JPanel(new FlowLayout(FlowLayout.CENTER, ClientTheme.SPACE_2, 0));
+    private final SignInFooter footer;
     private SignInState shown = SignInState.INITIAL;
 
-    public SignInView(Runnable onSignIn, Runnable onCancel) {
-        super(new GridBagLayout());
+    public SignInView(Runnable onSignIn, Runnable onCancel, BuildInfo build) {
+        super(new BorderLayout());
         setOpaque(true);
         setFocusable(true);
+        getAccessibleContext().setAccessibleName("Entrada");
 
         JPanel column = new JPanel();
         column.setOpaque(false);
@@ -63,7 +70,7 @@ public final class SignInView extends JPanel {
         status.add(progressRow);
         status.add(cancel);
         status.add(message);
-        Dimension area = new Dimension(MESSAGE_WIDTH + 2 * ClientTheme.SPACE_4, 92);
+        Dimension area = new Dimension(MESSAGE_WIDTH + 2 * ClientTheme.SPACE_4, STATUS_HEIGHT);
         status.setPreferredSize(area);
         status.setMinimumSize(area);
         status.setMaximumSize(area);
@@ -74,7 +81,13 @@ public final class SignInView extends JPanel {
         column.add(signIn);
         column.add(Box.createVerticalStrut(ClientTheme.SPACE_4));
         column.add(status);
-        add(column);
+        // o conteudo fica centralizado no espaco acima do rodape; o rodape fica sempre no pe da tela, em todos os estados
+        JPanel center = new JPanel(new GridBagLayout());
+        center.setOpaque(false);
+        center.add(column);
+        add(center, BorderLayout.CENTER);
+        footer = new SignInFooter(build);
+        add(footer, BorderLayout.SOUTH);
 
         Themes.addListener(t -> restyle());
         restyle();
@@ -105,6 +118,10 @@ public final class SignInView extends JPanel {
         return message;
     }
 
+    SignInFooter footer() {
+        return footer;
+    }
+
     /** Mostra o estado. Na fila de eventos. */
     public void show(SignInState state) {
         boolean wasBusy = shown.busy();
@@ -127,6 +144,10 @@ public final class SignInView extends JPanel {
         String text = busy ? "" : SignInText.of(state.notice());
         message.setVisible(!text.isEmpty());
         message.setText(text);
+        // o estado tambem e dito a quem nao ve a cor: "Erro na entrada" ou "Aviso da entrada" na mensagem, e o que a tela
+        // esta fazendo (ou dizendo) na descricao da propria tela, que e quem tem o foco durante a espera
+        message.getAccessibleContext().setAccessibleDescription(SignInText.kind(state.notice()));
+        getAccessibleContext().setAccessibleDescription(busy ? progress.getText() : text);
         restyle();
         revalidate();
         repaint();
