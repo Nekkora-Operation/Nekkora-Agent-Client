@@ -108,7 +108,11 @@ class PreparationPreviewTest {
     private static void capture(String name, JPanel f) throws Exception {
         Files.createDirectories(EVIDENCE);
         JDialog d = new JDialog((java.awt.Frame) null, NavText.RUN_TITLE, false);
-        d.setContentPane(f);
+        // como no aplicativo: o formulario fica numa rolagem, entao tem sempre a altura do conteudo (a imagem e do formulario inteiro)
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(f, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        d.setContentPane(scroll);
         d.pack();
         d.setLocation(30, 30);
         d.setVisible(true);
@@ -130,6 +134,125 @@ class PreparationPreviewTest {
         } finally {
             d.dispose();
         }
+    }
+
+    /** O formulario de geracao com uma pasta de verdade (temporaria) e os caminhos na tela trocados por caminhos FICTICIOS. */
+    private static GenerateForm gerar(com.nekkora.client.pack.Workshop workshop, Path pasta, String python) throws Exception {
+        GenerateForm f = new GenerateForm(new GenerateForm.Events() {
+            @Override
+            public void browse() {
+            }
+
+            @Override
+            public void changed() {
+            }
+
+            @Override
+            public void generate() {
+            }
+
+            @Override
+            public void cancel() {
+            }
+
+            @Override
+            public void reveal() {
+            }
+
+            @Override
+            public void selectRequirements() {
+            }
+
+            @Override
+            public void clearRequirements() {
+            }
+        });
+        com.nekkora.client.pack.Workshop.Draft draft = workshop.openFolder(pasta.toString());
+        f.showFolder(draft);
+        f.entryBox().setSelectedItem("main.py");
+        f.nameField().setText("conciliacao-bancaria");
+        f.pythonField().setText(python);
+        f.showSummary(workshop.summary(draft, "conciliacao-bancaria", "1.0.0", "main.py", python, f.values().dependencies()));
+        f.folderField().setText("D:\\Projetos\\conciliacao");
+        if (draft.requirements().isPresent()) {
+            f.requirementsPathField().setText("D:\\Projetos\\conciliacao\\requirements.txt");
+        }
+        draft.close();
+        return f;
+    }
+
+    @Test
+    void previasDeGerarPacoteNosDoisTemasENasTresEscalas(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        com.nekkora.client.pack.Workshop workshop = new com.nekkora.client.pack.Workshop(tmp.resolve("dados"));
+        Path exato = Files.createDirectories(tmp.resolve("exato").resolve("tarefas")).getParent();
+        Files.writeString(exato.resolve("main.py"), "print(1)\n");
+        Files.writeString(exato.resolve("tarefas").resolve("relatorio.py"), "def gerar():\n    return 1\n");
+        Files.writeString(exato.resolve("requirements.txt"), "requests==2.31.0\nopenpyxl==3.1.5\n");
+        Path faixa = Files.createDirectories(tmp.resolve("faixa"));
+        Files.writeString(faixa.resolve("main.py"), "print(1)\n");
+        Files.writeString(faixa.resolve("requirements.txt"), "requests>=2.0\nopenpyxl==3.1.5\n-r base.txt\n");
+        for (ClientTheme theme : List.of(ClientTheme.SAKURA_DARK, ClientTheme.NEKKORA_LIGHT)) {
+            String tema = theme == ClientTheme.SAKURA_DARK ? "sakura-dark" : "nekkora-light";
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    Themes.apply(theme);
+                    // so os tres campos obrigatorios, sem informar Python
+                    capture(tema + "-gerar-tres-campos", gerar(workshop, exato, ""));
+
+                    // opcoes avancadas: 3.12 interpretado como familia; arquivo de dependencias reconhecido
+                    GenerateForm avancado = gerar(workshop, exato, "3.12");
+                    avancado.setAdvancedOpen(true);
+                    capture(tema + "-gerar-avancado-python-e-dependencias", avancado);
+
+                    // arquivo de dependencias com linhas que o pacote nao representa: aviso por linha
+                    GenerateForm problema = new GenerateForm(new GenerateForm.Events() {
+                        @Override
+                        public void browse() {
+                        }
+
+                        @Override
+                        public void changed() {
+                        }
+
+                        @Override
+                        public void generate() {
+                        }
+
+                        @Override
+                        public void cancel() {
+                        }
+
+                        @Override
+                        public void reveal() {
+                        }
+
+                        @Override
+                        public void selectRequirements() {
+                        }
+
+                        @Override
+                        public void clearRequirements() {
+                        }
+                    });
+                    com.nekkora.client.pack.Workshop.Draft d = workshop.openFolder(faixa.toString());
+                    problema.showFolder(d);
+                    problema.entryBox().setSelectedItem("main.py");
+                    problema.nameField().setText("conciliacao-bancaria");
+                    problema.folderField().setText("D:\\Projetos\\conciliacao");
+                    problema.requirementsPathField().setText("D:\\Projetos\\conciliacao\\requirements.txt");
+                    d.close();
+                    capture(tema + "-gerar-dependencias-com-problema", problema);
+
+                    // concluido
+                    GenerateForm gerado = gerar(workshop, exato, "");
+                    gerado.showGenerated("D:\\Pacotes\\conciliacao-bancaria-1.0.0.zip");
+                    capture(tema + "-gerar-pacote-gerado", gerado);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+        }
+        SwingUtilities.invokeAndWait(() -> Themes.apply(ClientTheme.SAKURA_DARK));
     }
 
     @Test

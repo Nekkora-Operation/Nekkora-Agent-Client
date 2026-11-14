@@ -87,6 +87,14 @@ final class LocalActions implements ContextView.Actions {
         this.runner = runner;
         this.background = background;
         this.host = host;
+        // a troca de tema muda medidas dos controles: a janela do formulario aberto (Gerar, Editar, Renomear) se ajusta de novo
+        // ao conteudo e a tela, em vez de ganhar uma barra de rolagem que nao precisa
+        Themes.addListener(t -> SwingUtilities.invokeLater(() -> {
+            JDialog d = dialog;
+            if (d != null && d.isDisplayable()) {
+                fit(d);
+            }
+        }));
         if (runner != null) {
             // a troca de tema muda medidas dos controles: a janela da preparacao se ajusta de novo ao conteudo e a tela
             Themes.addListener(t -> SwingUtilities.invokeLater(this::fitRunDialog));
