@@ -52,6 +52,25 @@ Testes portados: `ZipForge`, `SafeZipTest`, `ProjectImporterTest`, `PackagerTest
 da impressão digital) e os projetos de exemplo de `src/test/resources/agent-pacotes-001/projetos` (aqui em
 `src/test/resources/pacotes-locais/projetos`).
 
+### Execução local — `com.nekkora.client.run`
+
+| Classe de origem (`com.nekkora.agent.exec.…`) | Classe no Client | O que mudou |
+|---|---|---|
+| `ExecutionController` | `RunController` | só o pacote Python externo; sem os ganchos da Platform (`presetId`, `origin`, `preLaunch`), sem `RecordDiagnostics` e sem leitura de protocolo depois de reinício; cada registro leva um contexto imutável |
+| `ApprovalStore` | `ApprovalLedger` | mesmo formato e mesma chave (impressão digital); sem `clearAll` |
+| `ExternalLaunch` | `ExternalSignal` | só o sinal e o desfecho (`SIGNAL_ENV`, `SIGNAL_FILE`, `Signal`, `readSignal`, `classify`, `Outcome`) |
+| `Launch` | `Launch` | só o pacote Python externo |
+| `PythonRuntime` | `PythonRuntime` | sem a sonda do framework do Studio; lista de variáveis de ambiente sem mudança |
+| `ExecutionSetup` | `ExecutionSetup` | sem arquivo de entrada e sem os textos do Studio |
+| `RunStore`, `ExecutionRecord` | mesmos nomes | esquema próprio (`nekkora-agent-client/execution` 1.0.0) com o contexto; sem retenção por entrega pendente; retenção por organização e ambiente |
+| `ExecutionState`, `ExecutionId`, `ProcessOwner` | mesmos nomes | nada (código idêntico) |
+| `SessionProbe` | `SessionProbe` | "há área de trabalho?" entra por parâmetro, em vez de `java.awt.GraphicsEnvironment` |
+
+Testes portados: `ProcessOwnerTest` (como está) e, reescritos para o pacote Python externo, os cenários de
+`ExecutionControllerTest`, `CancellationTest`, `LaunchTest` e `ZipPackageExecutionTest`.
+
+A API, o formato em disco e a lista completa do que foi mantido estão em `docs/nucleo-local.md`.
+
 ### O que ficou de fora, de propósito
 
 - Pacote do Studio (`manifest.json`) e de laboratório (`nekkora-agent-lab.json`): não são aceitos; um ZIP desses formatos é
