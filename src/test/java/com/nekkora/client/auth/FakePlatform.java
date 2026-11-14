@@ -72,6 +72,9 @@ final class FakePlatform implements AutoCloseable {
     volatile String readBody;
     volatile String readContentType = "application/json";
     final List<String> readAuthorizations = new CopyOnWriteArrayList<>();
+    /** Navegacao, rotas com organizacao: caminho + "?" + consulta -> corpo. Sem a chave: 404. */
+    final Map<String, String> pages = new ConcurrentHashMap<>();
+    final List<String> pageRequests = new CopyOnWriteArrayList<>();
 
     FakePlatform() throws Exception {
         char[] pw = "changeit".toCharArray();
@@ -201,6 +204,10 @@ final class FakePlatform implements AutoCloseable {
                 reply(x, 418, "text/plain", "o aplicativo nao envia cookies");
                 return;
             }
+            if ("GET".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/")) {
+                page(x);
+                return;
+            }
             switch (x.getRequestMethod() + " " + path) {
                 case "POST /api/v1/desktop/token" -> token(x);
                 case "GET /api/v1/desktop/session" -> session(x);
@@ -271,6 +278,27 @@ final class FakePlatform implements AutoCloseable {
             return;
         }
         reply(x, 200, "application/json", "{\"account\":{\"email\":\"" + who + "\"},\"scope\":\"identity navigation\",\"expiresIn\":" + expiresIn + "}");
+    }
+
+    private void page(HttpExchange x) throws IOException {
+        String key = x.getRequestURI().getPath() + "?" + x.getRequestURI().getRawQuery();
+        pageRequests.add(key);
+        readAuthorizations.add(String.valueOf(x.getRequestHeaders().getFirst("Authorization")));
+        if (readStatus != null || readBody != null) {
+            reply(x, readStatus == null ? 200 : readStatus, readContentType, readBody == null ? "{}" : readBody);
+            return;
+        }
+        String t = bearer(x);
+        if (t == null || sessions.get(t) == null) {
+            reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
+            return;
+        }
+        String body = pages.get(key);
+        if (body == null) {
+            reply(x, 404, "application/json", "{\"error\":\"not_found\"}");
+            return;
+        }
+        reply(x, 200, "application/json", body);
     }
 
     private void read(HttpExchange x, String path) throws IOException {

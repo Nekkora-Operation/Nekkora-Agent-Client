@@ -132,6 +132,105 @@ class PlatformDirectoryTest {
         assertEquals(0, ended.get());
     }
 
+    // ------------------------------------------------------------------ ambientes e automacoes (T03)
+
+    private static final String WS1 = "00000000-0000-4000-8000-000000001001";
+    private static final String WS2 = "00000000-0000-4000-8000-000000001002";
+    private static final String AU1 = "00000000-0000-4000-8000-000000002001";
+    private static final String V1 = "00000000-0000-4000-8000-000000003001";
+
+    private static String wsPath(String org) {
+        return "/api/v1/desktop/organizations/" + org + "/workspaces";
+    }
+
+    private static String auPath(String org, String ws) {
+        return "/api/v1/desktop/organizations/" + org + "/workspaces/" + ws + "/automations";
+    }
+
+    @Test
+    void ambientesPaginadosComOCursorDevolvidoComoVeio() throws Exception {
+        java.util.UUID org = java.util.UUID.fromString(A);
+        String cursor = "eyJwIjoxfQ.c2lnbmF0dXJl-_~";
+        platform.pages.put(wsPath(A) + "?limit=100", "{\"items\":[{\"workspaceId\":\"" + WS1 + "\",\"name\":\"Financeiro\"}],\"nextCursor\":\"" + cursor + "\"}");
+        platform.pages.put(wsPath(A) + "?limit=100&cursor=" + cursor, "{\"items\":[{\"workspaceId\":\"" + WS2 + "\",\"name\":\"Fiscal\"}],\"nextCursor\":null}");
+        assertEquals(List.of(new com.nekkora.client.nav.Workspace(java.util.UUID.fromString(WS1), "Financeiro"),
+                new com.nekkora.client.nav.Workspace(java.util.UUID.fromString(WS2), "Fiscal")), directory.workspaces(org), "duas paginas, na ordem da Platform");
+        assertEquals(List.of(wsPath(A) + "?limit=100", wsPath(A) + "?limit=100&cursor=" + cursor), platform.pageRequests);
+        // vazio legitimo
+        platform.pages.put(wsPath(A) + "?limit=100", "{\"items\":[],\"nextCursor\":null}");
+        assertEquals(List.of(), directory.workspaces(org));
+        // organizacao fora do alcance da pessoa: 404 da Platform, nunca lista vazia
+        assertEquals(Failure.NOT_FOUND, failure(() -> directory.workspaces(java.util.UUID.fromString(B))));
+    }
+
+    @Test
+    void automacoesComVersaoPublicadaPacoteECapacidades() throws Exception {
+        java.util.UUID org = java.util.UUID.fromString(A);
+        java.util.UUID ws = java.util.UUID.fromString(WS1);
+        platform.pages.put(auPath(A, WS1) + "?limit=100", "{\"items\":["
+                + "{\"automationId\":\"" + AU1 + "\",\"name\":\"Conciliação\",\"latestPublishedVersion\":{\"automationVersionId\":\"" + V1
+                + "\",\"versionNumber\":3,\"publishedAt\":\"2026-11-10T12:00:00Z\",\"package\":{\"name\":\"conciliacao\",\"version\":\"1.2.0\",\"fingerprint\":\"sha256:abc\"}}},"
+                + "{\"automationId\":\"00000000-0000-4000-8000-000000002002\",\"name\":\"Só rascunho\",\"latestPublishedVersion\":null},"
+                + "{\"automationId\":\"00000000-0000-4000-8000-000000002003\",\"name\":\"Sem artefato\",\"latestPublishedVersion\":{\"automationVersionId\":\"" + V1
+                + "\",\"versionNumber\":1,\"publishedAt\":\"2026-11-10T12:00:00Z\",\"package\":null}}"
+                + "],\"nextCursor\":null,\"capabilities\":{\"rename\":true,\"execute\":false}}");
+        com.nekkora.client.nav.Automation.Listing l = directory.automations(org, ws);
+        assertEquals(3, l.items().size());
+        assertEquals(new com.nekkora.client.nav.Automation.Published(java.util.UUID.fromString(V1), 3, "conciliacao", "1.2.0", "sha256:abc"), l.items().get(0).published());
+        assertNull(l.items().get(1).published(), "so rascunho: nenhuma versao publicada");
+        assertEquals(1, l.items().get(2).published().number());
+        assertNull(l.items().get(2).published().packageVersion());
+        assertEquals(new com.nekkora.client.nav.Automation.Capabilities(true, false), l.capabilities());
+        assertFalse(l.truncated());
+        // ambiente de outra organizacao no caminho: a Platform responde 404
+        assertEquals(Failure.NOT_FOUND, failure(() -> directory.automations(java.util.UUID.fromString(B), ws)));
+        assertEquals(Failure.NOT_FOUND, failure(() -> directory.automations(org, java.util.UUID.fromString(WS2))));
+    }
+
+    @Test
+    void paginasForaDoContratoNaoSaoAceitas() {
+        java.util.UUID org = java.util.UUID.fromString(A);
+        java.util.UUID ws = java.util.UUID.fromString(WS1);
+        String item = "{\"workspaceId\":\"" + WS1 + "\",\"name\":\"Financeiro\"}";
+        for (String body : new String[] {"{}", "{\"items\":null}", "{\"items\":[{}]}", "{\"items\":[{\"workspaceId\":\"x\",\"name\":\"F\"}]}",
+                "{\"items\":[{\"workspaceId\":\"" + WS1 + "\",\"name\":\"\"}]}", "{\"items\":[" + item + "," + item + "]}",
+                "{\"items\":[" + item + "],\"nextCursor\":7}", "{\"items\":[" + item + "],\"nextCursor\":\"com espaco\"}",
+                "{\"items\":[" + item + "],\"nextCursor\":\"a&organization=outra\"}", "{\"items\":[" + item + "],\"nextCursor\":\"../x\"}"}) {
+            platform.pages.put(wsPath(A) + "?limit=100", body);
+            assertEquals(Failure.INVALID, failure(() -> directory.workspaces(org)), body);
+        }
+        String ok = "{\"automationId\":\"" + AU1 + "\",\"name\":\"X\",\"latestPublishedVersion\":null}";
+        for (String body : new String[] {"{\"items\":[" + ok + "],\"nextCursor\":null}", // sem capacidades
+                "{\"items\":[" + ok + "],\"nextCursor\":null,\"capabilities\":{\"rename\":\"sim\",\"execute\":true}}",
+                "{\"items\":[" + ok + "],\"nextCursor\":null,\"capabilities\":{\"rename\":true}}",
+                "{\"items\":[{\"automationId\":\"" + AU1 + "\",\"name\":\"X\",\"latestPublishedVersion\":{\"automationVersionId\":\"" + V1
+                        + "\",\"versionNumber\":0}}],\"nextCursor\":null,\"capabilities\":{\"rename\":true,\"execute\":true}}",
+                "{\"items\":[{\"automationId\":\"" + AU1 + "\",\"name\":\"X\",\"latestPublishedVersion\":{\"automationVersionId\":\"" + V1
+                        + "\",\"versionNumber\":1.5}}],\"nextCursor\":null,\"capabilities\":{\"rename\":true,\"execute\":true}}",
+                "{\"items\":[{\"automationId\":\"" + AU1 + "\",\"name\":\"X\",\"latestPublishedVersion\":{\"automationVersionId\":\"" + V1
+                        + "\",\"versionNumber\":1,\"package\":\"zip\"}}],\"nextCursor\":null,\"capabilities\":{\"rename\":true,\"execute\":true}}",
+                "{\"items\":[" + ok + "," + ok + "],\"nextCursor\":null,\"capabilities\":{\"rename\":true,\"execute\":true}}"}) {
+            platform.pages.put(auPath(A, WS1) + "?limit=100", body);
+            assertEquals(Failure.INVALID, failure(() -> directory.automations(org, ws)), body);
+        }
+        assertEquals(0, ended.get());
+    }
+
+    @Test
+    void listaMaiorQueOTetoDePaginasEAvisadaComoIncompleta() throws Exception {
+        java.util.UUID org = java.util.UUID.fromString(A);
+        java.util.UUID ws = java.util.UUID.fromString(WS1);
+        for (int i = 0; i < PlatformDirectory.MAX_PAGES + 2; i++) {
+            String key = auPath(A, WS1) + "?limit=100" + (i == 0 ? "" : "&cursor=c" + i);
+            platform.pages.put(key, "{\"items\":[{\"automationId\":\"" + String.format("00000000-0000-4000-8000-%012d", 5000 + i)
+                    + "\",\"name\":\"A" + i + "\",\"latestPublishedVersion\":null}],\"nextCursor\":\"c" + (i + 1) + "\",\"capabilities\":{\"rename\":false,\"execute\":false}}");
+        }
+        com.nekkora.client.nav.Automation.Listing l = directory.automations(org, ws);
+        assertEquals(PlatformDirectory.MAX_PAGES, l.items().size());
+        assertTrue(l.truncated(), "a tela avisa que ha mais do que mostra");
+        assertEquals(PlatformDirectory.MAX_PAGES, platform.pageRequests.size(), "o aplicativo para no teto: nao consulta sem fim");
+    }
+
     @Test
     void semConexaoTlsETempoSaoFalhasProprias() throws Exception {
         Directory semConfianca = new PlatformDirectory(new PlatformApi(platform.origin(), null, Duration.ofSeconds(3), Duration.ofSeconds(3)), () -> token, ended::incrementAndGet);

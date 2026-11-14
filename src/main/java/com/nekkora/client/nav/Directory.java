@@ -17,6 +17,15 @@ public interface Directory {
     /** As organizacoes de que a pessoa participa agora, na ordem da Platform (nome e, no empate, identificador). */
     List<Organization> organizations() throws Failed;
 
+    /**
+     * Os ambientes ATIVOS da organizacao que a pessoa pode acessar, na ordem da Platform. A organizacao e conferida pelo
+     * servidor a cada chamada: fora do alcance da pessoa, {@link Failure#NOT_FOUND}.
+     */
+    List<Workspace> workspaces(java.util.UUID organization) throws Failed;
+
+    /** As automacoes ativas do ambiente e o que a pessoa pode fazer com elas, na ordem da Platform. */
+    Automation.Listing automations(java.util.UUID organization, java.util.UUID workspace) throws Failed;
+
     /** Por que uma consulta nao trouxe o resultado. */
     enum Failure {
         /** A sessao nao vale mais: o aplicativo volta para a entrada. */

@@ -1,5 +1,6 @@
 package com.nekkora.client.ui;
 
+import com.nekkora.client.nav.Automation;
 import com.nekkora.client.nav.Directory.Failure;
 import com.nekkora.client.nav.Organization;
 import com.nekkora.client.nav.Profile;
@@ -14,6 +15,25 @@ public final class NavText {
     public static final String AWAITING_ACTIVATION = "Aguardando ativação";
     public static final String AWAITING_ACTIVATION_HINT = "A Nekkora ainda não ativou esta organização. O aplicativo não ativa organizações.";
     public static final String BACK = "Voltar para as organizações";
+
+    public static final String WORKSPACE = "Ambiente";
+    public static final String WORKSPACE_PLACEHOLDER = "Selecione um ambiente";
+    public static final String WORKSPACES_LOADING = "Carregando ambientes...";
+    public static final String WORKSPACES_NONE = "Nenhum ambiente cadastrado";
+    public static final String WORKSPACES_NONE_HINT = "Crie um ambiente na Platform para continuar.";
+    public static final String AUTOMATIONS_HINT = "Selecione um ambiente para ver as automações.";
+    public static final String AUTOMATIONS_LOADING = "Carregando automações...";
+    public static final String AUTOMATIONS_EMPTY = "Nenhuma automação neste ambiente.";
+    public static final String AUTOMATIONS_TRUNCATED = "A lista está incompleta: há mais automações do que o aplicativo mostra de uma vez.";
+    public static final String RUN = "Executar";
+    public static final String EDIT = "Editar";
+    public static final String EDIT_DENIED = "Você não tem permissão para editar automações neste ambiente.";
+    public static final String NEW_AUTOMATION = "Nova automação";
+    public static final String IMPORT_ZIP = "Importar (.zip)";
+    public static final String NEEDS_WORKSPACE = "Selecione um ambiente primeiro.";
+    /** Acao que ainda nao existe nesta versao. Nao e falta de permissao da pessoa, e o texto nao pode sugerir isso. */
+    public static final String ACTION_UNAVAILABLE = "Indisponível nesta versão de teste.";
+    public static final String ACTIONS_UNAVAILABLE_NOTE = "Executar, Editar, Nova automação e Importar ainda não estão disponíveis nesta versão de teste.";
 
     public static final String MENU = "Menu do usuário";
     public static final String MENU_SETTINGS = "Configurações";
@@ -39,6 +59,18 @@ public final class NavText {
             case INVALID -> "A Platform respondeu de um jeito inesperado. Tente novamente.";
             case SESSION_ENDED -> "Sua sessão terminou. Entre novamente.";
         };
+    }
+
+    /**
+     * Linha da versao de uma automacao. O numero e o da versao PUBLICADA na Platform; a versao DECLARADA no pacote, quando
+     * existe, aparece com o seu proprio nome. Sem versao publicada (so rascunho, ou nenhuma versao), a linha diz isso.
+     */
+    public static String version(Automation a) {
+        Automation.Published p = a.published();
+        if (p == null) {
+            return "Sem versão publicada";
+        }
+        return "Versão publicada " + p.number() + (p.packageVersion() == null ? "" : " · versão do pacote " + p.packageVersion());
     }
 
     /** Como o leitor de tela anuncia um cartao: nome, identificador e, se for o caso, o estado. */

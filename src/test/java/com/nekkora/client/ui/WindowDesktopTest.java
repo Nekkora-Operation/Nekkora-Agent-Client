@@ -164,11 +164,10 @@ class WindowDesktopTest {
             String t = String.valueOf(read(l::getText));
             assertFalse(t.matches("(?s).*(https?://|[0-9a-f]{8}-[0-9a-f]{4}|127\\.0\\.0\\.1).*"), t);
         }
-        // os botoes da janela: Entrar, Cancelar (oculto) e a troca de tema, alem dos controles da barra de titulo
+        // os botoes NA TELA: Entrar e a troca de tema, alem dos controles da barra de titulo (Cancelar so aparece na espera)
         List<String> proprios = read(() -> all(window.getRootPane(), JButton.class).stream()
-                .filter(b -> b instanceof PrimaryButton || b instanceof GhostButton).map(b -> b.getClass().getSimpleName()).sorted().toList());
-        // (as telas de depois da entrada ja existem, ocultas: "voltar" e "Tentar novamente" entram na conta)
-        assertEquals(List.of("GhostButton", "GhostButton", "GhostButton", "PrimaryButton", "PrimaryButton"), proprios);
+                .filter(b -> (b instanceof PrimaryButton || b instanceof GhostButton) && b.isShowing()).map(b -> b.getClass().getSimpleName()).sorted().toList());
+        assertEquals(List.of("GhostButton", "PrimaryButton"), proprios);
         assertFalse(read(() -> window.avatar().isVisible()), "sem entrada, sem avatar");
         assertFalse(read(() -> window.organizationsView().isShowing() || window.contextView().isShowing()));
         assertEquals(7, read(() -> window.getIconImages().size()), "icone oficial em todos os tamanhos");
