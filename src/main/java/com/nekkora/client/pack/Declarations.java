@@ -2,11 +2,9 @@ package com.nekkora.client.pack;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -65,18 +63,12 @@ public record Declarations(boolean requirementsFile, List<String> exact, List<St
         List<String> exact = new ArrayList<>();
         List<String> unsupported = new ArrayList<>();
         if (req) {
-            Set<String> seen = new HashSet<>();
-            for (String raw : text(rootFiles.get("requirements.txt")).split("\\r?\\n")) {
-                String line = raw.split("#", 2)[0].strip();
-                if (line.isEmpty()) continue;
-                Matcher m = DEPENDENCY.matcher(line);
-                if (!ExecutionPackage.validDependency(line) || !m.matches()) {
-                    unsupported.add(ZipNames.display(line));
-                } else if (!seen.add(ExecutionPackage.normalized(m.group(1)))) {
-                    unsupported.add(ZipNames.display(line) + " (repetida)");
-                } else {
-                    exact.add(line);
-                }
+            // a MESMA leitura que a tela usa (RequirementsFile): nenhuma linha e descartada, e o que o pacote nao representa
+            // fica dito por linha
+            RequirementsFile.Parsed parsed = RequirementsFile.parse(text(rootFiles.get("requirements.txt")));
+            exact.addAll(parsed.dependencies());
+            for (RequirementsFile.Line l : parsed.problems()) {
+                unsupported.add("linha " + l.number() + ": " + l.text() + " — " + l.kind().label());
             }
         }
         List<String> other = new ArrayList<>();
@@ -117,7 +109,6 @@ public record Declarations(boolean requirementsFile, List<String> exact, List<St
         return new Declarations(req, exact, unsupported, other, python, source, pyUnsupported);
     }
 
-    private static final Pattern DEPENDENCY = Pattern.compile("([A-Za-z0-9][A-Za-z0-9._-]{0,79})(\\[[A-Za-z0-9,._-]{1,80}])?==([0-9][0-9A-Za-z.+!-]{0,40})");
 
     private static String text(byte[] b) {
         String s = new String(b, StandardCharsets.UTF_8);

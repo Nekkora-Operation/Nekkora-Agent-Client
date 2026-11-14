@@ -602,6 +602,19 @@ final class LocalActions implements ContextView.Actions {
                     reveal.accept(generatedPath);
                 }
             }
+
+            @Override
+            public void selectRequirements() {
+                String file = chooseRequirements();
+                if (file != null) {
+                    setRequirementsFile(file);
+                }
+            }
+
+            @Override
+            public void clearRequirements() {
+                clearRequirementsFile();
+            }
         });
         open(NavText.GENERATE_TITLE, f, () -> dropGenerate(f), () -> {
             generateForm = f;
@@ -635,6 +648,72 @@ final class LocalActions implements ContextView.Actions {
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         chooser.setMultiSelectionEnabled(false);
         return chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    /** Seletor do ARQUIVO de dependencias (um arquivo de texto; nunca uma pasta). Nulo se a pessoa desistiu. */
+    private String chooseRequirements() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(NavText.REQUIREMENTS_SELECT_TITLE);
+        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        chooser.setMultiSelectionEnabled(false);
+        chooser.setFileFilter(new FileNameExtensionFilter(NavText.REQUIREMENTS_FILTER, "txt"));
+        Workshop.Draft draft = generateDraft;
+        if (draft != null) {
+            chooser.setCurrentDirectory(chooser.getFileSystemView().createFileObject(draft.sourceLabel())); // comeca na pasta do projeto
+        }
+        return chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    /**
+     * A pessoa escolheu o arquivo de dependencias: ele e lido uma vez, como TEXTO, fora da fila de eventos. Nada e instalado,
+     * resolvido na rede nem executado. Se nao puder ser lido, a selecao anterior fica como estava e a tela diz por que.
+     */
+    void setRequirementsFile(String path) {
+        GenerateForm f = generateForm;
+        Workshop.Draft draft = generateDraft;
+        if (f == null || draft == null || !f.usable() || f.done() || f.busy()) {
+            return;
+        }
+        generateTurn++;
+        f.setBusy(true, NavText.WORKING);
+        background.execute(() -> {
+            Workshop.Refused refused = null;
+            try {
+                draft.selectRequirements(path);
+            } catch (Workshop.Refused r) {
+                refused = r;
+            } catch (RuntimeException | LinkageError e) {
+                refused = new Workshop.Refused(NavText.REQUIREMENTS_FAILED);
+            }
+            Workshop.Refused why = refused;
+            SwingUtilities.invokeLater(() -> {
+                if (generateForm != f) {
+                    return;
+                }
+                f.setBusy(false, null);
+                if (generateDraft != draft) {
+                    return;
+                }
+                if (why != null) {
+                    f.showProblem(why);
+                    return;
+                }
+                f.showDependencies(draft);
+                refreshSummary();
+            });
+        });
+    }
+
+    /** "Remover selecao": nenhum arquivo e a origem das dependencias. O arquivo em si nao e tocado. */
+    void clearRequirementsFile() {
+        GenerateForm f = generateForm;
+        Workshop.Draft draft = generateDraft;
+        if (f == null || draft == null || f.busy() || f.done()) {
+            return;
+        }
+        draft.clearRequirements();
+        f.showDependencies(draft);
+        refreshSummary();
     }
 
     /** "Salvar como": so .zip. Devolve o destino escolhido (com a extensao), ou nulo se a pessoa desistiu. */
@@ -724,7 +803,7 @@ final class LocalActions implements ContextView.Actions {
             Workshop.Refused refused = null;
             String failed = null;
             try {
-                workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
+                workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies());
             } catch (Workshop.Refused r) {
                 refused = r;
             } catch (RuntimeException | LinkageError e) {
@@ -773,7 +852,7 @@ final class LocalActions implements ContextView.Actions {
             Workshop.PackageSummary summary = null;
             Workshop.Refused refused = null;
             try {
-                summary = workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
+                summary = workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies());
             } catch (Workshop.Refused r) {
                 refused = r;
             } catch (RuntimeException | LinkageError e) {
@@ -826,8 +905,8 @@ final class LocalActions implements ContextView.Actions {
             Workshop.Generated generated = null;
             Workshop.Refused refused = null;
             try {
-                generated = workshop.generate(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed(), destination,
-                        replace, generateCancelled::get);
+                generated = workshop.generate(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), destination, replace,
+                        generateCancelled::get);
             } catch (Workshop.Refused r) {
                 refused = r;
             } catch (RuntimeException | LinkageError e) {

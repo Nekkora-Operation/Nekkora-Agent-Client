@@ -56,13 +56,28 @@ final class GenerateForm extends JPanel {
 
         /** Abrir a pasta do arquivo gerado. */
         void reveal();
+
+        /** "Selecionar requirements.txt": a pessoa escolhe o arquivo de dependencias. */
+        void selectRequirements();
+
+        /** "Remover selecao": nenhum arquivo e a origem das dependencias. */
+        void clearRequirements();
     }
 
     /**
      * O que a pessoa informou. {@code version} em branco: a do manifesto existente ou, sem ele, a inicial. {@code python}: o
-     * texto do campo como esta (em branco = sem restricao declarada).
+     * texto do campo como esta (em branco = sem restricao declarada). {@code dependencies}: a ORIGEM que vale (manifesto,
+     * arquivo ou lista digitada) e, se for o caso, a lista digitada e a copia do arquivo de fora.
      */
-    record Values(String name, String version, String entry, String python, List<String> dependencies, boolean dependenciesConfirmed) {
+    record Values(String name, String version, String entry, String python, Workshop.DependencyChoice dependencies) {
+    }
+
+    /** Uma opcao de "Origem das dependencias". {@code source} nulo: ainda nao escolhida (ha duas origens que divergem). */
+    record SourceItem(Workshop.DependencySource source, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
     }
 
     private final JLabel title = new JLabel(NavText.GENERATE_TITLE);
@@ -83,8 +98,31 @@ final class GenerateForm extends JPanel {
     private final JTextField python = new JTextField(16);
     private final Notice pythonOrigin = new Notice(WIDTH);
     private final Notice pythonNotice = new Notice(WIDTH);
+    private final JTextField requirementsPath = new JTextField(NavText.REQUIREMENTS_NONE, 26);
+    private final ActionButton selectRequirements = ActionButton.compact(NavText.REQUIREMENTS_SELECT, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
+    private final GhostButton clearRequirements = GhostButton.text(NavText.REQUIREMENTS_CLEAR);
+    private final Notice requirementsNotice = new Notice(WIDTH);
+    private final Notice requirementsSummary = new Notice(WIDTH);
+    private final Notice requirementsProblems = new Notice(WIDTH);
+    private final javax.swing.JCheckBox copyRequirements = new javax.swing.JCheckBox();
+    private final GhostButton requirementsDetailsToggle = GhostButton.text(NavText.REQUIREMENTS_DETAILS_SHOW);
+    private final JTextArea requirementsDetails = new JTextArea(5, 26);
+    private final JScrollPane requirementsDetailsScroll = new JScrollPane(requirementsDetails);
+    private final JComboBox<SourceItem> source = new JComboBox<>();
+    private final Notice sourceNotice = new Notice(WIDTH);
     private final JTextArea dependencies = new JTextArea(3, 26);
     private final Notice dependenciesNotice = new Notice(WIDTH);
+    /** O que cada origem declara agora (para mostrar a lista da origem escolhida). */
+    private List<String> manifestDependencies = List.of();
+    private List<String> fileDependencies = List.of();
+    private boolean hasManifest;
+    private boolean hasFile;
+    private boolean fileResolved = true;
+    private boolean externalFile;
+    /** A pessoa mexeu na caixa de origem: a escolha dela e mantida enquanto a origem existir. */
+    private boolean sourceChosen;
+    /** A lista que a pessoa digitou (guardada quando ela muda de origem e volta). */
+    private String manualText = "";
     private final JTextArea composition = new JTextArea(7, 26);
     private final Notice progress = new Notice(WIDTH);
     private final Notice error = new Notice(WIDTH);
@@ -155,7 +193,36 @@ final class GenerateForm extends JPanel {
         dependencies.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override
             public void focusLost(java.awt.event.FocusEvent e) {
-                dependenciesNotice.clear();
+                if (chosenSource() == Workshop.DependencySource.MANUAL) {
+                    manualText = dependencies.getText();
+                    showDependencyList();
+                    fire();
+                }
+            }
+        });
+        requirementsPath.setEditable(false);
+        requirementsPath.getAccessibleContext().setAccessibleName(NavText.REQUIREMENTS_LABEL);
+        selectRequirements.addActionListener(e -> events.selectRequirements());
+        clearRequirements.addActionListener(e -> events.clearRequirements());
+        copyRequirements.setOpaque(false);
+        copyRequirements.addActionListener(e -> fire());
+        copyRequirements.setVisible(false);
+        requirementsDetails.setEditable(false);
+        requirementsDetails.setLineWrap(false);
+        requirementsDetails.getAccessibleContext().setAccessibleName(NavText.REQUIREMENTS_DETAILS);
+        requirementsDetailsScroll.setVisible(false);
+        requirementsDetailsToggle.setVisible(false);
+        requirementsDetailsToggle.addActionListener(e -> {
+            requirementsDetailsScroll.setVisible(!requirementsDetailsScroll.isVisible());
+            requirementsDetailsToggle.setText(requirementsDetailsScroll.isVisible() ? NavText.REQUIREMENTS_DETAILS_HIDE : NavText.REQUIREMENTS_DETAILS_SHOW);
+            fit();
+        });
+        source.getAccessibleContext().setAccessibleName(NavText.DEPENDENCY_SOURCE);
+        source.addActionListener(e -> {
+            if (!filling) {
+                sourceChosen = true;
+                sourceNotice.clear();
+                showDependencyList();
                 fire();
             }
         });
@@ -191,6 +258,22 @@ final class GenerateForm extends JPanel {
         add(left(advancedToggle));
         field(advanced, NavText.GENERATE_VERSION, version, version, versionNotice);
         field(advanced, NavText.GENERATE_PYTHON, python, python, pythonOrigin, pythonNotice);
+        JPanel requirementsButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, ClientTheme.SPACE_2, 0));
+        requirementsButtons.setOpaque(false);
+        requirementsButtons.add(selectRequirements);
+        requirementsButtons.add(clearRequirements);
+        JPanel requirementsBox = new JPanel();
+        requirementsBox.setLayout(new BoxLayout(requirementsBox, BoxLayout.Y_AXIS));
+        requirementsBox.setOpaque(false);
+        requirementsBox.add(left(requirementsPath));
+        requirementsBox.add(Box.createVerticalStrut(4));
+        requirementsBox.add(left(requirementsButtons));
+        field(advanced, NavText.REQUIREMENTS_LABEL, requirementsBox, requirementsPath, requirementsNotice, requirementsSummary, requirementsProblems);
+        advanced.add(left(copyRequirements));
+        advanced.add(left(requirementsDetailsToggle));
+        advanced.add(left(requirementsDetailsScroll));
+        advanced.add(Box.createVerticalStrut(ClientTheme.SPACE_3));
+        field(advanced, NavText.DEPENDENCY_SOURCE, source, source, sourceNotice);
         JScrollPane deps = new JScrollPane(dependencies);
         field(advanced, NavText.GENERATE_DEPENDENCIES, deps, dependencies, dependenciesNotice);
         JScrollPane comp = new JScrollPane(composition);
@@ -363,7 +446,8 @@ final class GenerateForm extends JPanel {
             } else {
                 pythonOrigin.show(Notice.Kind.INFO, origin);
             }
-            dependencies.setText(String.join("\n", m == null ? draft.dependencies() : m.dependencies()));
+            manualText = "";
+            showDependencies(draft);
             done = false;
             summary.clear();
             composition.setText("");
@@ -377,6 +461,124 @@ final class GenerateForm extends JPanel {
             filling = false;
         }
         refresh();
+    }
+
+    /**
+     * As dependencias que a pasta declara AGORA: o arquivo de dependencias selecionado (o da raiz, reconhecido sozinho, ou o
+     * que a pessoa escolheu), com a situacao de cada linha, e as origens possiveis. Uma so origem vale. Quando o manifesto
+     * da pasta e o arquivo dizem listas diferentes, NENHUMA e escolhida: a pessoa decide antes de gerar.
+     */
+    void showDependencies(Workshop.Draft draft) {
+        boolean was = filling;
+        filling = true;
+        try {
+            Workshop.DependencySource before = chosenSource();
+            Workshop.Manifest m = draft.existingManifest().orElse(null);
+            Workshop.Requirements r = draft.requirements().orElse(null);
+            hasManifest = m != null;
+            manifestDependencies = m == null ? List.of() : m.dependencies();
+            hasFile = r != null;
+            fileDependencies = r == null ? List.of() : r.dependencies();
+            fileResolved = r == null || r.resolved();
+            externalFile = r != null && r.external();
+            requirementsPath.setText(r == null ? NavText.REQUIREMENTS_NONE : r.path());
+            requirementsPath.setCaretPosition(0);
+            requirementsPath.setToolTipText(r == null ? null : r.path());
+            clearRequirements.setVisible(r != null);
+            if (r == null) {
+                requirementsNotice.clear();
+                requirementsSummary.clear();
+                requirementsProblems.clear();
+                requirementsDetails.setText("");
+                requirementsDetailsToggle.setVisible(false);
+                requirementsDetailsScroll.setVisible(false);
+                copyRequirements.setVisible(false);
+                copyRequirements.setSelected(false);
+            } else {
+                requirementsNotice.show(Notice.Kind.INFO, NavText.requirementsWhere(r));
+                requirementsSummary.show(Notice.Kind.PLAIN, NavText.requirementsSummary(r));
+                // linhas que o pacote nao representa: ditas uma a uma. E um aviso; so impede se este arquivo for a origem
+                requirementsProblems.show(Notice.Kind.WARNING, NavText.requirementsProblems(r));
+                requirementsDetails.setText(NavText.requirementsDetails(r));
+                requirementsDetails.setCaretPosition(0);
+                requirementsDetailsToggle.setVisible(!r.lines().isEmpty());
+                copyRequirements.setVisible(r.external() && r.packagePath() != null);
+                copyRequirements.setText(r.packagePath() == null ? "" : NavText.requirementsCopy(r.packagePath()));
+                copyRequirements.setSelected(false); // copiar para o pacote e sempre uma acao explicita
+            }
+            javax.swing.DefaultComboBoxModel<SourceItem> items = new javax.swing.DefaultComboBoxModel<>();
+            boolean conflict = draft.dependencySourcesConflict();
+            if (conflict) {
+                items.addElement(new SourceItem(null, NavText.DEPENDENCY_SOURCE_CHOOSE));
+            }
+            if (hasManifest) {
+                items.addElement(new SourceItem(Workshop.DependencySource.MANIFEST, NavText.dependencySourceManifest(manifestDependencies.size())));
+            }
+            if (hasFile) {
+                items.addElement(new SourceItem(Workshop.DependencySource.FILE, NavText.dependencySourceFile(r, fileDependencies.size())));
+            }
+            items.addElement(new SourceItem(Workshop.DependencySource.MANUAL, NavText.DEPENDENCY_SOURCE_MANUAL));
+            source.setModel(items);
+            // a escolha da pessoa e mantida enquanto a origem existir; senao vale a origem unica, ou nenhuma (conflito)
+            boolean keep = sourceChosen && !was && before != null && (before == Workshop.DependencySource.MANUAL
+                    || before == Workshop.DependencySource.MANIFEST && hasManifest || before == Workshop.DependencySource.FILE && hasFile);
+            if (was) {
+                sourceChosen = false; // outra pasta: a escolha era da pasta anterior
+            }
+            Workshop.DependencySource wanted = keep ? before : draft.defaultDependencySource();
+            select(wanted);
+            sourceNotice.show(Notice.Kind.WARNING, conflict ? NavText.DEPENDENCY_SOURCES_DIFFER : "");
+            showDependencyList();
+            if (conflict || (r != null && !r.resolved())) {
+                setAdvancedOpen(true); // ha algo que so a pessoa decide
+            }
+        } finally {
+            filling = was;
+        }
+        refresh();
+    }
+
+    private void select(Workshop.DependencySource wanted) {
+        for (int i = 0; i < source.getItemCount(); i++) {
+            if (source.getItemAt(i).source() == wanted) {
+                source.setSelectedIndex(i);
+                return;
+            }
+        }
+        source.setSelectedIndex(0);
+    }
+
+    Workshop.DependencySource chosenSource() {
+        Object o = source.getSelectedItem();
+        return o instanceof SourceItem s ? s.source() : null;
+    }
+
+    /** A lista da origem escolhida. So a "edicao manual" e digitavel; as outras mostram o que a origem declara. */
+    private void showDependencyList() {
+        Workshop.DependencySource s = chosenSource();
+        boolean manual = s == Workshop.DependencySource.MANUAL;
+        List<String> shown = s == Workshop.DependencySource.MANIFEST ? manifestDependencies : s == Workshop.DependencySource.FILE ? fileDependencies : List.of();
+        if (manual) {
+            if (!dependencies.isEditable()) {
+                dependencies.setText(manualText);
+            }
+        } else {
+            if (dependencies.isEditable()) {
+                manualText = dependencies.getText();
+            }
+            dependencies.setText(String.join("\n", shown));
+        }
+        dependencies.setEditable(manual);
+        dependencies.setCaretPosition(0);
+        boolean none = manual ? dependencies.getText().isBlank() : shown.isEmpty();
+        if (s == null) {
+            dependenciesNotice.clear();
+        } else if (s == Workshop.DependencySource.FILE && !fileResolved) {
+            dependenciesNotice.show(Notice.Kind.WARNING, NavText.REQUIREMENTS_UNRESOLVED_HINT);
+        } else {
+            dependenciesNotice.show(Notice.Kind.PLAIN, none ? NavText.DEPENDENCIES_NONE : "");
+        }
+        fit();
     }
 
     /** O resumo do que sera gerado com as escolhas atuais. */
@@ -455,14 +657,14 @@ final class GenerateForm extends JPanel {
             case NAME -> nameNotice;
             case VERSION -> versionNotice;
             case PYTHON -> pythonNotice;
-            case DEPENDENCIES -> dependenciesNotice;
+            case DEPENDENCIES -> chosenSource() == null ? sourceNotice : dependenciesNotice;
             default -> error;
         };
         if (where == pythonNotice) {
             pythonCommitted = true;
         }
         where.show(Notice.Kind.ERROR, text, r.code() == null ? null : NavText.supportCode(r.code()));
-        if (where == versionNotice || where == pythonNotice || where == dependenciesNotice) {
+        if (where == versionNotice || where == pythonNotice || where == dependenciesNotice || where == sourceNotice) {
             setAdvancedOpen(true);
         }
         fit();
@@ -473,7 +675,12 @@ final class GenerateForm extends JPanel {
         entryNotice.clear();
         nameNotice.clear();
         versionNotice.clear();
-        dependenciesNotice.clear();
+        if (dependenciesNotice.isError()) {
+            showDependencyList();
+        }
+        if (sourceNotice.isError()) {
+            sourceNotice.clear();
+        }
         if (pythonNotice.isError() && !pythonInvalid()) {
             showPythonReading();
         }
@@ -521,7 +728,7 @@ final class GenerateForm extends JPanel {
 
     private void refresh() {
         boolean edit = usable && !busy && !done;
-        for (Component c : new Component[] {entry, name, version, python, dependencies}) {
+        for (Component c : new Component[] {entry, name, version, python, dependencies, source, selectRequirements, clearRequirements, copyRequirements}) {
             c.setEnabled(edit);
         }
         browse.setEnabled(!busy);
@@ -537,13 +744,17 @@ final class GenerateForm extends JPanel {
     }
 
     Values values() {
-        List<String> deps = new ArrayList<>();
-        for (String line : dependencies.getText().split("\\R")) {
-            if (!line.isBlank()) {
-                deps.add(line.trim());
+        Workshop.DependencySource s = chosenSource();
+        List<String> manual = new ArrayList<>();
+        if (s == Workshop.DependencySource.MANUAL) {
+            for (String line : dependencies.getText().split("\\R")) {
+                if (!line.isBlank()) {
+                    manual.add(line.trim());
+                }
             }
         }
-        return new Values(name.getText().trim(), version.getText().trim(), entryValue(), python.getText().trim(), deps, true);
+        boolean copy = s == Workshop.DependencySource.FILE && externalFile && copyRequirements.isVisible() && copyRequirements.isSelected();
+        return new Values(name.getText().trim(), version.getText().trim(), entryValue(), python.getText().trim(), new Workshop.DependencyChoice(s, manual, copy));
     }
 
     boolean usable() {
@@ -580,6 +791,59 @@ final class GenerateForm extends JPanel {
 
     JTextArea dependenciesArea() {
         return dependencies;
+    }
+
+    JTextField requirementsPathField() {
+        return requirementsPath;
+    }
+
+    ActionButton selectRequirementsButton() {
+        return selectRequirements;
+    }
+
+    GhostButton clearRequirementsButton() {
+        return clearRequirements;
+    }
+
+    Notice requirementsNotice() {
+        return requirementsNotice;
+    }
+
+    Notice requirementsSummaryNotice() {
+        return requirementsSummary;
+    }
+
+    Notice requirementsProblemsNotice() {
+        return requirementsProblems;
+    }
+
+    javax.swing.JCheckBox copyRequirementsBox() {
+        return copyRequirements;
+    }
+
+    GhostButton requirementsDetailsToggle() {
+        return requirementsDetailsToggle;
+    }
+
+    String requirementsDetailsText() {
+        return requirementsDetails.getText();
+    }
+
+    JComboBox<SourceItem> sourceBox() {
+        return source;
+    }
+
+    /** Escolhe a origem das dependencias, como a pessoa faria na caixa. */
+    void chooseSource(Workshop.DependencySource wanted) {
+        select(wanted); // dispara o mesmo aviso da caixa: e uma escolha da pessoa
+    }
+
+    Notice sourceNotice() {
+        return sourceNotice;
+    }
+
+    Notice dependenciesNotice() {
+        return dependenciesNotice;
     }
 
     PrimaryButton generateButton() {
@@ -624,7 +888,7 @@ final class GenerateForm extends JPanel {
 
     /** A frase de erro na tela, de qualquer campo (vazio se nao ha erro). */
     String errorText() {
-        for (Notice n : List.of(error, blockers, entryNotice, nameNotice, versionNotice, pythonNotice, dependenciesNotice)) {
+        for (Notice n : List.of(error, blockers, entryNotice, nameNotice, versionNotice, pythonNotice, dependenciesNotice, sourceNotice)) {
             if (n.isError()) {
                 return n.text();
             }
@@ -678,6 +942,10 @@ final class GenerateForm extends JPanel {
             l.setForeground(Themes.color(t.text()));
         }
         composition.setFont(Themes.font(ClientTheme.FONT_SIZE_XS, false));
+        requirementsDetails.setFont(Themes.font(ClientTheme.FONT_SIZE_XS, false));
+        requirementsPath.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
+        copyRequirements.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
+        copyRequirements.setForeground(Themes.color(t.text()));
         generatedPath.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
     }
 }
