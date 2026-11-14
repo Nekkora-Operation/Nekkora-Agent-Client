@@ -1,5 +1,6 @@
 package com.nekkora.client.ui;
 
+import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -10,6 +11,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 
+import com.nekkora.client.BuildInfo;
 import com.nekkora.client.signin.SignInState;
 import com.nekkora.client.signin.SignInState.Phase;
 import com.nekkora.client.theme.ClientTheme;
@@ -18,7 +20,7 @@ import com.nekkora.client.theme.ClientTheme;
  * Tela de entrada: logo completa no centro, "Entrar" abaixo e, sob o botao, uma area de altura fixa para o andamento
  * (spinner, "Aguardando login no navegador..." e "Cancelar") ou para a mensagem do resultado da ultima tentativa
  * (erro, recusa, prazo ou cancelamento). Sem e-mail, senha,
- * codigo ou identificador tecnico: a entrada acontece no navegador.
+ * codigo ou identificador tecnico: a entrada acontece no navegador. No pe da tela, o rodape ({@link SignInFooter}).
  */
 public final class SignInView extends JPanel {
 
@@ -35,10 +37,11 @@ public final class SignInView extends JPanel {
     private final JLabel progress = new JLabel();
     private final WrappedText message = new WrappedText(MESSAGE_WIDTH);
     private final JPanel progressRow = new JPanel(new FlowLayout(FlowLayout.CENTER, ClientTheme.SPACE_2, 0));
+    private final SignInFooter footer;
     private SignInState shown = SignInState.INITIAL;
 
-    public SignInView(Runnable onSignIn, Runnable onCancel) {
-        super(new GridBagLayout());
+    public SignInView(Runnable onSignIn, Runnable onCancel, BuildInfo build) {
+        super(new BorderLayout());
         setOpaque(true);
         setFocusable(true);
         getAccessibleContext().setAccessibleName("Entrada");
@@ -78,7 +81,13 @@ public final class SignInView extends JPanel {
         column.add(signIn);
         column.add(Box.createVerticalStrut(ClientTheme.SPACE_4));
         column.add(status);
-        add(column);
+        // o conteudo fica centralizado no espaco acima do rodape; o rodape fica sempre no pe da tela, em todos os estados
+        JPanel center = new JPanel(new GridBagLayout());
+        center.setOpaque(false);
+        center.add(column);
+        add(center, BorderLayout.CENTER);
+        footer = new SignInFooter(build);
+        add(footer, BorderLayout.SOUTH);
 
         Themes.addListener(t -> restyle());
         restyle();
@@ -107,6 +116,10 @@ public final class SignInView extends JPanel {
 
     WrappedText message() {
         return message;
+    }
+
+    SignInFooter footer() {
+        return footer;
     }
 
     /** Mostra o estado. Na fila de eventos. */

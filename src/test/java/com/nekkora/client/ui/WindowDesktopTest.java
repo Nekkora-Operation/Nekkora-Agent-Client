@@ -193,6 +193,95 @@ class WindowDesktopTest {
         assertEquals(852.0 / 128.0, BrandAssets.lockup(ClientTheme.NEKKORA_LIGHT, 44).getWidth() / 128.0, 0.01);
     }
 
+    // ------------------------------------------------------------------ rodape
+
+    /** O rodape esta inteiro dentro da tela, no pe dela, abaixo de tudo o que a entrada mostra, sem encostar em nada. */
+    private void assertFooterClear(String quando) throws Exception {
+        SignInView v = window.signInView();
+        SignInFooter f = read(v::footer);
+        assertTrue(read(f::isShowing), quando + ": rodape visivel");
+        Rectangle fb = read(() -> SwingUtilities.convertRectangle(f.getParent(), f.getBounds(), v));
+        int h = read(v::getHeight);
+        int w = read(v::getWidth);
+        assertEquals(h, fb.y + fb.height, quando + ": rodape no pe da tela");
+        assertTrue(fb.x >= 0 && fb.x + fb.width <= w && fb.y >= 0, quando + ": rodape inteiro");
+        for (JLabel l : read(() -> all(f, JLabel.class))) {
+            Rectangle lb = read(() -> SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), v));
+            assertTrue(lb.x >= 0 && lb.x + lb.width <= w && lb.y + lb.height <= h, quando + ": linha inteira: " + l.getText());
+            assertEquals(read(() -> l.getPreferredSize().width), lb.width, quando + ": texto sem corte: " + l.getText());
+            assertEquals(w / 2.0, lb.getCenterX(), 1.5, quando + ": centralizado: " + l.getText());
+        }
+        List<Component> acima = read(() -> List.<Component>of(all(v, LogoView.class).get(0), v.signInButton(), v.spinner(), v.cancelButton(), v.message()));
+        for (Component c : acima) {
+            if (!read(c::isShowing)) {
+                continue;
+            }
+            Rectangle b = read(() -> SwingUtilities.convertRectangle(c.getParent(), c.getBounds(), v));
+            assertTrue(b.y + b.height <= fb.y, quando + ": " + c.getClass().getSimpleName() + " acima do rodape (" + (b.y + b.height) + " <= " + fb.y + ")");
+        }
+    }
+
+    @Test
+    void rodapeMostraAVersaoDoBuildEmTodosOsEstadosDaEntrada() throws Exception {
+        SignInView v = window.signInView();
+        String esperado = "Versão " + com.nekkora.client.BuildInfoTest.pomVersion();
+        for (ClientTheme theme : ClientTheme.values()) {
+            edt(() -> Themes.apply(theme));
+            String p = theme.libId().equals("light") ? "nekkora-light" : "sakura-dark";
+            JLabel versao = read(() -> v.footer().versionLabel());
+            assertEquals(esperado, read(versao::getText));
+            assertFalse(read(versao::getText).matches("(?s).*([0-9a-f]{7,}|https?://|localhost|laborat|dev\\b).*"), "sem commit nem ambiente no rodape");
+            assertEquals(ClientTheme.FONT_SIZE_XS, read(() -> versao.getFont().getSize()), "fonte do rodape da lib, sem diminuir alem dela");
+            assertEquals(Themes.color(theme.textSecondary()), read(versao::getForeground));
+            assertTrue(Rgb.contrast(theme.textSecondary(), theme.bg()) >= 4.5, theme + ": contraste do rodape");
+            assertFalse(read(versao::isFocusable) || read(() -> v.footer().isFocusable()), "o rodape nao entra na ordem do teclado");
+            assertFooterClear(p + " inicial");
+            evidence(p + "-rodape-inicial");
+
+            edt(() -> v.signInButton().doClick(0));
+            edt(() -> fake.last().listener.browserOpened());
+            assertFooterClear(p + " aguardando");
+            assertEquals(esperado, read(versao::getText));
+            evidence(p + "-rodape-aguardando");
+
+            edt(() -> fake.last().listener.failed(Notice.BROWSER_FAILED)); // a mensagem mais longa
+            assertFooterClear(p + " erro");
+            evidence(p + "-rodape-erro");
+
+            Dimension antes = read(window::getSize);
+            edt(() -> window.setSize(window.getMinimumSize()));
+            edt(window::validate);
+            assertFooterClear(p + " erro, janela minima");
+            evidence(p + "-rodape-erro-janela-minima");
+            edt(() -> window.setSize(antes));
+            edt(window::validate);
+        }
+        // depois de entrar, a tela inicial continua vazia: o rodape e so da entrada
+        edt(() -> v.signInButton().doClick(0));
+        edt(() -> fake.last().listener.signedIn(new FakeSession()));
+        assertEquals(ClientWindow.HOME, read(window::showing));
+        assertFalse(read(() -> v.footer().isShowing()));
+        assertEquals(0, read(() -> all(window.getContentPane(), HomeView.class).get(0).getComponentCount()));
+    }
+
+    @Test
+    void semMetadadosDoBuildORodapeDizDesenvolvimento() throws Exception {
+        AtomicReference<ClientWindow> outra = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            SignInFlow f = new SignInFlow(new FakeSignIn(), Runnable::run);
+            ClientWindow w = new ClientWindow(f, t -> { }, () -> { }, com.nekkora.client.BuildInfo.DEVELOPMENT);
+            w.setLocation(60, 60);
+            w.setVisible(true);
+            outra.set(w);
+        });
+        settle();
+        try {
+            assertEquals("Versão de desenvolvimento", read(() -> outra.get().signInView().footer().versionLabel().getText()));
+        } finally {
+            SwingUtilities.invokeAndWait(() -> outra.get().dispose());
+        }
+    }
+
     // ------------------------------------------------------------------ estados
 
     @Test
