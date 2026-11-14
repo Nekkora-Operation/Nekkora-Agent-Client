@@ -12,7 +12,7 @@ mesmo a um Client alterado.
 ## O que existe hoje
 
 - Uma janela com a tela de entrada: logo, **Entrar** e, abaixo, o andamento ("Aguardando login no navegador...",
-  **Cancelar**) ou a mensagem da última tentativa.
+  **Cancelar**) ou a mensagem do resultado da última tentativa (tabela em `docs/login-pelo-navegador.md`, seção 11).
 - Dois temas, **Sakura Dark** (padrão) e **Nekkora Light**, com os tokens e logos da Nekkora-lib
   ([origem e mapeamento](docs/design/tokens-e-ativos.md)). A troca é o botão de meio círculo na barra de título.
 - **Entrar** abre o navegador padrão na Platform; o aplicativo espera o retorno local e só abre a tela inicial depois
