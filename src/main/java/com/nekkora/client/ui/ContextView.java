@@ -32,7 +32,7 @@ import com.nekkora.client.theme.ClientTheme;
 
 /**
  * Tela da organizacao escolhida. De cima para baixo: a seta para voltar ao seletor e o nome da organizacao; o seletor
- * "Ambiente"; a lista de automacoes do ambiente (area rolavel); as acoes ("Gerar pacote novo" e "Importar (.zip)"), FORA da area rolavel; e o rodape.
+ * "Ambiente"; a lista de automacoes do ambiente (area rolavel); a acao "Gerar pacote novo", FORA da area rolavel; e o rodape.
  * <p>
  * "Ambiente" e so o rotulo da tela para o que a Platform chama de workspace. Nenhum ambiente e escolhido sozinho, e
  * trocar de ambiente apaga a lista anterior antes de mostrar a nova. Carregando, falha (com "Tentar novamente"), lista
@@ -56,8 +56,6 @@ final class ContextView extends JPanel {
 
         /** "Gerar pacote novo": so gera um arquivo .zip neste computador; nao depende de ambiente. */
         Runnable generate();
-
-        Runnable importZip();
     }
 
     /**
@@ -97,7 +95,6 @@ final class ContextView extends JPanel {
     private List<Workshop.LocalItem> local = List.of();
     private List<Workshop.LocalItem> shownLocal = List.of();
     private final ActionButton generate = new ActionButton(NavText.GENERATE_NEW, ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD);
-    private final ActionButton importZip = new ActionButton(NavText.IMPORT_ZIP, ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT);
     private final ButtonRow actionsBar = new ButtonRow();
     private final AppFooter footer;
     private final RefreshControl refresh;
@@ -206,13 +203,7 @@ final class ContextView extends JPanel {
         });
         // area propria das acoes: separada da lista por uma linha, com respiro em cima e embaixo
         actionsBar.setBorder(actionsBorder());
-        importZip.addActionListener(e -> {
-            if (actions != null && actions.importZip() != null) {
-                actions.importZip().run();
-            }
-        });
         actionsBar.add(generate);
-        actionsBar.add(importZip);
         truncated.setHorizontalAlignment(JLabel.CENTER);
         truncated.setVisible(false);
         JPanel bottomTop = new JPanel(new BorderLayout());
@@ -282,12 +273,23 @@ final class ContextView extends JPanel {
         List<Workshop.LocalItem> rest = new ArrayList<>(local);
         for (Automation a : listing.items()) {
             Workshop.LocalItem match = null;
+            // 1o: o mesmo conteudo da versao publicada (impressao digital); 2o: um pacote que a pessoa ligou a esta automacao
             for (Workshop.LocalItem i : rest) {
-                if (a.id().equals(i.linkedAutomationId()) || (a.published() != null && i.matches(a.published().fingerprint()))) {
+                if (a.published() != null && i.matches(a.published().fingerprint())) {
                     match = i;
                     break;
                 }
             }
+            if (match == null) {
+                for (Workshop.LocalItem i : rest) {
+                    if (a.id().equals(i.linkedAutomationId())) {
+                        match = i;
+                        break;
+                    }
+                }
+            }
+            // outras versoes desta automacao guardadas aqui continuam no disco e aparecem em Editar; nao viram item "so local"
+            rest.removeIf(i -> a.id().equals(i.linkedAutomationId()));
             if (match != null) {
                 rest.remove(match);
             }
@@ -406,8 +408,9 @@ final class ContextView extends JPanel {
         enable(run, onRun != null && mayRun, NavText.RUN + ": " + e.name(), onRun == null ? NavText.ACTION_UNAVAILABLE : NavText.RUN_DENIED);
         // item so local: o nome mostrado aqui e da pessoa. Automacao da Platform: so com a permissao (o servidor confere de
         // novo); sem ela o botao fica desabilitado dizendo por que
-        boolean mayEdit = e.localOnly() || capabilities.rename();
-        enable(edit, onEdit != null && mayEdit, NavText.EDIT + ": " + e.name(), onEdit == null ? NavText.ACTION_UNAVAILABLE : NavText.EDIT_DENIED);
+        // (AGENT-CLIENT-PACOTES-001) Editar abre sempre: o pacote desta maquina e escolhido la; a secao de renomear, dentro, e que
+        // depende da permissao
+        enable(edit, onEdit != null, NavText.EDIT + ": " + e.name(), NavText.ACTION_UNAVAILABLE);
         if (onRun != null) {
             run.addActionListener(x -> onRun.accept(e));
         }
@@ -420,7 +423,14 @@ final class ContextView extends JPanel {
             details.add("Versão do pacote " + e.local().packageVersion());
         } else {
             details.add(NavText.version(e.automation()));
-            details.add(e.local() == null ? NavText.LOCAL_ABSENT : NavText.LOCAL_PRESENT + ": " + e.local().name() + " " + e.local().packageVersion());
+            if (e.local() == null) {
+                details.add(NavText.LOCAL_ABSENT);
+            } else {
+                boolean same = e.automation().published() != null && e.local().matches(e.automation().published().fingerprint());
+                // o pacote local so e dito "da versao publicada" quando o conteudo e o mesmo; senao, a linha diz que e outro
+                details.add(NavText.LOCAL_PRESENT + ": " + e.local().name() + " " + e.local().packageVersion()
+                        + (same ? "" : e.local().versionNumber() != null ? " (versão " + e.local().versionNumber() + " da Platform)" : " (não é a versão publicada)"));
+            }
         }
         AutomationRow row = new AutomationRow(e.name(), details, run, edit);
         row.putClientProperty("entry", e);
@@ -435,15 +445,12 @@ final class ContextView extends JPanel {
     }
 
     /**
-     * "Gerar pacote novo" so produz um arquivo .zip neste computador: nao depende de ambiente escolhido. "Importar (.zip)"
-     * guarda o pacote no ambiente, e por isso so vale com organizacao E ambiente escolhidos.
+     * "Gerar pacote novo" so produz um arquivo .zip neste computador: nao depende de ambiente escolhido. O pacote que este
+     * computador usa para uma automacao (local, ou baixado da Platform) e escolhido em "Editar", na linha dela.
      */
     private void refreshActions() {
-        boolean context = organization != null && workspaces.getSelectedItem() instanceof Workspace;
         boolean hasGenerate = actions != null && actions.generate() != null;
-        boolean hasImport = actions != null && actions.importZip() != null;
         enable(generate, hasGenerate, NavText.GENERATE_NEW, NavText.ACTION_UNAVAILABLE);
-        enable(importZip, hasImport && context, NavText.IMPORT_ZIP, hasImport ? NavText.NEEDS_WORKSPACE : NavText.ACTION_UNAVAILABLE);
         // enquanto alguma acao nao existe, a tela diz isso por escrito (nao so na dica do botao)
         List<String> missing = new ArrayList<>();
         if (actions == null || actions.run() == null) {
@@ -454,9 +461,6 @@ final class ContextView extends JPanel {
         }
         if (!hasGenerate) {
             missing.add(NavText.GENERATE_NEW);
-        }
-        if (!hasImport) {
-            missing.add("Importar");
         }
         unavailable.setText(NavText.unavailable(missing));
         unavailable.setVisible(!missing.isEmpty() && organization != null);
@@ -528,10 +532,6 @@ final class ContextView extends JPanel {
 
     ActionButton generateButton() {
         return generate;
-    }
-
-    ActionButton importButton() {
-        return importZip;
     }
 
     ButtonRow actionsBar() {

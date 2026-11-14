@@ -41,7 +41,7 @@ class PlatformApiTest {
     private String code() {
         String redirect = platform.authorize(URI.create(platform.issuer() + "/entrar/aplicativo?response_type=code&client_id=nekkora-agent-client&redirect_uri="
                 + java.net.URLEncoder.encode(REDIRECT, java.nio.charset.StandardCharsets.UTF_8) + "&state=" + pkce.state() + "&code_challenge=" + pkce.challenge()
-                + "&code_challenge_method=S256&scope=identity%20navigation"));
+                + "&code_challenge_method=S256&scope=identity%20navigation%20packages"));
         return FakePlatform.query(URI.create(redirect).getRawQuery()).get("code");
     }
 
@@ -176,33 +176,34 @@ class PlatformApiTest {
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity organizations\"}", // escopo maior
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"admin\"}",
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"}", // escopo menor que o pedido
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}", // o escopo anterior: sem o de pacotes pedido
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"navigation identity\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"mac\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
-                "{\"access_token\":\"curto\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":86400,\"scope\":\"identity navigation\"}", // prazo acima do teto
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":0,\"scope\":\"identity navigation\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":\"900\",\"scope\":\"identity navigation\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\",\"refresh_token\":\"" + tok + "\"}",
-                "{\"access_token\":\"" + tok + "\",\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"} sobra"};
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"mac\",\"expires_in\":900,\"scope\":\"identity navigation packages\"}",
+                "{\"access_token\":\"curto\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation packages\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":86400,\"scope\":\"identity navigation packages\"}", // prazo acima do teto
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":0,\"scope\":\"identity navigation packages\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":\"900\",\"scope\":\"identity navigation packages\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation packages\",\"refresh_token\":\"" + tok + "\"}",
+                "{\"access_token\":\"" + tok + "\",\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation packages\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation packages\"} sobra"};
         for (String body : ruins) {
             platform.tokenStatus = 200;
             platform.tokenBody = body;
             assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), body);
         }
-        platform.tokenBody = "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}";
+        platform.tokenBody = "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation packages\"}";
         platform.tokenContentType = "text/html";
         assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "tipo de conteudo");
 
         PlatformApi.Token t = new PlatformApi.Token(tok, 900);
         String[] sessoes = {
                 "{}",
-                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation\"}",
+                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation packages\"}",
                 "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"admin\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"sem-arroba\"},\"scope\":\"identity navigation\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"ana@empresa.test\",\"role\":\"OWNER\"},\"scope\":\"identity navigation\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation\",\"expiresIn\":100,\"organizations\":[]}",
-                "{\"account\":\"ana@empresa.test\",\"scope\":\"identity navigation\",\"expiresIn\":100}"};
+                "{\"account\":{\"email\":\"sem-arroba\"},\"scope\":\"identity navigation packages\",\"expiresIn\":100}",
+                "{\"account\":{\"email\":\"ana@empresa.test\",\"role\":\"OWNER\"},\"scope\":\"identity navigation packages\",\"expiresIn\":100}",
+                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation packages\",\"expiresIn\":100,\"organizations\":[]}",
+                "{\"account\":\"ana@empresa.test\",\"scope\":\"identity navigation packages\",\"expiresIn\":100}"};
         for (String body : sessoes) {
             platform.sessionStatus = 200;
             platform.sessionBody = body;

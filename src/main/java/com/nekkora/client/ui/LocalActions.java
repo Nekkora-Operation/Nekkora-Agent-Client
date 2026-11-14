@@ -46,6 +46,9 @@ final class LocalActions implements ContextView.Actions {
 
         /** Os pacotes locais do contexto mudaram: a janela recarrega a lista dele. */
         void localChanged(Navigation.Context context);
+
+        /** O endereco da Platform desta sessao: separa, no disco, os pacotes baixados de Platforms diferentes. */
+        String platformOrigin();
     }
 
     private final Workshop workshop;
@@ -89,33 +92,12 @@ final class LocalActions implements ContextView.Actions {
 
     @Override
     public java.util.function.Consumer<ContextView.Entry> edit() {
-        return this::rename;
+        return this::edit;
     }
 
     @Override
     public Runnable generate() {
         return this::openGenerate;
-    }
-
-    @Override
-    public Runnable importZip() {
-        return () -> {
-            String zip = chooseZip(NavText.IMPORT_TITLE);
-            if (zip != null) {
-                importZip(zip);
-            }
-        };
-    }
-
-    /** Seletor de arquivo que so oferece .zip. Devolve o caminho escolhido, ou nulo se a pessoa desistiu. */
-    private String chooseZip(String title) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle(title);
-        chooser.setAcceptAllFileFilterUsed(false);
-        chooser.setFileFilter(new FileNameExtensionFilter(NavText.IMPORT_FILTER, "zip"));
-        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
-        chooser.setMultiSelectionEnabled(false);
-        return chooser.showOpenDialog(host.frame()) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
     }
 
     /** O contexto da tela agora, ou nulo (sem sessao, sem organizacao ou sem ambiente): sem contexto, nenhuma acao. */
@@ -129,42 +111,414 @@ final class LocalActions implements ContextView.Actions {
         return now != null && now.organization().id().equals(context.organization().id()) && now.workspace().id().equals(context.workspace().id());
     }
 
-    // ------------------------------------------------------------------ importar
+    // ------------------------------------------------------------------ editar: nome e pacote nesta maquina
 
-    /** Importa o pacote do arquivo para o contexto atual. Nao executa nada. */
-    void importZip(String zipPath) {
+    /** A automacao cujo "Editar" esta aberto, no contexto em que foi aberto. */
+    private record EditTarget(Navigation.Context context, com.nekkora.client.nav.Automation automation, com.nekkora.client.nav.Automation.Capabilities capabilities) {
+    }
+
+    private EditTarget editTarget;
+    private PackageForm packageForm;
+    /** O ultimo arquivo ou pasta escolhido que ainda espera uma decisao (conteudo diferente, ou pasta de codigo). */
+    private String pendingLocalPath;
+    private final java.util.concurrent.atomic.AtomicBoolean downloadCancelled = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * "Editar". Item so deste computador: muda o nome mostrado aqui. Automacao da Platform: abre as duas secoes - o nome
+     * cadastrado (so com a permissao de renomear) e o pacote que ESTE computador usa. Sao operacoes distintas, e nenhuma
+     * altera uma versao publicada.
+     */
+    void edit(ContextView.Entry entry) {
         Navigation.Context context = context();
         if (context == null) {
             return;
         }
-        host.notice(NavText.WORKING, false);
+        if (entry.localOnly()) {
+            rename(entry);
+            return;
+        }
+        Navigation nav = host.navigation();
+        com.nekkora.client.nav.Automation.Capabilities caps = nav != null && nav.state().automations().isReady()
+                ? nav.state().automations().value().capabilities() : com.nekkora.client.nav.Automation.Capabilities.NONE;
+        RenameForm[] holder = new RenameForm[1];
+        RenameForm r = caps.rename()
+                ? new RenameForm(NavText.RENAME_REMOTE_TITLE, NavText.RENAME_REMOTE_SCOPE, entry.automation().name(), true, n -> renameRemote(context, entry, holder[0], n),
+                        this::close)
+                : null;
+        holder[0] = r;
+        PackageForm p = new PackageForm(new PackageForm.Events() {
+            @Override
+            public void pickZip() {
+                String zip = chooseZip(NavText.PKG_PICK_ZIP_TITLE);
+                if (zip != null) {
+                    chooseLocal(zip);
+                }
+            }
+
+            @Override
+            public void pickFolder() {
+                String folder = choosePackageFolder();
+                if (folder != null) {
+                    chooseLocal(folder);
+                }
+            }
+
+            @Override
+            public void useSeparate() {
+                LocalActions.this.useSeparate();
+            }
+
+            @Override
+            public void generateFromFolder() {
+                String folder = pendingLocalPath;
+                openGenerate();
+                if (folder != null) {
+                    setProjectFolder(folder);
+                }
+            }
+
+            @Override
+            public void download() {
+                downloadChosen();
+            }
+
+            @Override
+            public void cancelDownload() {
+                downloadCancelled.set(true);
+            }
+
+            @Override
+            public void close() {
+                LocalActions.this.close();
+            }
+        });
+        open(NavText.EDIT_TITLE, new EditForm(r, p), () -> {
+            if (packageForm == p) {
+                // fechou (ou trocou de contexto, ou a sessao acabou): um download em curso e interrompido e descartado
+                downloadCancelled.set(true);
+                packageForm = null;
+                editTarget = null;
+                pendingLocalPath = null;
+            }
+        });
+        packageForm = p;
+        editTarget = new EditTarget(context, entry.automation(), caps);
+        pendingLocalPath = null;
+        downloadCancelled.set(false);
+        refreshPackageStatus();
+        loadVersions();
+    }
+
+    /** O formulario ainda e o deste alvo, no mesmo contexto? */
+    private boolean editing(PackageForm f, EditTarget t) {
+        return packageForm == f && editTarget == t && still(t.context());
+    }
+
+    /** Seletor de arquivo que so oferece .zip. Devolve o caminho escolhido, ou nulo se a pessoa desistiu. */
+    private String chooseZip(String title) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(title);
+        chooser.setAcceptAllFileFilterUsed(false);
+        chooser.setFileFilter(new FileNameExtensionFilter(NavText.IMPORT_FILTER, "zip"));
+        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        chooser.setMultiSelectionEnabled(false);
+        return chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    private String choosePackageFolder() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(NavText.PKG_PICK_FOLDER_TITLE);
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setMultiSelectionEnabled(false);
+        return chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    /** O que este computador tem para a automacao: o pacote da versao publicada, se estiver aqui; senao, um ligado a ela. */
+    void refreshPackageStatus() {
+        PackageForm f = packageForm;
+        EditTarget t = editTarget;
+        if (f == null || t == null) {
+            return;
+        }
+        background.execute(() -> {
+            java.util.List<Workshop.LocalItem> items;
+            try {
+                items = workshop.list(t.context().organization().id(), t.context().workspace().id());
+            } catch (RuntimeException e) {
+                items = java.util.List.of();
+            }
+            com.nekkora.client.nav.Automation.Published pub = t.automation().published();
+            Workshop.LocalItem best = null;
+            boolean same = false;
+            for (Workshop.LocalItem i : items) {
+                if (pub != null && i.matches(pub.fingerprint())) {
+                    best = i;
+                    same = true;
+                    break;
+                }
+            }
+            if (best == null) {
+                for (Workshop.LocalItem i : items) {
+                    if (t.automation().id().equals(i.linkedAutomationId())) {
+                        best = i;
+                        break;
+                    }
+                }
+            }
+            String text = best == null ? NavText.PKG_NONE : NavText.packageStatus(best, same, pub == null ? null : pub.number());
+            SwingUtilities.invokeLater(() -> {
+                if (editing(f, t)) {
+                    f.showStatus(text);
+                }
+            });
+        });
+    }
+
+    /**
+     * A pessoa escolheu um .zip ou uma pasta para esta automacao. O conteudo e conferido (manifesto, arquivos, integridade)
+     * e comparado com a versao publicada pela impressao digital - nunca pelo nome nem pelos bytes do ZIP. Igual: fica
+     * disponivel e ligado a automacao. Diferente: NADA e guardado ate a pessoa decidir. Pasta de codigo sem manifesto:
+     * a tela oferece "Gerar pacote novo". Nada e executado.
+     */
+    void chooseLocal(String path) {
+        useLocal(path, Workshop.Choice.ASK);
+    }
+
+    /** A decisao explicita depois de "Projeto local diferente da versao publicada": guardar como projeto local separado. */
+    void useSeparate() {
+        if (pendingLocalPath != null) {
+            useLocal(pendingLocalPath, Workshop.Choice.SEPARATE_LOCAL);
+        }
+    }
+
+    private void useLocal(String path, Workshop.Choice choice) {
+        PackageForm f = packageForm;
+        EditTarget t = editTarget;
+        if (f == null || t == null) {
+            return;
+        }
+        pendingLocalPath = null;
+        f.setBusy(true);
+        f.showLocal(NavText.WORKING, false, false, false);
+        com.nekkora.client.nav.Automation.Published pub = t.automation().published();
+        Integer number = pub == null ? null : pub.number();
         background.execute(() -> {
             String text;
             boolean error = false;
+            boolean offerSeparate = false;
+            boolean offerGenerate = false;
+            boolean changed = false;
+            String pending = null;
             try {
-                Workshop.Imported done = workshop.importZip(context.organization().id(), context.workspace().id(), zipPath);
-                text = NavText.imported(done.item().name(), done.item().packageVersion(), done.alreadyPresent());
+                Workshop.LocalCandidate c = workshop.inspectLocal(path);
+                if (c.kind() == Workshop.LocalKind.CODE_FOLDER) {
+                    text = c.message();
+                    error = true;
+                    offerGenerate = true;
+                    pending = path;
+                } else if (!c.isPackage()) {
+                    text = c.message();
+                    error = true;
+                } else {
+                    Workshop.UseLocalResult r = workshop.useLocal(t.context().organization().id(), t.context().workspace().id(), t.automation().id(), path,
+                            pub == null ? null : pub.fingerprint(), choice);
+                    switch (r.outcome()) {
+                        case MATCHES_PUBLISHED -> {
+                            text = NavText.packageMatched(r, number);
+                            changed = true;
+                        }
+                        case STORED_SEPARATE -> {
+                            text = NavText.packageSeparate(r);
+                            changed = true;
+                        }
+                        default -> {
+                            text = NavText.packageDiffers(r, number);
+                            offerSeparate = true;
+                            pending = path;
+                        }
+                    }
+                }
             } catch (Workshop.Refused r) {
                 text = r.getMessage();
                 error = true;
             } catch (RuntimeException e) {
-                text = "Não foi possível importar este arquivo.";
+                text = NavText.PKG_LOCAL_FAILED;
                 error = true;
             }
-            finish(context, text, error, !error);
+            String shown = text;
+            boolean bad = error;
+            boolean sep = offerSeparate;
+            boolean gen = offerGenerate;
+            boolean stored = changed;
+            String wait = pending;
+            SwingUtilities.invokeLater(() -> {
+                if (stored && still(t.context())) {
+                    host.localChanged(t.context()); // o que foi guardado pertence ao contexto, com ou sem o formulario aberto
+                }
+                if (!editing(f, t)) {
+                    return;
+                }
+                pendingLocalPath = wait;
+                f.setBusy(false);
+                f.showLocal(shown, bad, sep, gen);
+                if (stored) {
+                    refreshPackageStatus();
+                }
+            });
         });
     }
 
-    private void finish(Navigation.Context context, String text, boolean error, boolean changed) {
-        SwingUtilities.invokeLater(() -> {
-            if (!still(context)) {
-                return; // a pessoa trocou de contexto: o resultado pertence ao anterior e nao aparece no novo
+    /** Consulta as versoes publicadas da automacao (so metadados). Nenhuma e escolhida sozinha. */
+    void loadVersions() {
+        PackageForm f = packageForm;
+        EditTarget t = editTarget;
+        Directory directory = host.directory();
+        if (f == null || t == null || directory == null) {
+            return;
+        }
+        f.showVersionsLoading();
+        background.execute(() -> {
+            java.util.List<com.nekkora.client.nav.Automation.Version> all = null;
+            Directory.Failure failure = null;
+            try {
+                all = directory.versions(t.context().organization().id(), t.automation().id());
+            } catch (Directory.Failed x) {
+                failure = x.failure();
+            } catch (RuntimeException x) {
+                failure = Directory.Failure.INVALID;
             }
-            host.notice(text, error);
-            if (changed) {
-                host.localChanged(context);
-            }
+            java.util.List<com.nekkora.client.nav.Automation.Version> list = all;
+            Directory.Failure why = failure;
+            SwingUtilities.invokeLater(() -> {
+                if (!editing(f, t)) {
+                    return;
+                }
+                if (list == null) {
+                    f.showVersionsFailed(NavText.of(why));
+                    return;
+                }
+                java.util.List<com.nekkora.client.nav.Automation.Version> downloadable = list.stream().filter(com.nekkora.client.nav.Automation.Version::downloadable).toList();
+                String blocked = null;
+                if (!t.capabilities().download()) {
+                    // publicada com pacote mas sem o que conferir: a Platform e anterior ao contrato de download; senao, falta permissao
+                    boolean old = list.stream().anyMatch(v -> v.published() && v.fingerprint() != null && v.sha256() == null);
+                    blocked = old ? NavText.PKG_DOWNLOAD_UNSUPPORTED : NavText.PKG_DOWNLOAD_DENIED;
+                }
+                f.showVersions(downloadable, blocked);
+            });
         });
+    }
+
+    /**
+     * Baixa a versao publicada ESCOLHIDA pela pessoa. Os bytes vao para um arquivo parcial numa area propria do aplicativo;
+     * so depois de conferidos (tamanho, SHA-256, pacote valido e a impressao digital que a Platform informou) viram um pacote
+     * desta maquina. Cancelado, interrompido ou adulterado: o parcial e descartado e nada fica pronto. Baixar nao executa
+     * nem instala dependencias, e nao substitui outra versao ja guardada nem uma execucao em andamento.
+     */
+    void downloadChosen() {
+        PackageForm f = packageForm;
+        EditTarget t = editTarget;
+        Directory directory = host.directory();
+        com.nekkora.client.nav.Automation.Version v = f == null ? null : f.chosenVersion();
+        if (f == null || t == null || directory == null || v == null || !v.downloadable() || !t.capabilities().download()) {
+            return;
+        }
+        downloadCancelled.set(false);
+        f.showDownloading(0, v.sizeBytes());
+        String origin = host.platformOrigin();
+        java.util.UUID org = t.context().organization().id();
+        java.util.UUID ws = t.context().workspace().id();
+        java.util.UUID automation = t.automation().id();
+        background.execute(() -> {
+            String partial = null;
+            java.io.OutputStream out = null;
+            String text;
+            boolean error = true;
+            boolean installed = false;
+            try {
+                partial = workshop.downloadTarget(origin, org, automation, v.versionId());
+                out = workshop.downloadStream(partial);
+                java.io.OutputStream target = out;
+                long[] shown = {0};
+                directory.download(org, automation, v.versionId(), v.sizeBytes(), new Directory.Sink() {
+                    @Override
+                    public boolean write(byte[] data, int length) {
+                        try {
+                            target.write(data, 0, length);
+                            return true;
+                        } catch (java.io.IOException e) {
+                            return false;
+                        }
+                    }
+
+                    @Override
+                    public boolean cancelled() {
+                        return downloadCancelled.get();
+                    }
+
+                    @Override
+                    public void progress(long received, long total) {
+                        // no maximo uma atualizacao a cada ~1% (e a ultima), para nao inundar a fila de eventos
+                        if (received == total || received - shown[0] >= Math.max(1, total / 100)) {
+                            shown[0] = received;
+                            SwingUtilities.invokeLater(() -> {
+                                if (editing(f, t) && !downloadCancelled.get()) {
+                                    f.showDownloading(received, total);
+                                }
+                            });
+                        }
+                    }
+                });
+                out.close();
+                out = null;
+                workshop.installDownloaded(origin, org, ws, automation, v.versionId(), v.number(), partial, v.sha256(), v.sizeBytes(), v.fingerprint(),
+                        downloadCancelled::get);
+                partial = null; // conferido e instalado: nao ha mais parcial
+                installed = true;
+                error = false;
+                text = NavText.packageDownloaded(v.number());
+            } catch (Directory.Failed x) {
+                text = NavText.downloadFailed(x.failure());
+            } catch (Workshop.Refused r) {
+                text = r.getMessage();
+            } catch (java.io.IOException | RuntimeException e) {
+                text = NavText.downloadFailed(Directory.Failure.LOCAL);
+            } finally {
+                if (out != null) {
+                    try {
+                        out.close();
+                    } catch (java.io.IOException e) {
+                        // o parcial sera descartado logo abaixo
+                    }
+                }
+                if (partial != null) {
+                    try {
+                        workshop.discardDownload(partial);
+                    } catch (Workshop.Refused | RuntimeException e) {
+                        // sobra de parcial e limpa pela propria area de downloads (nunca vira pacote)
+                    }
+                }
+            }
+            String shownText = text;
+            boolean bad = error;
+            boolean done = installed;
+            SwingUtilities.invokeLater(() -> {
+                if (done && still(t.context())) {
+                    host.localChanged(t.context());
+                }
+                if (!editing(f, t)) {
+                    return;
+                }
+                f.showDownload(shownText, bad);
+                if (done) {
+                    refreshPackageStatus();
+                }
+            });
+        });
+    }
+
+    PackageForm packageForm() {
+        return packageForm;
     }
 
     // ------------------------------------------------------------------ gerar pacote novo (pasta -> .zip)
@@ -454,7 +808,7 @@ final class LocalActions implements ContextView.Actions {
             }
             Directory.Failure why = failure;
             SwingUtilities.invokeLater(() -> {
-                if (form != f) {
+                if (renameFormShown() != f) {
                     return;
                 }
                 f.setBusy(false);
@@ -766,5 +1120,10 @@ final class LocalActions implements ContextView.Actions {
 
     JPanel form() {
         return form;
+    }
+
+    /** O formulario de renomear na tela: sozinho (item local) ou dentro do Editar (automacao da Platform). */
+    RenameForm renameFormShown() {
+        return form instanceof RenameForm r ? r : form instanceof EditForm e ? e.renameForm() : null;
     }
 }

@@ -189,7 +189,9 @@ class RunDesktopTest {
 
     private void importar(String name, String script, List<String> dependencies) throws Exception {
         Path zip = PackFixtures.packageZip(tmp.resolve("zips"), name, Map.of("main.py", script), "main.py", dependencies);
-        edt(() -> window.actions().importZip(zip.toString()));
+        Workspace atual = (Workspace) read(() -> window.contextView().workspaceBox().getSelectedItem());
+        workshop.importZip(a.id(), atual.id(), zip.toString());
+        edt(() -> window.reloadLocal());
         answer();
     }
 
@@ -237,7 +239,7 @@ class RunDesktopTest {
         assertEquals("", read(v::unavailableNote), "todas as acoes existem: a nota de indisponibilidade nao aparece");
         evidence("sakura-dark-estado-somente-local", window.getRootPane());
         // nenhum botao promete integracao
-        for (JButton bt : read(() -> List.of(v.generateButton(), v.importButton()))) {
+        for (JButton bt : read(() -> List.<JButton>of(v.generateButton()))) {
             assertFalse(read(bt::getText).toLowerCase().matches(".*(vincul|parear|conectar|integra).*"));
         }
     }
@@ -250,7 +252,7 @@ class RunDesktopTest {
         assertTrue(read(executar::isEnabled));
         edt(() -> executar.doClick(0));
         answer();
-        assertEquals("O pacote desta automação não está neste computador. Use Importar (.zip) para trazê-lo: o aplicativo não baixa código da Platform.",
+        assertEquals(NavText.RUN_NO_PACKAGE,
                 read(v::noticeText));
         assertNull(read(() -> window.actions().runForm()), "nenhuma preparacao aberta");
         assertTrue(runner.current().isEmpty(), "nada foi iniciado");

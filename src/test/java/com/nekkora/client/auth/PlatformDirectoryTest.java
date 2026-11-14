@@ -1,5 +1,6 @@
 package com.nekkora.client.auth;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.nekkora.client.nav.Automation;
 import com.nekkora.client.nav.Directory;
 import com.nekkora.client.nav.Directory.Failure;
 import com.nekkora.client.nav.Organization;
@@ -304,7 +306,7 @@ class PlatformDirectoryTest {
             }
             assertEquals(Phase.SIGNED_IN, flow.state().phase());
             // o pedido que o navegador recebeu leva o escopo novo, e so com ele a entrada vale
-            assertEquals("identity navigation", FakePlatform.query(browser.lastPage().getRawQuery()).get("scope"));
+            assertEquals("identity navigation packages", FakePlatform.query(browser.lastPage().getRawQuery()).get("scope"));
             Directory d = flow.directory();
             assertEquals("ana@empresa.test", d.profile().email());
             // a sessao e encerrada na conta (logout no navegador): a consulta seguinte recebe 401
@@ -352,5 +354,186 @@ class PlatformDirectoryTest {
             flow.close();
             signIn.close();
         }
+    }
+
+    // ------------------------------------------------------------------ versoes e download do pacote (AGENT-CLIENT-PACOTES-001)
+
+    private static final String AUT = "00000000-0000-4000-8000-000000002001";
+    private static final String PV1 = "00000000-0000-4000-8000-000000003001";
+    private static final String PV2 = "00000000-0000-4000-8000-000000003002";
+    private static final String SHA = "ab".repeat(32);
+    private static final String FP = "cd".repeat(32);
+
+    private static String versionsPath() {
+        return "/api/v1/desktop/organizations/" + A + "/automations/" + AUT + "/versions";
+    }
+
+    private static String versao(String id, int n, String status, String pkg) {
+        return "{\"automationVersionId\":\"" + id + "\",\"versionNumber\":" + n + ",\"status\":\"" + status + "\",\"publishedAt\":null,\"package\":" + pkg + "}";
+    }
+
+    /** Destino em memoria: junta os bytes, cancela quando o teste manda e pode recusar a gravacao. */
+    private static final class Memory implements Directory.Sink {
+        final java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        volatile boolean cancel;
+        volatile boolean refuse;
+        volatile long cancelAfter = -1;
+        final java.util.List<Long> progress = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public boolean write(byte[] data, int length) {
+            if (refuse) {
+                return false;
+            }
+            bytes.write(data, 0, length);
+            if (cancelAfter >= 0 && bytes.size() >= cancelAfter) {
+                cancel = true;
+            }
+            return true;
+        }
+
+        @Override
+        public boolean cancelled() {
+            return cancel;
+        }
+
+        @Override
+        public void progress(long received, long total) {
+            progress.add(received);
+        }
+    }
+
+    private static byte[] conteudo(int n) {
+        byte[] b = new byte[n];
+        new java.util.Random(7).nextBytes(b);
+        return b;
+    }
+
+    @Test
+    void versoesComOQueConferirNoDownloadECapacidadeDeBaixar() throws Exception {
+        String pkg = "{\"name\":\"relatorio\",\"version\":\"1.1.0\",\"fingerprint\":\"" + FP + "\",\"sha256\":\"" + SHA + "\",\"sizeBytes\":4096}";
+        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV2, 2, "DRAFT", "null") + "," + versao(PV1, 1, "PUBLISHED", pkg) + "],\"nextCursor\":null}");
+        List<Automation.Version> l = directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT));
+        assertEquals(2, l.size());
+        assertFalse(l.get(0).published());
+        assertFalse(l.get(0).downloadable(), "rascunho nunca e baixavel");
+        assertEquals(new Automation.Version(java.util.UUID.fromString(PV1), 1, true, "relatorio", "1.1.0", FP, SHA, 4096), l.get(1));
+        assertTrue(l.get(1).downloadable());
+        // Platform anterior ao contrato /3: sem sha256 e tamanho, a versao aparece e NAO e baixavel
+        platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + versao(PV1, 1, "PUBLISHED",
+                "{\"name\":\"relatorio\",\"version\":\"1.1.0\",\"fingerprint\":\"" + FP + "\"}") + "],\"nextCursor\":null}");
+        assertFalse(directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT)).get(0).downloadable());
+        // fora do contrato: estado desconhecido, sha256 que nao e hex, tamanho absurdo
+        for (String ruim : new String[] {versao(PV1, 1, "ARCHIVED", "null"), versao(PV1, 1, "PUBLISHED", "{\"sha256\":\"xyz\"}"),
+                versao(PV1, 1, "PUBLISHED", "{\"sha256\":\"" + SHA + "\",\"sizeBytes\":99999999999}"), versao(PV1, 0, "PUBLISHED", "null")}) {
+            platform.pages.put(versionsPath() + "?limit=100", "{\"items\":[" + ruim + "],\"nextCursor\":null}");
+            assertEquals(Failure.INVALID, failure(() -> directory.versions(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT))), ruim);
+        }
+    }
+
+    @Test
+    void downloadEntregaExatamenteOsBytesSoParaAPlatformESemCookie() throws Exception {
+        byte[] zip = conteudo(150_000);
+        platform.packageBytes = zip;
+        Memory sink = new Memory();
+        directory.download(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT), java.util.UUID.fromString(PV1), zip.length, sink);
+        assertArrayEquals(zip, sink.bytes.toByteArray());
+        assertEquals(1, platform.packageRequests.size());
+        assertEquals(versionsPath() + "/" + PV1 + "/package | Bearer " + token.value() + " | application/zip, application/json", platform.packageRequests.get(0));
+        assertFalse(platform.requests.stream().anyMatch(r -> r.contains("?")), "so ids no caminho; nenhum endereco de download vem de fora");
+        assertEquals(0L, sink.progress.get(0));
+        assertEquals((long) zip.length, sink.progress.get(sink.progress.size() - 1));
+        assertEquals(0, ended.get());
+    }
+
+    @Test
+    void recusasDoDownloadTemCadaUmaASuaClassificacao() throws Exception {
+        platform.packageBytes = conteudo(1000);
+        Object[][] casos = {{403, Failure.DENIED}, {404, Failure.NOT_FOUND}, {409, Failure.CONFLICT}, {500, Failure.SERVER}};
+        for (Object[] c : casos) {
+            platform.packageStatus = (Integer) c[0];
+            Memory sink = new Memory();
+            assertEquals(c[1], failure(() -> directory.download(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT), java.util.UUID.fromString(PV1), 1000, sink)));
+            assertEquals(0, sink.bytes.size(), c[0] + ": nenhum byte entregue");
+        }
+        platform.packageStatus = 200;
+        // sessao encerrada: 401 encerra a sessao do aplicativo
+        platform.sessions.clear();
+        assertEquals(Failure.SESSION_ENDED, failure(() -> directory.download(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT), java.util.UUID.fromString(PV1), 1000,
+                new Memory())));
+        assertEquals(1, ended.get());
+    }
+
+    @Test
+    void redirecionamentoNaoESeguidoEOTokenNaoVaiAOutroEndereco() throws Exception {
+        com.sun.net.httpserver.HttpServer outro = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        List<String> recebidos = new java.util.concurrent.CopyOnWriteArrayList<>();
+        outro.createContext("/", x -> {
+            recebidos.add(x.getRequestURI() + " | " + x.getRequestHeaders().getFirst("Authorization"));
+            x.sendResponseHeaders(200, -1);
+            x.close();
+        });
+        outro.start();
+        try {
+            platform.packageBytes = conteudo(1000);
+            for (int status : new int[] {301, 302, 307, 308}) {
+                platform.packageStatus = status;
+                platform.packageLocation = "http://127.0.0.1:" + outro.getAddress().getPort() + "/pacote.zip";
+                Memory sink = new Memory();
+                assertEquals(Failure.INVALID, failure(() -> directory.download(java.util.UUID.fromString(A), java.util.UUID.fromString(AUT), java.util.UUID.fromString(PV1),
+                        1000, sink)), "status " + status);
+                assertEquals(0, sink.bytes.size());
+            }
+            assertTrue(recebidos.isEmpty(), "nenhum pedido (e nenhum token) chegou ao outro endereco: " + recebidos);
+        } finally {
+            outro.stop(0);
+        }
+    }
+
+    @Test
+    void respostaForaDoContratoInterrompidaOuMaiorNaoViraPacote() throws Exception {
+        byte[] zip = conteudo(40_000);
+        platform.packageBytes = zip;
+        java.util.UUID o = java.util.UUID.fromString(A);
+        java.util.UUID a = java.util.UUID.fromString(AUT);
+        java.util.UUID v = java.util.UUID.fromString(PV1);
+        // tipo errado
+        platform.packageContentType = "text/html";
+        assertEquals(Failure.INVALID, failure(() -> directory.download(o, a, v, zip.length, new Memory())));
+        platform.packageContentType = "application/zip";
+        // tamanho diferente do que a lista de versoes informou: nem comeca a gravar
+        Memory menor = new Memory();
+        assertEquals(Failure.INVALID, failure(() -> directory.download(o, a, v, zip.length - 1, menor)));
+        assertEquals(0, menor.bytes.size());
+        Memory maior = new Memory();
+        assertEquals(Failure.INVALID, failure(() -> directory.download(o, a, v, zip.length + 1, maior)));
+        assertEquals(0, maior.bytes.size());
+        // tamanho impossivel: recusado antes de qualquer pedido
+        int antes = platform.packageRequests.size();
+        assertEquals(Failure.INVALID, failure(() -> directory.download(o, a, v, 0, new Memory())));
+        assertEquals(Failure.INVALID, failure(() -> directory.download(o, a, v, PlatformApi.MAX_PACKAGE_BYTES + 1, new Memory())));
+        assertEquals(antes, platform.packageRequests.size());
+        // conexao cortada no meio: falha de rede; o que chegou e parcial e fica com quem chamou para descartar
+        platform.packageCutAt = 10_000;
+        Memory cortado = new Memory();
+        assertEquals(Failure.NETWORK, failure(() -> directory.download(o, a, v, zip.length, cortado)));
+        assertTrue(cortado.bytes.size() < zip.length);
+        platform.packageCutAt = -1;
+        // o destino recusa gravar (disco): LOCAL
+        Memory semDisco = new Memory();
+        semDisco.refuse = true;
+        assertEquals(Failure.LOCAL, failure(() -> directory.download(o, a, v, zip.length, semDisco)));
+        // cancelado pela pessoa no meio
+        platform.packageChunkDelayMillis = 5;
+        Memory cancelado = new Memory();
+        cancelado.cancelAfter = 8_000;
+        assertEquals(Failure.CANCELLED, failure(() -> directory.download(o, a, v, zip.length, cancelado)));
+        assertTrue(cancelado.bytes.size() < zip.length, "parou antes do fim");
+        platform.packageChunkDelayMillis = 0;
+        // e, depois de tudo, um download normal ainda funciona
+        Memory ok = new Memory();
+        directory.download(o, a, v, zip.length, ok);
+        assertArrayEquals(zip, ok.bytes.toByteArray());
+        assertEquals(0, ended.get());
     }
 }

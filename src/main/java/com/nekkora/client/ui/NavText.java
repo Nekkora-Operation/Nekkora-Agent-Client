@@ -27,9 +27,8 @@ public final class NavText {
     public static final String AUTOMATIONS_TRUNCATED = "A lista está incompleta: há mais automações do que o aplicativo mostra de uma vez.";
     public static final String RUN = "Executar";
     public static final String EDIT = "Editar";
-    public static final String EDIT_DENIED = "Você não tem permissão para editar automações neste ambiente.";
-    public static final String IMPORT_ZIP = "Importar (.zip)";
-    public static final String NEEDS_WORKSPACE = "Selecione um ambiente primeiro.";
+    public static final String EDIT_DENIED = "Você não tem permissão para renomear automações neste ambiente. O nome cadastrado na Platform não pode "
+            + "ser alterado por esta conta.";
     /** Acao que ainda nao existe nesta versao. Nao e falta de permissao da pessoa, e o texto nao pode sugerir isso. */
     public static final String ACTION_UNAVAILABLE = "Indisponível nesta versão de teste.";
     /** A nota por escrito das acoes que ainda nao existem nesta versao ("A, B e C ainda nao estao disponiveis..."). */
@@ -57,21 +56,15 @@ public final class NavText {
     public static final String RENAME_LOCAL_DONE = "Nome alterado só neste computador.";
     public static final String NAME_FIELD = "Nome";
     public static final String NAME_REQUIRED = "Informe um nome.";
-    public static final String IMPORT_TITLE = "Importar pacote (.zip)";
     public static final String IMPORT_FILTER = "Arquivo ZIP (*.zip)";
     public static final String WORKING = "Trabalhando...";
-
-    public static String imported(String name, String version, boolean already) {
-        return already ? "Este pacote já estava importado neste ambiente: " + name + "."
-                : "Pacote importado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador, neste ambiente; nada foi executado.";
-    }
 
     public static final String INTEGRATION_LOCAL_ONLY = "Somente local — integração com a Platform não configurada";
     public static final String INTEGRATION_LOCAL_ONLY_HINT = "Este aplicativo não está vinculado a uma máquina na Platform. As execuções daqui são só deste computador: "
             + "sem gatilhos da Platform e sem envio de registros de monitoramento.";
     public static final String RUN_DENIED = "Você não tem permissão para executar automações neste ambiente.";
-    public static final String RUN_NO_PACKAGE = "O pacote desta automação não está neste computador. Use Importar (.zip) para trazê-lo: o aplicativo não baixa "
-            + "código da Platform.";
+    public static final String RUN_NO_PACKAGE = "O pacote desta automação não está neste computador. Abra Editar e, em Pacote nesta máquina, escolha um "
+            + "pacote local ou baixe uma versão publicada da Platform. Nada é baixado sozinho.";
     public static final String RUN_TITLE = "Executar neste computador";
     public static final String RUN_SCOPE = "Execução local. Nada é enviado à Platform: sem registro de execução lá, sem monitoramento e sem gatilho remoto. Nada "
             + "começa até você clicar em Iniciar execução.";
@@ -114,6 +107,97 @@ public final class NavText {
     }
 
     /** Por que a consulta nao trouxe o resultado. Nunca e o texto de "lista vazia". */
+    // ---- Editar: pacote nesta maquina (AGENT-CLIENT-PACOTES-001 T02)
+    public static final String EDIT_TITLE = "Editar automação";
+    public static final String PKG_TITLE = "Pacote nesta máquina";
+    public static final String PKG_NONE = "Nenhum pacote desta automação neste computador.";
+    public static final String PKG_LOCAL_TITLE = "Usar projeto ou pacote local";
+    public static final String PKG_LOCAL_HINT = "Escolha um pacote Nekkora (arquivo .zip com nekkora-external.json) ou a pasta de um pacote. Escolher não "
+            + "executa nem instala nada.";
+    public static final String PKG_PICK_ZIP = "Escolher arquivo .zip";
+    public static final String PKG_PICK_FOLDER = "Escolher pasta";
+    public static final String PKG_PICK_ZIP_TITLE = "Escolher o pacote (.zip)";
+    public static final String PKG_PICK_FOLDER_TITLE = "Escolher a pasta do pacote";
+    public static final String PKG_USE_SEPARATE = "Usar como projeto local separado";
+    public static final String PKG_LOCAL_FAILED = "Não foi possível usar este arquivo ou esta pasta.";
+    public static final String PKG_DOWNLOAD_TITLE = "Baixar da Platform";
+    public static final String PKG_DOWNLOAD = "Baixar";
+    public static final String PKG_DOWNLOAD_CANCEL = "Cancelar download";
+    public static final String PKG_VERSION_FIELD = "Versão publicada";
+    public static final String PKG_VERSION_PLACEHOLDER = "Selecione uma versão publicada";
+    public static final String PKG_VERSIONS_LOADING = "Consultando as versões…";
+    public static final String PKG_VERSIONS_FAILED = "Versões não consultadas";
+    public static final String PKG_VERSIONS_NONE = "Nenhuma versão publicada com pacote para baixar.";
+    public static final String PKG_PROGRESS = "Progresso do download";
+    public static final String PKG_DOWNLOAD_DENIED = "Sua conta não pode baixar pacotes neste ambiente: é preciso poder executar ou gerenciar a automação.";
+    public static final String PKG_DOWNLOAD_UNSUPPORTED = "Esta versão da Platform não oferece o download de pacotes pelo aplicativo.";
+    public static final String PKG_DOWNLOAD_CANCELLED = "Download cancelado. O que havia chegado foi descartado e nada foi instalado.";
+    public static final String PKG_DOWNLOAD_INTERRUPTED = "O download foi interrompido. O que havia chegado foi descartado e nada foi instalado. Tente novamente.";
+    public static final String PKG_DOWNLOAD_UNAVAILABLE = "O pacote desta versão não está disponível na Platform no momento (versão não publicada ou arquivo "
+            + "indisponível). Nada foi baixado.";
+    public static final String PKG_DOWNLOAD_FORBIDDEN = "A Platform não permitiu o download: sua conta não pode baixar o pacote desta automação.";
+    public static final String PKG_DOWNLOAD_GONE = "Esta versão não está mais ao seu alcance. Nada foi baixado.";
+
+    /** O que este computador tem para a automacao: nome e versao DECLARADOS no pacote, origem e, se veio da Platform, a versao de la. */
+    public static String packageStatus(com.nekkora.client.pack.Workshop.LocalItem item, boolean isPublished, Integer publishedNumber) {
+        String origin = item.originLabel().isEmpty() ? "" : " · origem: " + item.originLabel();
+        String source = item.sourceLabel() == null || item.sourceLabel().isBlank() ? "" : " (" + item.sourceLabel() + ")";
+        String version = item.versionNumber() != null ? " · versão " + item.versionNumber() + " da Platform"
+                : isPublished && publishedNumber != null ? " · mesmo conteúdo da versão publicada " + publishedNumber : " · não é a versão publicada mais recente";
+        return "Pacote disponível nesta máquina: " + item.declaredName() + ", versão do pacote " + item.packageVersion() + origin + source + version + ".";
+    }
+
+    public static String packageMatched(com.nekkora.client.pack.Workshop.UseLocalResult r, Integer publishedNumber) {
+        return "Pacote conferido e disponível nesta máquina: é o mesmo conteúdo da versão publicada" + (publishedNumber == null ? "" : " " + publishedNumber)
+                + ". Origem: " + r.origin() + " · " + r.pathLabel() + " · versão do pacote " + r.packageVersion() + ". Nada foi executado.";
+    }
+
+    public static String packageDiffers(com.nekkora.client.pack.Workshop.UseLocalResult r, Integer publishedNumber) {
+        return "Projeto local diferente da versão publicada. O conteúdo de " + r.pathLabel() + " (" + r.declaredName() + ", versão do pacote "
+                + r.packageVersion() + ") não é o da versão publicada" + (publishedNumber == null ? "" : " " + publishedNumber)
+                + " e não será apresentado como ela. Escolha: usar como projeto local separado, ou selecionar o pacote correto.";
+    }
+
+    public static String packageSeparate(com.nekkora.client.pack.Workshop.UseLocalResult r) {
+        return "Guardado como projeto local separado (" + r.declaredName() + ", versão do pacote " + r.packageVersion()
+                + "), sem ligação com esta automação. Ele aparece na lista como item só deste computador. Para publicá-lo, envie o pacote pela Platform.";
+    }
+
+    public static String packageDownloaded(int versionNumber) {
+        return "Versão " + versionNumber + " baixada e conferida. Pacote disponível nesta máquina. Nada foi executado nem instalado.";
+    }
+
+    /** Uma versao no seletor de download: numero na Platform, versao declarada no pacote e tamanho. */
+    public static String versionChoice(Automation.Version v) {
+        return "Versão " + v.number() + (v.packageVersion() == null ? "" : " · pacote " + v.packageVersion()) + " · " + size(v.sizeBytes());
+    }
+
+    public static String size(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f KB", bytes / 1024.0);
+        }
+        return String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    public static String progress(long received, long total) {
+        return total <= 0 ? size(received) : size(received) + " de " + size(total);
+    }
+
+    /** Por que o download nao terminou. Em todos os casos nada foi instalado. */
+    public static String downloadFailed(Failure failure) {
+        return switch (failure) {
+            case CANCELLED -> PKG_DOWNLOAD_CANCELLED;
+            case NETWORK, TIMEOUT -> PKG_DOWNLOAD_INTERRUPTED;
+            case CONFLICT -> PKG_DOWNLOAD_UNAVAILABLE;
+            case DENIED -> PKG_DOWNLOAD_FORBIDDEN;
+            case NOT_FOUND -> PKG_DOWNLOAD_GONE;
+            default -> of(failure) + " Nada foi instalado.";
+        };
+    }
+
     // ---- gerar pacote novo (AGENT-CLIENT-PACOTES-001 T01)
     public static final String GENERATE_NEW = "Gerar pacote novo";
     public static final String GENERATE_TITLE = "Gerar pacote novo";
@@ -193,7 +277,7 @@ public final class NavText {
             case DENIED -> "Sua conta não tem permissão para esta consulta.";
             case INVALID -> "A Platform respondeu de um jeito inesperado.";
             case SESSION_ENDED -> "Sua sessão terminou. Entre novamente.";
-            case NOT_FOUND, REJECTED, CONFLICT -> "";
+            case NOT_FOUND, REJECTED, CONFLICT, CANCELLED, LOCAL -> "";
         };
     }
 
@@ -216,6 +300,8 @@ public final class NavText {
             case NOT_FOUND -> "Você não tem mais acesso a este item, ou ele não existe mais.";
             case INVALID -> "A Platform respondeu de um jeito inesperado. Tente novamente.";
             case SESSION_ENDED -> "Sua sessão terminou. Entre novamente.";
+            case CANCELLED -> "Operação cancelada.";
+            case LOCAL -> "Não foi possível gravar neste computador. Confira o espaço em disco e tente novamente.";
         };
     }
 

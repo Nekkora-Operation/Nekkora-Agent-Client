@@ -78,6 +78,7 @@ public final class ClientMain {
                 held.get().close();
                 System.exit(0);
             }, BuildInfo.load(), background, workshop, runner);
+            window.setPlatformOrigin(String.valueOf(origin.api()));
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta
             window.setReveal(path -> workshop.folderUri(path).ifPresent(uri -> com.nekkora.client.auth.FolderOpener.open(java.net.URI.create(uri))));
             Runtime.getRuntime().addShutdownHook(new Thread(flow::close, "encerramento"));

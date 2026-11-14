@@ -60,7 +60,6 @@ class ActionButtonsDesktopTest {
     private final Workspace fin = FakeDirectory.ws(1, "Financeiro");
     private final Workspace sem = FakeDirectory.ws(2, "Somente leitura");
     private final AtomicInteger created = new AtomicInteger();
-    private final AtomicInteger imported = new AtomicInteger();
 
     @BeforeEach
     void open() throws Exception {
@@ -124,11 +123,6 @@ class ActionButtonsDesktopTest {
             @Override
             public Runnable generate() {
                 return available ? created::incrementAndGet : null;
-            }
-
-            @Override
-            public Runnable importZip() {
-                return available ? imported::incrementAndGet : null;
             }
         };
     }
@@ -202,44 +196,26 @@ class ActionButtonsDesktopTest {
     // ------------------------------------------------------------------ aparencia de botao, nos dois temas
 
     @Test
-    void saoBotoesComSuperficieIconeERotuloNosDoisTemas() throws Exception {
+    void gerarPacoteNovoEBotaoPrimarioComIconeERotuloNosDoisTemasESemImportarNaLista() throws Exception {
         ContextView v = window.contextView();
         pick(fin);
         ActionButton nova = read(v::generateButton);
-        ActionButton importar = read(v::importButton);
         assertEquals(ActionButton.Kind.PRIMARY, nova.kind());
         assertEquals(ActionButton.Glyph.ADD, nova.glyph());
-        assertEquals(ActionButton.Kind.SECONDARY, importar.kind());
-        assertEquals(ActionButton.Glyph.IMPORT, importar.glyph());
-        // rotulos por extenso; o icone nao substitui o texto nem o nome acessivel
         assertEquals("Gerar pacote novo", read(nova::getText));
-        assertEquals("Importar (.zip)", read(importar::getText));
         assertEquals("Gerar pacote novo", read(() -> nova.getAccessibleContext().getAccessibleName()));
-        assertEquals("Importar (.zip)", read(() -> importar.getAccessibleContext().getAccessibleName()));
-
+        // (AGENT-CLIENT-PACOTES-001) nao ha mais botao de importar na lista: so o de gerar
+        List<String> acoes = read(() -> java.util.Arrays.stream(v.actionsBar().getComponents()).map(c -> ((JButton) c).getText()).toList());
+        assertEquals(List.of("Gerar pacote novo"), acoes);
         for (ClientTheme t : ClientTheme.values()) {
             edt(() -> Themes.apply(t));
             edt(window::validate);
             String p = t.libId();
-            Rgb fundo = t.bg();
-            // "Nova automacao": preenchido com a cor de acao do tema
             Rectangle n = read(nova::getBounds);
-            Rgb corNova = painted(nova, 8, n.height / 2);
-            assertTrue(distance(corNova, t.accent()) <= 6, p + ": Nova automacao preenchida com a cor de acao (" + corNova.toHex() + ")");
-            assertTrue(Rgb.contrast(t.accent(), fundo) >= 3.0, p + ": superficie da acao principal distinta do fundo");
-            assertTrue(Rgb.contrast(nova.foreground(), nova.background()) >= 4.5, p + ": rotulo da acao principal legivel");
-            // "Importar (.zip)": superficie propria E contorno, os dois diferentes do fundo da tela
-            Rectangle i = read(importar::getBounds);
-            Rgb corImportar = painted(importar, 8, i.height / 2);
-            assertTrue(distance(corImportar, t.buttonSecondaryBg()) <= 6, p + ": Importar com a superficie do botao secundario (" + corImportar.toHex() + ")");
-            assertTrue(distance(corImportar, fundo) >= 12, p + ": a superficie do Importar nao se confunde com o fundo");
-            assertTrue(distance(importar.outline(), fundo) >= 24, p + ": o contorno do Importar aparece sobre o fundo");
-            assertTrue(distance(importar.outline(), importar.background()) >= 12, p + ": o contorno se distingue da superficie");
-            assertTrue(Rgb.contrast(importar.foreground(), importar.background()) >= 4.5, p + ": rotulo do Importar legivel");
-            assertNotEquals(corNova.toHex(), corImportar.toHex(), p + ": principal e secundario sao distintos");
-            // fora do botao, logo ao lado, e o fundo da tela: a superficie tem limite
-            Rgb fora = painted(importar, i.width + ButtonRow.GAP / 2 - 1 > i.width ? i.width + 2 : i.width, i.height / 2);
-            assertTrue(distance(fora, fundo) <= 6, p + ": ao lado do botao e o fundo (" + fora.toHex() + ")");
+            Rgb cor = painted(nova, 8, n.height / 2);
+            assertTrue(distance(cor, t.accent()) <= 6, p + ": preenchido com a cor de acao (" + cor.toHex() + ")");
+            assertTrue(Rgb.contrast(t.accent(), t.bg()) >= 3.0, p + ": superficie distinta do fundo: nao parece link");
+            assertTrue(Rgb.contrast(nova.foreground(), nova.background()) >= 4.5, p + ": rotulo legivel");
             evidence(p + "-acoes-botoes");
         }
     }
@@ -252,39 +228,20 @@ class ActionButtonsDesktopTest {
             edt(() -> window.setSize(d));
             edt(window::validate);
             ActionButton nova = read(v::generateButton);
-            ActionButton importar = read(v::importButton);
             Rectangle n = in(nova);
-            Rectangle i = in(importar);
             Rectangle barra = in(v.actionsBar());
             Rectangle lista = in(v.scroll());
             Rectangle rodape = in(v.footer());
-            // altura de controle e area de clique confortavel; a mesma altura nos dois
-            assertTrue(n.height >= ClientTheme.CONTROL_MD && i.height == n.height, "altura em " + d + ": " + n.height + " e " + i.height);
-            // nenhum rotulo cortado: cada botao tem ao menos a largura do proprio conteudo
-            assertTrue(n.width >= read(() -> nova.getPreferredSize().width), "Nova automacao cortado em " + d);
-            assertTrue(i.width >= read(() -> importar.getPreferredSize().width), "Importar cortado em " + d);
-            assertFalse(n.intersects(i), "os botoes nao se sobrepoem em " + d);
-            boolean lado = read(() -> v.actionsBar().sideBySide(v.actionsBar().getWidth()));
-            if (lado) {
-                assertEquals(n.y, i.y, "lado a lado, alinhados em " + d);
-                assertEquals(ButtonRow.GAP, i.x - (n.x + n.width), "espaco uniforme entre os botoes em " + d);
-            } else {
-                assertTrue(n.y + n.height <= i.y, "empilhados na ordem: Nova automacao acima de Importar em " + d);
-                assertEquals(n.width, i.width, "empilhados com a mesma largura em " + d);
-                assertEquals(n.x, i.x);
-            }
-            // area propria: dentro da faixa, abaixo da lista e acima do rodape, sem encostar nas bordas
-            assertTrue(barra.contains(n) && barra.contains(i), "dentro da area das acoes em " + d);
-            assertTrue(n.x >= ClientTheme.SPACE_4 && i.x + i.width <= read(v::getWidth) - ClientTheme.SPACE_4, "respiro lateral em " + d);
+            assertTrue(n.height >= ClientTheme.CONTROL_MD, "altura de controle em " + d);
+            assertTrue(n.width >= read(() -> nova.getPreferredSize().width), "rotulo sem corte em " + d);
+            assertTrue(barra.contains(n), "dentro da area das acoes em " + d);
+            assertTrue(n.x >= ClientTheme.SPACE_4 && n.x + n.width <= read(v::getWidth) - ClientTheme.SPACE_4, "respiro lateral em " + d);
             assertTrue(lista.y + lista.height <= barra.y, "a lista termina antes das acoes em " + d);
-            assertTrue(Math.max(n.y + n.height, i.y + i.height) <= rodape.y, "acoes acima do rodape em " + d);
+            assertTrue(n.y + n.height <= rodape.y, "acao acima do rodape em " + d);
             assertTrue(read(() -> v.footer().isShowing()) && rodape.y + rodape.height <= read(v::getHeight), "versao e direitos visiveis em " + d);
-            assertTrue(lista.height > 0, "a lista continua visivel em " + d);
-            // lista extensa: rolar nao tira os botoes do lugar
             assertTrue(read(() -> v.rowList().getHeight() > v.scroll().getViewport().getHeight()), "lista rolavel em " + d);
             edt(() -> v.scroll().getVerticalScrollBar().setValue(v.scroll().getVerticalScrollBar().getMaximum()));
-            assertEquals(n, in(nova), "Nova automacao nao rola em " + d);
-            assertEquals(i, in(importar), "Importar nao rola em " + d);
+            assertEquals(n, in(nova), "o botao nao rola em " + d);
             edt(() -> v.scroll().getVerticalScrollBar().setValue(0));
         }
         evidence("sakura-dark-acoes-janela-minima");
@@ -340,7 +297,7 @@ class ActionButtonsDesktopTest {
         pick(fin);
         for (ClientTheme t : ClientTheme.values()) {
             edt(() -> Themes.apply(t));
-            for (ActionButton b : List.of(read(v::generateButton), read(v::importButton))) {
+            for (ActionButton b : List.of(read(v::generateButton))) {
                 String p = t.libId() + " " + b.getText();
                 Rgb normal = read(b::background);
                 edt(() -> b.getModel().setRollover(true));
@@ -367,44 +324,31 @@ class ActionButtonsDesktopTest {
                 assertTrue(distance(anel, t.focusRing()) <= 6, p + ": anel na cor de foco do tema");
             }
         }
-        assertEquals(0, created.get() + imported.get(), "conferir estados nao aciona nada");
+        assertEquals(0, created.get(), "conferir estados nao aciona nada");
     }
 
     @Test
     void desabilitadoContinuaBotaoEExplicaOMotivo() throws Exception {
         ContextView v = window.contextView();
-        // sem ambiente escolhido: Importar desabilitado, com o motivo; "Gerar pacote novo" so gera um arquivo e nao depende de ambiente
-        assertTrue(read(() -> v.generateButton().isEnabled()));
+        ActionButton b = read(v::generateButton);
+        assertTrue(read(b::isEnabled), "gerar um .zip nao depende de ambiente escolhido");
+        // acao que nao existe nesta versao: indisponivel, nunca "sem permissao"; continua com cara de botao
+        edt(() -> v.setActions(actions(false)));
         for (ClientTheme t : ClientTheme.values()) {
             edt(() -> Themes.apply(t));
-            for (ActionButton b : List.of(read(v::importButton))) {
-                String p = t.libId() + " " + b.getText();
-                assertFalse(read(b::isEnabled), p);
-                assertEquals("Selecione um ambiente primeiro.", read(b::getToolTipText), p);
-                assertEquals("Selecione um ambiente primeiro.", read(() -> b.getAccessibleContext().getAccessibleDescription()), p);
-                assertTrue(read(b::isShowing), p + ": visivel");
-                // a superficie continua pintada (esmaecida): nao vira texto solto sobre o fundo
-                Rectangle r = read(b::getBounds);
-                Rgb cor = painted(b, 8, r.height / 2);
-                assertTrue(distance(cor, t.bg()) >= 6, p + ": superficie do botao desabilitado ainda aparece (" + cor.toHex() + ")");
-            }
-            evidence(t.libId() + "-acoes-desabilitadas");
-        }
-        ActionButton importarOff = read(v::importButton);
-        edt(() -> importarOff.doClick(0));
-        assertEquals(0, created.get() + imported.get(), "desabilitado nao aciona");
-
-        // acao que nao existe nesta versao: indisponivel, nunca "sem permissao"
-        edt(() -> v.setActions(actions(false)));
-        pick(fin);
-        for (ActionButton b : List.of(read(v::generateButton), read(v::importButton))) {
             assertFalse(read(b::isEnabled));
             assertEquals("Indisponível nesta versão de teste.", read(b::getToolTipText));
+            assertEquals("Indisponível nesta versão de teste.", read(() -> b.getAccessibleContext().getAccessibleDescription()));
+            Rectangle r = read(b::getBounds);
+            Rgb cor = painted(b, 8, r.height / 2);
+            assertTrue(distance(cor, t.bg()) >= 6, t.libId() + ": superficie do botao desabilitado ainda aparece (" + cor.toHex() + ")");
+            evidence(t.libId() + "-acoes-desabilitadas");
         }
+        edt(() -> b.doClick(0));
+        assertEquals(0, created.get(), "desabilitado nao aciona");
         edt(() -> v.setActions(actions(true)));
-        pick(fin);
-        assertTrue(read(() -> v.generateButton().isEnabled() && v.importButton().isEnabled()));
-        assertNull(read(() -> v.generateButton().getToolTipText()));
+        assertTrue(read(b::isEnabled));
+        assertNull(read(b::getToolTipText));
     }
 
     // ------------------------------------------------------------------ teclado e funcao
@@ -416,41 +360,16 @@ class ActionButtonsDesktopTest {
     }
 
     @Test
-    void tabPercorreNaOrdemEEspacoAcionaOMesmoFluxo() throws Exception {
+    void tecladoAlcancaEAcionaOBotao() throws Exception {
         ContextView v = window.contextView();
         pick(fin);
         ActionButton nova = read(v::generateButton);
-        ActionButton importar = read(v::importButton);
-        assertTrue(read(() -> nova.isFocusable() && importar.isFocusable()));
-        // ordem do Tab: Nova automacao e, em seguida, Importar (.zip); lado a lado ou empilhados
-        for (Dimension d : List.of(new Dimension(900, 700), read(window::getMinimumSize))) {
-            edt(() -> window.setSize(d));
-            edt(window::validate);
-            Component depois = read(() -> window.getFocusTraversalPolicy().getComponentAfter(window, nova));
-            assertEquals(importar, depois, "Tab em Nova automacao leva a Importar em " + d);
-            Component antes = read(() -> window.getFocusTraversalPolicy().getComponentBefore(window, importar));
-            assertEquals(nova, antes, "Shift+Tab em Importar volta a Nova automacao em " + d);
-        }
-        // Espaco no botao com foco aciona; os eventos vao so para o proprio componente
+        assertTrue(read(nova::isFocusable));
         edt(nova::requestFocusInWindow);
         assertTrue(read(nova::isFocusOwner));
         edt(() -> press(nova, KeyEvent.VK_SPACE));
-        assertEquals(1, created.get(), "Espaco em Nova automacao abre o fluxo de nova automacao");
-        assertEquals(0, imported.get());
-        edt(importar::requestFocusInWindow);
-        assertTrue(read(importar::isFocusOwner));
-        edt(() -> press(importar, KeyEvent.VK_SPACE));
-        assertEquals(1, imported.get(), "Espaco em Importar abre o fluxo de importar");
-        assertEquals(1, created.get());
-        // clique
+        assertEquals(1, created.get(), "Espaco aciona Gerar pacote novo");
         edt(() -> nova.doClick(0));
-        edt(() -> importar.doClick(0));
         assertEquals(2, created.get());
-        assertEquals(2, imported.get());
-        // a apresentacao nao habilita o que era proibido: sem ambiente, Importar nao aciona
-        pick(NavText.WORKSPACE_PLACEHOLDER);
-        edt(() -> press(importar, KeyEvent.VK_SPACE));
-        assertEquals(2, created.get());
-        assertEquals(2, imported.get());
     }
 }
