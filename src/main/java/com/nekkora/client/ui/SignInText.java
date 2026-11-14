@@ -65,6 +65,14 @@ public final class SignInText {
         return build.version().map(v -> "Versão " + v).orElse("Versão de desenvolvimento");
     }
 
+    /**
+     * Linha de direitos no rodape, com o ano do build. So identifica a Nekkora: sem razao social, registro, link ou termo
+     * de licenca, e sem efeito sobre as licencas dos componentes (THIRD-PARTY-NOTICES.md).
+     */
+    public static String rights(BuildInfo build) {
+        return "© " + build.yearOrNow() + " Nekkora. Todos os direitos reservados.";
+    }
+
     public static String themeToggle(String current, String other) {
         return "Tema: " + current + ". Clique para usar " + other + ".";
     }

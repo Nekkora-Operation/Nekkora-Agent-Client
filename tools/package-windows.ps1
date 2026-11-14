@@ -120,6 +120,7 @@ $lines = @("Nekkora Agent (Client) $version - pacote de TESTE (Windows x64, sem 
     "commit: $commit$(if ($dirty) { ' (com alteracoes locais)' })",
     "data do commit: $commitTime",
     "versao mostrada na tela de entrada: $version (do pom.xml, pelos metadados do build dentro do JAR)",
+    "ano do build (linha de direitos): $((Get-Date).ToUniversalTime().Year)",
     "gerado em: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))",
     '',
     'Bibliotecas (app) com SHA-256:')
@@ -166,6 +167,13 @@ if ($shown.Count -ne 1 -or $shown[0].Trim() -ne $version) { throw "versao nos me
 $exeVersion = (Get-Item (Join-Path $app "$AppName.exe")).VersionInfo.ProductVersion
 if ($exeVersion -ne $version -and $exeVersion -ne "$version.0") { throw "versao do executavel ('$exeVersion') diferente da do pom.xml ('$version')" }
 Write-Host "      versao: pom.xml $version = metadados do JAR $($shown[0].Trim()) = executavel $exeVersion"
+# o ano da linha de direitos e o do build (UTC), gravado nos mesmos metadados
+$builtYear = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^year=' }) -replace '^year=', ''
+$nowYear = (Get-Date).ToUniversalTime().Year
+if ($builtYear.Count -ne 1 -or $builtYear[0].Trim() -notmatch '^2\d{3}$' -or [int]$builtYear[0].Trim() -gt $nowYear -or [int]$builtYear[0].Trim() -lt ($nowYear - 1)) {
+    throw "ano do build nos metadados do JAR ('$($builtYear -join ',')') nao e o deste build ($nowYear)"
+}
+Write-Host "      ano do build: $($builtYear[0].Trim())"
 Write-Host "      conferido: $($libs.Count) bibliotecas, $(@($names | Where-Object { $_ -like '*.class' }).Count) classes, sem conteudo administrativo, de teste ou de laboratorio"
 
 if ($NoZip) {
