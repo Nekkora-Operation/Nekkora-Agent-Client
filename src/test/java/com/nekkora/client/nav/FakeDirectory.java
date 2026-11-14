@@ -74,6 +74,33 @@ public final class FakeDirectory implements Directory {
         return listing;
     }
 
+    /** Renomear: quem pode (por organizacao) e o que a "Platform" respondeu. */
+    public volatile Failure renameFailure;
+    public final List<String> renames = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    @Override
+    public String rename(UUID organization, UUID automation, String name) throws Failed {
+        calls.add("rename " + organization + " " + automation);
+        if (renameFailure != null) {
+            throw new Failed(renameFailure);
+        }
+        String saved = name.trim();
+        for (java.util.Map.Entry<UUID, Automation.Listing> e : automations.entrySet()) {
+            List<Automation> items = new ArrayList<>();
+            boolean found = false;
+            for (Automation a : e.getValue().items()) {
+                found |= a.id().equals(automation);
+                items.add(a.id().equals(automation) ? new Automation(a.id(), saved, a.published()) : a);
+            }
+            if (found) {
+                e.setValue(new Automation.Listing(items, e.getValue().capabilities(), false));
+                renames.add(automation + "=" + saved);
+                return saved;
+            }
+        }
+        throw new Failed(Failure.NOT_FOUND);
+    }
+
     public static Workspace ws(int n, String name) {
         return new Workspace(id(1000 + n), name);
     }

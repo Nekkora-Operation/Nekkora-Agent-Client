@@ -26,6 +26,15 @@ public interface Directory {
     /** As automacoes ativas do ambiente e o que a pessoa pode fazer com elas, na ordem da Platform. */
     Automation.Listing automations(java.util.UUID organization, java.util.UUID workspace) throws Failed;
 
+    /**
+     * Renomeia a automacao NA PLATFORM. Quem decide se a pessoa pode e o servidor, nesta chamada: sem a permissao,
+     * {@link Failure#DENIED}; fora do alcance, {@link Failure#NOT_FOUND}; nome recusado, {@link Failure#REJECTED};
+     * automacao ou ambiente inativo, {@link Failure#CONFLICT}. Nao toca em versoes, pacotes nem manifestos.
+     *
+     * @return o nome como ficou gravado
+     */
+    String rename(java.util.UUID organization, java.util.UUID automation, String name) throws Failed;
+
     /** Por que uma consulta nao trouxe o resultado. */
     enum Failure {
         /** A sessao nao vale mais: o aplicativo volta para a entrada. */
@@ -34,6 +43,10 @@ public interface Directory {
         DENIED,
         /** Fora do alcance da pessoa, ou nao existe mais. */
         NOT_FOUND,
+        /** A Platform nao aceitou o que foi enviado (um nome invalido, por exemplo). */
+        REJECTED,
+        /** O estado atual nao permite a acao (automacao ou ambiente inativo). */
+        CONFLICT,
         RATE_LIMITED,
         SERVER,
         NETWORK,

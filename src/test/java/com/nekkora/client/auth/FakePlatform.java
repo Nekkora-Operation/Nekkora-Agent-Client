@@ -75,6 +75,10 @@ final class FakePlatform implements AutoCloseable {
     /** Navegacao, rotas com organizacao: caminho + "?" + consulta -> corpo. Sem a chave: 404. */
     final Map<String, String> pages = new ConcurrentHashMap<>();
     final List<String> pageRequests = new CopyOnWriteArrayList<>();
+    /** Renomear: o que chegou (metodo, caminho, tipo, corpo) e o que a "Platform" responde. */
+    final List<String> writes = new CopyOnWriteArrayList<>();
+    volatile int writeStatus = 200;
+    volatile String writeBody = "{}";
 
     FakePlatform() throws Exception {
         char[] pw = "changeit".toCharArray();
@@ -206,6 +210,17 @@ final class FakePlatform implements AutoCloseable {
             }
             if ("GET".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/")) {
                 page(x);
+                return;
+            }
+            if ("PATCH".equals(x.getRequestMethod()) && path.startsWith("/api/v1/desktop/organizations/")) {
+                String body = new String(x.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                writes.add("PATCH " + path + " | " + x.getRequestHeaders().getFirst("Content-Type") + " | " + body);
+                String t = bearer(x);
+                if (t == null || sessions.get(t) == null) {
+                    reply(x, 401, "application/json", "{\"error\":\"unauthenticated\"}");
+                } else {
+                    reply(x, writeStatus, "application/json", writeBody);
+                }
                 return;
             }
             switch (x.getRequestMethod() + " " + path) {

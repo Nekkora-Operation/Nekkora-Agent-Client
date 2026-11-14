@@ -157,6 +157,12 @@ public final class PlatformApi {
         return call(request(path).header("Authorization", "Bearer " + token.value()).GET());
     }
 
+    /** Escrita autenticada pelo token do aplicativo, com corpo JSON. So para as acoes do contrato de navegacao. */
+    Map<String, Object> patch(String path, Token token, String json) throws Directory.Failed {
+        return call(request(path).header("Authorization", "Bearer " + token.value()).header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8)));
+    }
+
     Map<String, Object> call(HttpRequest.Builder b) throws Directory.Failed {
         HttpResponse<String> r;
         try {
@@ -194,6 +200,9 @@ public final class PlatformApi {
         }
         if (s >= 500) {
             throw new Directory.Failed(Directory.Failure.SERVER);
+        }
+        if ((s == 400 || s == 409) && r.headers().firstValue("Content-Type").orElse("").toLowerCase(java.util.Locale.ROOT).startsWith("application/json")) {
+            throw new Directory.Failed(s == 400 ? Directory.Failure.REJECTED : Directory.Failure.CONFLICT);
         }
         // qualquer outro status (inclusive 403 que nao e o do contrato): nao e resposta do contrato
         throw new Directory.Failed(Directory.Failure.INVALID);

@@ -54,6 +54,29 @@ final class Json {
         return (Map<String, Object>) v;
     }
 
+    /** Um texto como literal JSON (aspas, barra e controles escapados). */
+    static String quote(String text) {
+        StringBuilder b = new StringBuilder(text.length() + 2).append('"');
+        for (int k = 0; k < text.length(); k++) {
+            char c = text.charAt(k);
+            switch (c) {
+                case '"' -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        b.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        b.append(c);
+                    }
+                }
+            }
+        }
+        return b.append('"').toString();
+    }
+
     private Object value(int depth) {
         if (depth > 8 || i >= s.length()) {
             throw new IllegalArgumentException("json");

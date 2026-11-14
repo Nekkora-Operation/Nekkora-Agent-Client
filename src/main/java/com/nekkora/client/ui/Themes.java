@@ -99,6 +99,18 @@ public final class Themes {
         d.put("List.foreground", t.text().toHex());
         d.put("List.selectionBackground", t.surfaceHover().toHex());
         d.put("List.selectionForeground", t.text().toHex());
+        d.put("TextField.background", t.surface().toHex());
+        d.put("TextField.foreground", t.text().toHex());
+        d.put("TextField.caretForeground", t.text().toHex());
+        d.put("TextField.selectionBackground", t.accentSoft().toHex());
+        d.put("TextField.selectionForeground", t.text().toHex());
+        d.put("TextArea.background", t.surface().toHex());
+        d.put("TextArea.foreground", t.text().toHex());
+        d.put("TextArea.caretForeground", t.text().toHex());
+        d.put("CheckBox.foreground", t.text().toHex());
+        d.put("CheckBox.background", t.bg().toHex());
+        d.put("Label.foreground", t.text().toHex());
+        d.put("OptionPane.background", t.bg().toHex());
         d.put("ScrollBar.track", t.bg().toHex());
         d.put("ScrollBar.thumb", t.border().toHex());
         return d;

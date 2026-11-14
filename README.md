@@ -3,8 +3,12 @@
 Aplicativo desktop do **cliente** Nekkora. Na tela aparece como "Nekkora Agent".
 
 Este repositório é separado do `Nekkora-Agent` (administrativo) de propósito: aqui **não há** telas, comandos ou módulos
-de importação, empacotamento, execução, catálogo, pareamento, operação global ou gestão de outros clientes. O código do
-outro repositório não foi copiado.
+de catálogo da máquina, pareamento, monitoramento, gatilhos remotos, operação global ou gestão de outros clientes.
+
+O que o cliente faz no próprio computador (importar um pacote, preparar um pacote a partir de código) reaproveita só o
+núcleo necessário do outro repositório: a validação de ZIP, o validador do pacote e o empacotador. A origem exata, classe
+por classe, está em `THIRD-PARTY-NOTICES.md`. O assistente, a integração com a Platform pela credencial de máquina e as
+telas do Agent administrativo **não** vieram.
 
 Separar o binário delimita o produto, mas **não é a fronteira de autorização**: quem nega funções administrativas é a API,
 mesmo a um Client alterado.
@@ -30,6 +34,13 @@ mesmo a um Client alterado.
   do ambiente, com a versão publicada (número da Platform) e a versão declarada no pacote. Nada é escolhido sozinho, e
   trocar de contexto apaga o que dependia do anterior. **Nova automação** e **Importar (.zip)** ficam fora da área
   rolável.
+- **Importar (.zip)** traz um pacote pronto para a área local do ambiente escolhido; **Nova automação** prepara um pacote
+  local a partir de um `.zip` de código. As duas são locais: nada vai para a Platform, nada é executado, nenhuma
+  dependência é instalada e não é preciso máquina pareada. Os pacotes ficam separados por organização e ambiente, na
+  pasta de dados deste aplicativo.
+- **Editar** renomeia. Automação da Platform: o servidor confere a permissão e grava; o pacote e as versões publicadas
+  não mudam. Item que só existe neste computador: muda só o nome mostrado aqui. O formulário diz o alcance antes do campo.
+- Cada linha diz se o pacote está neste computador. Listar os metadados na Platform não traz o código.
 - No topo, o **avatar** com as iniciais do nome (o contrato não tem foto) e o menu: nome, Configurações e Ajuda
   (desabilitadas nesta etapa), **Terminar sessão** e **Sair**. Terminar sessão descarta o token, pede o encerramento à
   Platform e volta para a entrada; Sair encerra o aplicativo.
@@ -51,6 +62,7 @@ A sessão dura 15 minutos, sem renovação, e fica só em memória.
 | `com.nekkora.client.signin` | estados e regras da entrada (uma tentativa por vez, resposta atrasada não entra) | nada de interface nem de rede |
 | `com.nekkora.client.auth` | entrada real pelo navegador (retorno local, PKCE, troca com a Platform) e as consultas da pessoa | rede; nada de interface |
 | `com.nekkora.client.nav` | o que a pessoa vê depois de entrar (perfil, organizações, escolha) e a porta das consultas | nada de interface nem de rede |
+| `com.nekkora.client.pack` | área local de pacotes: validação de ZIP, validador e impressão digital do pacote, empacotador, guarda por organização e ambiente | arquivos; nada de interface nem de rede |
 | `com.nekkora.client.ui` | janela, tela de entrada, seletor de organizações, avatar e menu, componentes | Swing e FlatLaf |
 
 O teste `ArchitectureTest` confere essas fronteiras, a dependência única de execução (FlatLaf) e a ausência de código

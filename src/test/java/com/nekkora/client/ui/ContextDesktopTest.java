@@ -248,9 +248,10 @@ class ContextDesktopTest {
             assertEquals(List.of("Conciliação bancária", "Emissão de boletos", "Rascunho ainda sem publicação"), rows.stream().map(AutomationRow::name).toList(),
                     "na ordem da Platform");
             // numero da versao NA PLATFORM e versao DECLARADA no pacote, cada uma com o seu nome
-            assertEquals(List.of("Versão publicada 3 · versão do pacote 1.2.0"), rows.get(0).details());
-            assertEquals(List.of("Versão publicada 1"), rows.get(1).details());
-            assertEquals(List.of("Sem versão publicada"), rows.get(2).details(), "rascunho nao e versao publicada");
+            assertEquals("Versão publicada 3 · versão do pacote 1.2.0", rows.get(0).details().get(0));
+            assertEquals("Versão publicada 1", rows.get(1).details().get(0));
+            assertEquals("Sem versão publicada", rows.get(2).details().get(0), "rascunho nao e versao publicada");
+            assertEquals("Pacote não está neste computador", rows.get(0).details().get(1), "listar metadados nao e ter o codigo");
             for (AutomationRow r : rows) {
                 assertFalse(r.details().get(0).toLowerCase().contains("última"), "nao chama de ultima");
                 List<JButton> bs = r.actions();
