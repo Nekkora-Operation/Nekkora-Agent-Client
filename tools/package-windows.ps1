@@ -9,7 +9,8 @@
   4. Runtime reduzido (jlink).
   5. Imagem de aplicativo (jpackage), sem instalador.
   6. Licencas, LEIA-ME e VERSOES.txt (commit lido do Git AQUI, nesta pasta de trabalho).
-  7. Conferencia do pacote: nada administrativo, de laboratorio ou de teste dentro dele.
+  7. Conferencia do pacote: nada do Nekkora Agent administrativo, de laboratorio ou de teste dentro dele; a versao nos metadados do JAR
+     empacotado e a do executavel sao a do pom.xml.
   8. ZIP e SHA-256.
 
   Saida: target\dist\nekkora-agent-client-<versao>-windows-x64-teste.zip (+ .sha256) e target\dist\VERSOES.txt.
@@ -118,6 +119,8 @@ $release = Get-Content (Join-Path $runtime 'release') | Where-Object { $_ -match
 $lines = @("Nekkora Agent (Client) $version - pacote de TESTE (Windows x64, sem assinatura digital)",
     "commit: $commit$(if ($dirty) { ' (com alteracoes locais)' })",
     "data do commit: $commitTime",
+    "versao mostrada na tela de entrada: $version (do pom.xml, pelos metadados do build dentro do JAR)",
+    "ano do build (linha de direitos): $((Get-Date).ToUniversalTime().Year)",
     "gerado em: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))",
     '',
     'Bibliotecas (app) com SHA-256:')
@@ -137,14 +140,16 @@ Write-Host '[7/8] Conferencia do pacote'
 $libs = @(Get-ChildItem (Join-Path $app 'app') -Recurse -File -Include '*.jar', '*.dll' | ForEach-Object { $_.Name } | Sort-Object)
 $expected = @("flatlaf-$flatVersion-windows-x86_64.dll", "flatlaf-$flatVersion.jar", 'nekkora-agent-client.jar') | Sort-Object
 if (Compare-Object $libs $expected) { throw "bibliotecas inesperadas no pacote: $($libs -join ', ')" }
-# nada administrativo, de teste ou de laboratorio dentro do JAR do aplicativo
+# nada administrativo, de teste ou de laboratorio dentro do JAR do aplicativo. O nucleo local (pacotes e execucao local,
+# com.nekkora.client.pack e .run) faz parte do Client; o que continua de fora e o codigo do Nekkora Agent administrativo e
+# a integracao da maquina com a Platform (catalogo remoto, pareamento, Worker, supervisao remota, credencial da maquina)
 $z = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $app 'app\nekkora-agent-client.jar'))
 try {
     $names = @($z.Entries | ForEach-Object { $_.FullName })
 } finally { $z.Dispose() }
 $bad = @($names | Where-Object {
         $_ -like 'com/nekkora/agent/*' -or $_ -match '(?i)(Fake|Mock|Stub|Test)[A-Za-z]*\.class$' -or
-        $_ -match '(?i)(Import|Catalog|Execution|Pairing|Worker|Approval|Package|Supervis)[A-Za-z]*\.class$' -or
+        $_ -match '(?i)(Catalog|Pairing|Worker|Supervis|Enroll|Credential)[A-Za-z]*\.class$' -or
         $_ -match '(?i)\.(p12|pem|jks|pfx|cfg)$' -or $_ -like 'nekkora-lib/*' })
 if ($bad.Count -gt 0) { throw "conteudo indevido no JAR: $($bad -join ', ')" }
 foreach ($n in $names | Where-Object { $_ -like '*.class' }) {
@@ -156,6 +161,21 @@ foreach ($c in Get-ChildItem -Recurse -File -Filter '*.cfg' $app) {
     if ($text -match '(?i)localhost|127\.0\.0\.1|trustStore|nekkora\.client\.platformOrigin|frontlab') { throw "configuracao de laboratorio em $($c.Name)" }
 }
 if (Get-ChildItem -Recurse -File $app -Include '*.p12', '*.pem', '*.jks', '*.pfx') { throw 'certificado ou repositorio de chaves dentro do pacote' }
+# a versao que a tela mostra (build.properties DENTRO do JAR empacotado) e a do pom.xml, e a do executavel tambem
+$meta = Join-Path $pkg 'build.properties'
+Export-Entry (Join-Path $app 'app\nekkora-agent-client.jar') 'com/nekkora/client/build.properties' $meta
+$shown = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^version=' }) -replace '^version=', ''
+if ($shown.Count -ne 1 -or $shown[0].Trim() -ne $version) { throw "versao nos metadados do JAR ('$($shown -join ',')') diferente da do pom.xml ('$version')" }
+$exeVersion = (Get-Item (Join-Path $app "$AppName.exe")).VersionInfo.ProductVersion
+if ($exeVersion -ne $version -and $exeVersion -ne "$version.0") { throw "versao do executavel ('$exeVersion') diferente da do pom.xml ('$version')" }
+Write-Host "      versao: pom.xml $version = metadados do JAR $($shown[0].Trim()) = executavel $exeVersion"
+# o ano da linha de direitos e o do build (UTC), gravado nos mesmos metadados
+$builtYear = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^year=' }) -replace '^year=', ''
+$nowYear = (Get-Date).ToUniversalTime().Year
+if ($builtYear.Count -ne 1 -or $builtYear[0].Trim() -notmatch '^2\d{3}$' -or [int]$builtYear[0].Trim() -gt $nowYear -or [int]$builtYear[0].Trim() -lt ($nowYear - 1)) {
+    throw "ano do build nos metadados do JAR ('$($builtYear -join ',')') nao e o deste build ($nowYear)"
+}
+Write-Host "      ano do build: $($builtYear[0].Trim())"
 Write-Host "      conferido: $($libs.Count) bibliotecas, $(@($names | Where-Object { $_ -like '*.class' }).Count) classes, sem conteudo administrativo, de teste ou de laboratorio"
 
 if ($NoZip) {

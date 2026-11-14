@@ -41,7 +41,7 @@ class PlatformApiTest {
     private String code() {
         String redirect = platform.authorize(URI.create(platform.issuer() + "/entrar/aplicativo?response_type=code&client_id=nekkora-agent-client&redirect_uri="
                 + java.net.URLEncoder.encode(REDIRECT, java.nio.charset.StandardCharsets.UTF_8) + "&state=" + pkce.state() + "&code_challenge=" + pkce.challenge()
-                + "&code_challenge_method=S256&scope=identity"));
+                + "&code_challenge_method=S256&scope=identity%20navigation"));
         return FakePlatform.query(URI.create(redirect).getRawQuery()).get("code");
     }
 
@@ -118,14 +118,16 @@ class PlatformApiTest {
     @Test
     void cadaStatusTemASuaClassificacao() {
         Object[][] casos = {{500, Notice.SERVER}, {502, Notice.SERVER}, {503, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE},
-                {400, Notice.INVALID_RETURN}, {401, Notice.INVALID_RETURN}, {403, Notice.INVALID_RETURN}, {302, Notice.INVALID_RETURN}};
+                {400, Notice.INVALID_RETURN}, {401, Notice.INVALID_RETURN}, {403, Notice.INVALID_RETURN}, {302, Notice.INVALID_RETURN},
+                {418, Notice.INVALID_RETURN}};
         for (Object[] c : casos) {
             platform.tokenStatus = (Integer) c[0];
             platform.tokenBody = "{\"error\":\"x\"}";
             assertEquals(c[1], failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "troca " + c[0]);
         }
         PlatformApi.Token t = new PlatformApi.Token(FakePlatform.token(), 900);
-        Object[][] sessao = {{401, Notice.SESSION_EXPIRED}, {500, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE}, {403, Notice.SERVER}};
+        Object[][] sessao = {{401, Notice.SESSION_EXPIRED}, {500, Notice.SERVER}, {429, Notice.RATE_LIMITED}, {404, Notice.UNAVAILABLE}, {403, Notice.INVALID_RETURN},
+                {302, Notice.INVALID_RETURN}};
         for (Object[] c : sessao) {
             platform.sessionStatus = (Integer) c[0];
             platform.sessionBody = "{\"error\":\"x\"}";
@@ -134,6 +136,33 @@ class PlatformApiTest {
     }
 
     /** 200 com corpo fora do contrato nunca vira sessao. */
+    @Test
+    void acessoNegadoSoPeloQuatroZeroTresDoContrato() {
+        PlatformApi.Token t = new PlatformApi.Token(FakePlatform.token(), 900);
+        // o 403 do contrato da API: application/json e exatamente {"error":"forbidden"}
+        platform.tokenStatus = 403;
+        platform.tokenBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.ACCESS_DENIED, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)));
+        platform.sessionStatus = 403;
+        platform.sessionBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.ACCESS_DENIED, failure(() -> api.session(t)));
+        // qualquer outro 403 nao e essa evidencia
+        for (String body : new String[] {"{\"error\":\"access_denied\"}", "{\"error\":\"forbidden\",\"reason\":\"x\"}", "{\"message\":\"forbidden\"}", "forbidden",
+                "<html>403 Forbidden</html>", "", "[]", "{\"error\":403}"}) {
+            platform.tokenBody = body;
+            assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), body);
+        }
+        platform.tokenContentType = "text/html";
+        platform.tokenBody = "{\"error\":\"forbidden\"}";
+        assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "tipo de conteudo");
+        // e "forbidden" com outro status tambem nao: 400 e codigo recusado, 401 nao e do contrato da troca
+        platform.tokenContentType = "application/json";
+        for (int status : new int[] {400, 401}) {
+            platform.tokenStatus = status;
+            assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "status " + status);
+        }
+    }
+
     @Test
     void respostaDeSucessoMalformadaNaoEAceita() {
         String tok = FakePlatform.token();
@@ -146,32 +175,34 @@ class PlatformApiTest {
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900}", // sem escopo
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity organizations\"}", // escopo maior
                 "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"admin\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"mac\",\"expires_in\":900,\"scope\":\"identity\"}",
-                "{\"access_token\":\"curto\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":86400,\"scope\":\"identity\"}", // prazo acima do teto
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":0,\"scope\":\"identity\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":\"900\",\"scope\":\"identity\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\",\"refresh_token\":\"" + tok + "\"}",
-                "{\"access_token\":\"" + tok + "\",\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"}",
-                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"} sobra"};
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"}", // escopo menor que o pedido
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"navigation identity\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"mac\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
+                "{\"access_token\":\"curto\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":86400,\"scope\":\"identity navigation\"}", // prazo acima do teto
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":0,\"scope\":\"identity navigation\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":\"900\",\"scope\":\"identity navigation\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\",\"refresh_token\":\"" + tok + "\"}",
+                "{\"access_token\":\"" + tok + "\",\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}",
+                "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"} sobra"};
         for (String body : ruins) {
             platform.tokenStatus = 200;
             platform.tokenBody = body;
             assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), body);
         }
-        platform.tokenBody = "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity\"}";
+        platform.tokenBody = "{\"access_token\":\"" + tok + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"scope\":\"identity navigation\"}";
         platform.tokenContentType = "text/html";
         assertEquals(Notice.INVALID_RETURN, failure(() -> api.exchange("a".repeat(43), pkce.verifier(), REDIRECT)), "tipo de conteudo");
 
         PlatformApi.Token t = new PlatformApi.Token(tok, 900);
         String[] sessoes = {
                 "{}",
-                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity\"}",
+                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation\"}",
                 "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"admin\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"sem-arroba\"},\"scope\":\"identity\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"ana@empresa.test\",\"role\":\"OWNER\"},\"scope\":\"identity\",\"expiresIn\":100}",
-                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity\",\"expiresIn\":100,\"organizations\":[]}",
-                "{\"account\":\"ana@empresa.test\",\"scope\":\"identity\",\"expiresIn\":100}"};
+                "{\"account\":{\"email\":\"sem-arroba\"},\"scope\":\"identity navigation\",\"expiresIn\":100}",
+                "{\"account\":{\"email\":\"ana@empresa.test\",\"role\":\"OWNER\"},\"scope\":\"identity navigation\",\"expiresIn\":100}",
+                "{\"account\":{\"email\":\"ana@empresa.test\"},\"scope\":\"identity navigation\",\"expiresIn\":100,\"organizations\":[]}",
+                "{\"account\":\"ana@empresa.test\",\"scope\":\"identity navigation\",\"expiresIn\":100}"};
         for (String body : sessoes) {
             platform.sessionStatus = 200;
             platform.sessionBody = body;
