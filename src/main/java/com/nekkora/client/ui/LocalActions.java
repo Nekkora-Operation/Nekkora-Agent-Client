@@ -93,13 +93,8 @@ final class LocalActions implements ContextView.Actions {
     }
 
     @Override
-    public Runnable create() {
-        return () -> {
-            String zip = chooseZip(NavText.NEW_CHOOSE);
-            if (zip != null) {
-                newAutomation(zip);
-            }
-        };
+    public Runnable generate() {
+        return this::openGenerate;
     }
 
     @Override
@@ -112,17 +107,6 @@ final class LocalActions implements ContextView.Actions {
         };
     }
 
-    /** O contexto da tela agora, ou nulo (sem sessao, sem organizacao ou sem ambiente): sem contexto, nenhuma acao. */
-    private Navigation.Context context() {
-        Navigation nav = host.navigation();
-        return nav == null ? null : nav.state().context();
-    }
-
-    private boolean still(Navigation.Context context) {
-        Navigation.Context now = context();
-        return now != null && now.organization().id().equals(context.organization().id()) && now.workspace().id().equals(context.workspace().id());
-    }
-
     /** Seletor de arquivo que so oferece .zip. Devolve o caminho escolhido, ou nulo se a pessoa desistiu. */
     private String chooseZip(String title) {
         JFileChooser chooser = new JFileChooser();
@@ -132,6 +116,17 @@ final class LocalActions implements ContextView.Actions {
         chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
         chooser.setMultiSelectionEnabled(false);
         return chooser.showOpenDialog(host.frame()) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    /** O contexto da tela agora, ou nulo (sem sessao, sem organizacao ou sem ambiente): sem contexto, nenhuma acao. */
+    private Navigation.Context context() {
+        Navigation nav = host.navigation();
+        return nav == null ? null : nav.state().context();
+    }
+
+    private boolean still(Navigation.Context context) {
+        Navigation.Context now = context();
+        return now != null && now.organization().id().equals(context.organization().id()) && now.workspace().id().equals(context.workspace().id());
     }
 
     // ------------------------------------------------------------------ importar
@@ -172,83 +167,253 @@ final class LocalActions implements ContextView.Actions {
         });
     }
 
-    // ------------------------------------------------------------------ nova automacao
+    // ------------------------------------------------------------------ gerar pacote novo (pasta -> .zip)
 
-    /** Abre o ZIP de codigo e mostra o formulario do pacote. Nada e gravado ate "Preparar pacote". */
-    void newAutomation(String zipPath) {
-        Navigation.Context context = context();
-        if (context == null) {
+    /** O formulario de geracao aberto e o retrato da pasta escolhida nele. Um de cada vez. */
+    private GenerateForm generateForm;
+    private Workshop.Draft generateDraft;
+    private long generateTurn;
+    private String generatedPath;
+    private final java.util.concurrent.atomic.AtomicBoolean generateCancelled = new java.util.concurrent.atomic.AtomicBoolean();
+    /** Pergunta antes de substituir um arquivo existente. Os testes trocam por uma resposta fixa. */
+    java.util.function.Predicate<String> confirmOverwrite = path -> {
+        Object[] options = {NavText.CANCEL, NavText.GENERATE_REPLACE};
+        return javax.swing.JOptionPane.showOptionDialog(dialog, NavText.generateReplace(path), NavText.GENERATE_TITLE, javax.swing.JOptionPane.DEFAULT_OPTION,
+                javax.swing.JOptionPane.WARNING_MESSAGE, null, options, options[0]) == 1;
+    };
+    /**
+     * Mostra, no gerenciador de arquivos, a pasta do arquivo gerado. Quem monta o aplicativo entrega a acao (a tela nao
+     * conhece arquivos nem o sistema); sem ela, o caminho ja esta escrito na tela. Os testes trocam por um registro.
+     */
+    java.util.function.Consumer<String> reveal = path -> {
+    };
+
+    /**
+     * "Gerar pacote novo": abre o formulario. Nada e lido ate a pessoa escolher a pasta, e nada e gravado ate ela escolher
+     * onde salvar. Nao depende de organizacao nem de ambiente: o resultado e so um arquivo .zip neste computador.
+     */
+    void openGenerate() {
+        GenerateForm f = new GenerateForm(new GenerateForm.Events() {
+            @Override
+            public void browse() {
+                String folder = chooseFolder();
+                if (folder != null) {
+                    setProjectFolder(folder);
+                }
+            }
+
+            @Override
+            public void changed() {
+                refreshSummary();
+            }
+
+            @Override
+            public void generate() {
+                String suggested = generateForm == null ? "pacote.zip" : NavText.generateFileName(generateForm.values().name(), generateForm.values().version());
+                String destination = chooseSave(suggested);
+                if (destination != null) {
+                    generateTo(destination);
+                }
+            }
+
+            @Override
+            public void cancel() {
+                generateCancelled.set(true);
+                close();
+            }
+
+            @Override
+            public void reveal() {
+                if (generatedPath != null) {
+                    reveal.accept(generatedPath);
+                }
+            }
+        });
+        open(NavText.GENERATE_TITLE, f, this::dropGenerate);
+        generateForm = f;
+        generatedPath = null;
+        generateCancelled.set(false);
+    }
+
+    /** Fecha o retrato da pasta (apaga a copia de trabalho) e esquece o formulario. */
+    private void dropGenerate() {
+        generateTurn++;
+        generateCancelled.set(true);
+        Workshop.Draft d = generateDraft;
+        generateDraft = null;
+        generateForm = null;
+        if (d != null) {
+            background.execute(d::close);
+        }
+    }
+
+    /** Seletor de PASTA. Devolve o caminho escolhido, ou nulo se a pessoa desistiu. */
+    private String chooseFolder() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(NavText.GENERATE_BROWSE_TITLE);
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setMultiSelectionEnabled(false);
+        return chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().getAbsolutePath() : null;
+    }
+
+    /** "Salvar como": so .zip. Devolve o destino escolhido (com a extensao), ou nulo se a pessoa desistiu. */
+    private String chooseSave(String suggested) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(NavText.GENERATE_SAVE_TITLE);
+        chooser.setAcceptAllFileFilterUsed(false);
+        chooser.setFileFilter(new FileNameExtensionFilter(NavText.IMPORT_FILTER, "zip"));
+        chooser.setSelectedFile(chooser.getFileSystemView().createFileObject(suggested));
+        if (chooser.showSaveDialog(dialog) != JFileChooser.APPROVE_OPTION) {
+            return null;
+        }
+        String path = chooser.getSelectedFile().getAbsolutePath();
+        return path.toLowerCase(java.util.Locale.ROOT).endsWith(".zip") ? path : path + ".zip";
+    }
+
+    /**
+     * A pessoa escolheu (ou trocou) a pasta do projeto: o retrato anterior e descartado, a entrada escolhida antes some e a
+     * pasta nova e lida fora da fila de eventos. Ler a pasta nao executa nada dela.
+     */
+    void setProjectFolder(String folderPath) {
+        GenerateForm f = generateForm;
+        if (f == null) {
             return;
         }
-        host.notice(NavText.WORKING, false);
+        long mine = ++generateTurn;
+        Workshop.Draft old = generateDraft;
+        generateDraft = null;
+        generatedPath = null;
+        f.showReading(folderPath);
         background.execute(() -> {
-            Workshop.Draft draft;
-            try {
-                draft = workshop.open(zipPath);
-            } catch (Workshop.Refused r) {
-                finish(context, r.getMessage(), true, false);
-                return;
-            } catch (RuntimeException e) {
-                finish(context, "Não foi possível abrir este arquivo.", true, false);
-                return;
+            if (old != null) {
+                old.close();
             }
+            Workshop.Draft draft = null;
+            String refused = null;
+            try {
+                draft = workshop.openFolder(folderPath);
+            } catch (Workshop.Refused r) {
+                refused = r.getMessage();
+            } catch (RuntimeException e) {
+                refused = NavText.GENERATE_FOLDER_FAILED;
+            }
+            Workshop.Draft opened = draft;
+            String why = refused;
             SwingUtilities.invokeLater(() -> {
-                if (!still(context)) {
-                    draft.close();
+                if (generateForm != f || generateTurn != mine) {
+                    if (opened != null) {
+                        background.execute(opened::close); // a pessoa ja trocou de pasta ou fechou
+                    }
                     return;
                 }
-                host.notice("", false);
-                showNewForm(context, draft);
+                if (opened == null) {
+                    f.showFolderRefused(why);
+                    return;
+                }
+                generateDraft = opened;
+                f.showFolder(opened);
+                refreshSummary();
             });
         });
     }
 
-    private void showNewForm(Navigation.Context context, Workshop.Draft draft) {
-        NewPackageForm[] holder = new NewPackageForm[1];
-        NewPackageForm f = new NewPackageForm(draft, v -> prepare(context, draft, holder[0], v), () -> {
-            draft.close();
-            close();
-        });
-        holder[0] = f;
-        open(NavText.NEW_TITLE, f, draft::close);
-    }
-
-    private void prepare(Navigation.Context context, Workshop.Draft draft, NewPackageForm f, NewPackageForm.Values v) {
-        if (v.entry().isEmpty()) {
-            f.setError("Escolha o arquivo de entrada.");
+    /** Refaz o resumo com as escolhas atuais. So leitura do retrato: nada e gravado. */
+    void refreshSummary() {
+        GenerateForm f = generateForm;
+        Workshop.Draft draft = generateDraft;
+        if (f == null || draft == null || !f.usable() || f.done()) {
             return;
         }
+        GenerateForm.Values v = f.values();
+        if (v.entry().isEmpty() || v.name().isEmpty()) {
+            f.clearSummary();
+            return;
+        }
+        long mine = ++generateTurn;
+        background.execute(() -> {
+            Workshop.PackageSummary summary = null;
+            String refused = null;
+            try {
+                summary = workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
+            } catch (Workshop.Refused r) {
+                refused = r.getMessage();
+            } catch (RuntimeException e) {
+                refused = NavText.GENERATE_FAILED;
+            }
+            Workshop.PackageSummary done = summary;
+            String why = refused;
+            SwingUtilities.invokeLater(() -> {
+                if (generateForm != f || generateTurn != mine || generateDraft != draft) {
+                    return;
+                }
+                if (done == null) {
+                    f.clearSummary();
+                    f.setError(why);
+                    f.setAdvancedOpen(true); // o que falta informar fica na secao avancada
+                } else {
+                    f.showSummary(done);
+                }
+            });
+        });
+    }
+
+    /**
+     * Gera o .zip no destino escolhido. Destino que ja existe: pergunta antes; sem o sim, nada e gravado. Gerar nao executa
+     * o codigo, nao prepara Python, nao aprova nada, nao envia nada a Platform e nao acrescenta nada a lista de automacoes.
+     */
+    void generateTo(String destination) {
+        GenerateForm f = generateForm;
+        Workshop.Draft draft = generateDraft;
+        if (f == null || draft == null || !f.usable() || f.done()) {
+            return;
+        }
+        GenerateForm.Values v = f.values();
+        if (v.entry().isEmpty()) {
+            f.setError(NavText.GENERATE_NEEDS);
+            return;
+        }
+        boolean overwrite = false;
+        if (workshop.exists(destination)) {
+            if (!confirmOverwrite.test(destination)) {
+                f.setError(NavText.GENERATE_NOT_REPLACED);
+                return;
+            }
+            overwrite = true;
+        }
+        boolean replace = overwrite;
+        long mine = ++generateTurn;
+        generateCancelled.set(false);
         f.setBusy(true);
         background.execute(() -> {
-            String failure = null;
-            Workshop.Imported done = null;
+            Workshop.Generated generated = null;
+            String refused = null;
             try {
-                done = workshop.build(context.organization().id(), context.workspace().id(), draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(),
-                        v.dependenciesConfirmed());
+                generated = workshop.generate(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed(), destination,
+                        replace, generateCancelled::get);
             } catch (Workshop.Refused r) {
-                failure = r.getMessage();
+                refused = r.getMessage();
             } catch (RuntimeException e) {
-                failure = "Não foi possível preparar o pacote.";
+                refused = NavText.GENERATE_FAILED;
             }
-            String why = failure;
-            Workshop.Imported result = done;
+            Workshop.Generated done = generated;
+            String why = refused;
             SwingUtilities.invokeLater(() -> {
-                if (form != f) {
-                    return; // formulario ja fechado
+                if (generateForm != f || generateTurn != mine) {
+                    return; // formulario fechado no meio: o nucleo ja apagou o temporario
                 }
-                f.setBusy(false);
-                if (why != null) {
+                if (done == null) {
+                    f.setBusy(false);
                     f.setError(why);
                     return;
                 }
-                draft.close();
-                close();
-                if (still(context)) {
-                    host.notice(NavText.prepared(result.item().name(), result.item().packageVersion()), false);
-                    host.localChanged(context);
-                }
+                generatedPath = done.path();
+                f.showGenerated(done.path());
             });
         });
+    }
+
+    GenerateForm generateForm() {
+        return generateForm;
     }
 
     // ------------------------------------------------------------------ renomear

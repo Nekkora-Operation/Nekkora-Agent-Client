@@ -68,7 +68,25 @@ public final class ImportProblem extends Exception {
         // NOVOS neste aplicativo: pacotes guardados por organizacao e ambiente
         LOCAL_NAME_INVALID("AGT-PAC-060", "O nome local precisa ter de 1 a 80 caracteres, sem quebra de linha nem caracteres de controle."),
         LOCAL_NOT_FOUND("AGT-PAC-061", "Este pacote não está guardado neste ambiente."),
-        STORE_FAILED("AGT-PAC-062", "Não foi possível gravar na pasta de pacotes do aplicativo. Nada foi deixado pela metade.");
+        STORE_FAILED("AGT-PAC-062", "Não foi possível gravar na pasta de pacotes do aplicativo. Nada foi deixado pela metade."),
+        // NOVOS (AGENT-CLIENT-PACOTES-001 T01): pacote gerado a partir de uma PASTA de projeto
+        FOLDER_NOT_FOUND("AGT-PAC-070", "A pasta escolhida não existe ou não pôde ser aberta."),
+        FOLDER_LINK("AGT-PAC-071", "A pasta tem uma ligação simbólica, uma junção ou outro item especial, que não é aceito: só entram no pacote arquivos que estão de fato dentro da pasta escolhida."),
+        FOLDER_CHANGED("AGT-PAC-072", "Os arquivos da pasta mudaram depois que ela foi aberta. Abra a pasta de novo para gerar o pacote."),
+        FOLDER_TOO_MANY("AGT-PAC-073", "A pasta tem mais de 1000 arquivos para o pacote (sem contar ambiente virtual, cache, controle de versão e dados)."),
+        FOLDER_FILE_TOO_LARGE("AGT-PAC-074", "Um arquivo da pasta passa do limite de 50 MiB."),
+        FOLDER_CONTENT_TOO_LARGE("AGT-PAC-075", "O conteúdo da pasta passa do limite de 100 MiB (sem contar ambiente virtual, cache, controle de versão e dados)."),
+        FOLDER_NAME("AGT-PAC-076", "A pasta tem um nome que não pode ser lido com segurança no Windows (nome reservado, caractere inválido, terminado em ponto ou espaço, ou dois nomes que só diferem por maiúsculas e minúsculas)."),
+        FOLDER_TOO_DEEP("AGT-PAC-077", "A pasta tem subpastas aninhadas demais (mais de 16 níveis)."),
+        FOLDER_UNREADABLE("AGT-PAC-078", "Um arquivo ou uma subpasta não pôde ser lido (sem permissão ou em uso por outro programa)."),
+        FOLDER_NO_PYTHON("AGT-PAC-079", "A pasta não tem nenhum arquivo .py que possa servir de entrada."),
+        FOLDER_DESCRIPTOR_CONFLICT("AGT-PAC-080", "A pasta traz descritores de formatos diferentes na raiz (nekkora-external.json junto com manifest.json ou nekkora-agent-lab.json). Um pacote tem um único formato; nada foi misturado nem regravado."),
+        FOLDER_EXTERNAL_INVALID("AGT-PAC-081", "A pasta tem um nekkora-external.json que não é válido para o conteúdo atual. Corrija ou remova o arquivo no projeto; ele não é regravado por este aplicativo."),
+        FOLDER_FORMAT_UNSUPPORTED("AGT-PAC-082", "Esta pasta é um pacote do Studio ou de laboratório. Este aplicativo só aceita pacotes Python externos (nekkora-external.json) ou o código de um projeto Python."),
+        FOLDER_IS_APP("AGT-PAC-083", "Escolha a pasta do projeto, não uma pasta do próprio aplicativo."),
+        FOLDER_CANCELLED("AGT-PAC-084", "Operação cancelada. Nada foi gerado e a pasta do projeto não foi alterada."),
+        DESTINATION_INVALID("AGT-PAC-085", "Escolha onde salvar o pacote: um arquivo .zip numa pasta que existe."),
+        DESTINATION_EXISTS("AGT-PAC-086", "Já existe um arquivo com esse nome no destino escolhido. Nada foi substituído.");
 
         private final String code;
         private final String text;

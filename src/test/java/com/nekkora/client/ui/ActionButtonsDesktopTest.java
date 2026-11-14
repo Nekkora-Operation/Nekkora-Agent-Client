@@ -42,7 +42,7 @@ import com.nekkora.client.theme.ClientTheme;
 import com.nekkora.client.theme.Rgb;
 
 /**
- * "Nova automacao" e "Importar (.zip)" como botoes de verdade (AGENT-CLIENT-NAVEGACAO-002 T02), na janela real, com a
+ * "Gerar pacote novo" (antes "Nova automacao") e "Importar (.zip)" como botoes de verdade (AGENT-CLIENT-NAVEGACAO-002 T02), na janela real, com a
  * entrada e a Platform SIMULADAS. O que se confere e o problema relatado: presenca visual (superficie pintada, diferente
  * do fundo), dimensoes, sobreposicao e acesso - sem fixar pixels. Eventos restritos a janela de teste.
  */
@@ -122,7 +122,7 @@ class ActionButtonsDesktopTest {
             }
 
             @Override
-            public Runnable create() {
+            public Runnable generate() {
                 return available ? created::incrementAndGet : null;
             }
 
@@ -205,16 +205,16 @@ class ActionButtonsDesktopTest {
     void saoBotoesComSuperficieIconeERotuloNosDoisTemas() throws Exception {
         ContextView v = window.contextView();
         pick(fin);
-        ActionButton nova = read(v::createButton);
+        ActionButton nova = read(v::generateButton);
         ActionButton importar = read(v::importButton);
         assertEquals(ActionButton.Kind.PRIMARY, nova.kind());
         assertEquals(ActionButton.Glyph.ADD, nova.glyph());
         assertEquals(ActionButton.Kind.SECONDARY, importar.kind());
         assertEquals(ActionButton.Glyph.IMPORT, importar.glyph());
         // rotulos por extenso; o icone nao substitui o texto nem o nome acessivel
-        assertEquals("Nova automação", read(nova::getText));
+        assertEquals("Gerar pacote novo", read(nova::getText));
         assertEquals("Importar (.zip)", read(importar::getText));
-        assertEquals("Nova automação", read(() -> nova.getAccessibleContext().getAccessibleName()));
+        assertEquals("Gerar pacote novo", read(() -> nova.getAccessibleContext().getAccessibleName()));
         assertEquals("Importar (.zip)", read(() -> importar.getAccessibleContext().getAccessibleName()));
 
         for (ClientTheme t : ClientTheme.values()) {
@@ -251,7 +251,7 @@ class ActionButtonsDesktopTest {
         for (Dimension d : List.of(new Dimension(900, 700), new Dimension(640, 520), read(window::getMinimumSize))) {
             edt(() -> window.setSize(d));
             edt(window::validate);
-            ActionButton nova = read(v::createButton);
+            ActionButton nova = read(v::generateButton);
             ActionButton importar = read(v::importButton);
             Rectangle n = in(nova);
             Rectangle i = in(importar);
@@ -299,7 +299,7 @@ class ActionButtonsDesktopTest {
      */
     @Test
     void faixaEstreitaEmpilhaNaOrdemSemCortar() throws Exception {
-        ActionButton nova = read(() -> new ActionButton("Nova automação", ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD));
+        ActionButton nova = read(() -> new ActionButton("Gerar pacote novo", ActionButton.Kind.PRIMARY, ActionButton.Glyph.ADD));
         ActionButton importar = read(() -> new ActionButton("Importar (.zip)", ActionButton.Kind.SECONDARY, ActionButton.Glyph.IMPORT));
         ButtonRow faixa = read(() -> {
             ButtonRow r = new ButtonRow();
@@ -340,7 +340,7 @@ class ActionButtonsDesktopTest {
         pick(fin);
         for (ClientTheme t : ClientTheme.values()) {
             edt(() -> Themes.apply(t));
-            for (ActionButton b : List.of(read(v::createButton), read(v::importButton))) {
+            for (ActionButton b : List.of(read(v::generateButton), read(v::importButton))) {
                 String p = t.libId() + " " + b.getText();
                 Rgb normal = read(b::background);
                 edt(() -> b.getModel().setRollover(true));
@@ -373,10 +373,11 @@ class ActionButtonsDesktopTest {
     @Test
     void desabilitadoContinuaBotaoEExplicaOMotivo() throws Exception {
         ContextView v = window.contextView();
-        // sem ambiente escolhido: desabilitados, com o motivo
+        // sem ambiente escolhido: Importar desabilitado, com o motivo; "Gerar pacote novo" so gera um arquivo e nao depende de ambiente
+        assertTrue(read(() -> v.generateButton().isEnabled()));
         for (ClientTheme t : ClientTheme.values()) {
             edt(() -> Themes.apply(t));
-            for (ActionButton b : List.of(read(v::createButton), read(v::importButton))) {
+            for (ActionButton b : List.of(read(v::importButton))) {
                 String p = t.libId() + " " + b.getText();
                 assertFalse(read(b::isEnabled), p);
                 assertEquals("Selecione um ambiente primeiro.", read(b::getToolTipText), p);
@@ -389,23 +390,21 @@ class ActionButtonsDesktopTest {
             }
             evidence(t.libId() + "-acoes-desabilitadas");
         }
-        ActionButton novaOff = read(v::createButton);
         ActionButton importarOff = read(v::importButton);
-        edt(() -> novaOff.doClick(0));
         edt(() -> importarOff.doClick(0));
         assertEquals(0, created.get() + imported.get(), "desabilitado nao aciona");
 
         // acao que nao existe nesta versao: indisponivel, nunca "sem permissao"
         edt(() -> v.setActions(actions(false)));
         pick(fin);
-        for (ActionButton b : List.of(read(v::createButton), read(v::importButton))) {
+        for (ActionButton b : List.of(read(v::generateButton), read(v::importButton))) {
             assertFalse(read(b::isEnabled));
             assertEquals("Indisponível nesta versão de teste.", read(b::getToolTipText));
         }
         edt(() -> v.setActions(actions(true)));
         pick(fin);
-        assertTrue(read(() -> v.createButton().isEnabled() && v.importButton().isEnabled()));
-        assertNull(read(() -> v.createButton().getToolTipText()));
+        assertTrue(read(() -> v.generateButton().isEnabled() && v.importButton().isEnabled()));
+        assertNull(read(() -> v.generateButton().getToolTipText()));
     }
 
     // ------------------------------------------------------------------ teclado e funcao
@@ -420,7 +419,7 @@ class ActionButtonsDesktopTest {
     void tabPercorreNaOrdemEEspacoAcionaOMesmoFluxo() throws Exception {
         ContextView v = window.contextView();
         pick(fin);
-        ActionButton nova = read(v::createButton);
+        ActionButton nova = read(v::generateButton);
         ActionButton importar = read(v::importButton);
         assertTrue(read(() -> nova.isFocusable() && importar.isFocusable()));
         // ordem do Tab: Nova automacao e, em seguida, Importar (.zip); lado a lado ou empilhados
@@ -448,9 +447,8 @@ class ActionButtonsDesktopTest {
         edt(() -> importar.doClick(0));
         assertEquals(2, created.get());
         assertEquals(2, imported.get());
-        // a apresentacao nao habilita o que era proibido: sem ambiente, nada
+        // a apresentacao nao habilita o que era proibido: sem ambiente, Importar nao aciona
         pick(NavText.WORKSPACE_PLACEHOLDER);
-        edt(() -> nova.doClick(0));
         edt(() -> press(importar, KeyEvent.VK_SPACE));
         assertEquals(2, created.get());
         assertEquals(2, imported.get());

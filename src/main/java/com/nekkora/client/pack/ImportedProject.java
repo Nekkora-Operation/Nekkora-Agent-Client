@@ -25,10 +25,13 @@ import java.util.Optional;
  * @param declarations o que o projeto declara sobre Python e dependencias
  * @param blockers impedimentos para gerar um pacote novo a partir deste ZIP (motivo e texto para a tela)
  * @param notes avisos que nao impedem (descritor em subpasta, arquivos ignorados...)
+ * @param folder quando a origem e uma PASTA de projeto (e nao um ZIP): o retrato tirado na abertura; senao {@code null}.
+ *        Nesse caso {@code source} e a pasta (caminho real), {@code sourceSize} o total copiado, {@code sourceModified} o
+ *        instante da abertura e {@code sourceSha256} e {@code null}
  */
 public record ImportedProject(Path source, long sourceSize, Instant sourceModified, String sourceSha256, Path workDir, Path root, String rootFolder, Kind kind,
                               ExecutionPackage existing, ExecRefused refusal, List<ProjectFile> files, List<String> pythonFiles, Optional<String> suggestedEntry,
-                              Declarations declarations, List<ImportProblem> blockers, List<String> notes) {
+                              Declarations declarations, List<ImportProblem> blockers, List<String> notes, FolderSource folder) {
 
     public ImportedProject {
         files = List.copyOf(files);
@@ -76,6 +79,31 @@ public record ImportedProject(Path source, long sourceSize, Instant sourceModifi
      * @param contractSafe o nome cabe no formato do pacote
      */
     public record ProjectFile(String path, long size, String hash, InclusionRules.Rule rule, boolean contractSafe) {}
+
+    /**
+     * O retrato de uma pasta de projeto, tirado UMA vez na abertura. Tudo o que e conferido e empacotado depois vem da
+     * copia privada; a pasta da pessoa so e lida de novo para saber se mudou.
+     *
+     * @param root a pasta escolhida (caminho real)
+     * @param stamps arquivos COPIADOS (caminho relativo com {@code /}) e como estavam na origem quando foram lidos
+     * @param skippedDirs subpastas que nao foram lidas nem copiadas (ambiente virtual, cache, controle de versao), com
+     *        {@code /} no fim
+     * @param unlisted quantos arquivos fora do pacote deixaram de ser listados um a um (pastas de dados muito grandes)
+     */
+    public record FolderSource(Path root, java.util.Map<String, Stamp> stamps, List<String> skippedDirs, int unlisted) {
+        public FolderSource {
+            stamps = java.util.Collections.unmodifiableMap(new java.util.TreeMap<>(stamps));
+            skippedDirs = List.copyOf(skippedDirs);
+        }
+    }
+
+    /** Tamanho e data de um arquivo da origem no momento em que foi lido. */
+    public record Stamp(long size, Instant modified) {}
+
+    /** A origem e uma pasta de projeto (e nao um ZIP). */
+    public boolean fromFolder() {
+        return folder != null;
+    }
 
     public Optional<ProjectFile> file(String path) {
         return files.stream().filter(f -> f.path().equals(path)).findFirst();

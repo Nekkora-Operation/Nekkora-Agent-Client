@@ -411,7 +411,7 @@ class RefreshDesktopTest {
         assertEquals(NavText.WORKSPACE_PLACEHOLDER, read(() -> v.workspaceBox().getSelectedItem()), "o ambiente que sobrou nao e escolhido no lugar");
         assertEquals(0, read(() -> v.rows().size()), "as automacoes do ambiente perdido saem da tela");
         assertEquals("Você não tem mais acesso ao ambiente “Financeiro”. Selecione outro ambiente.", read(() -> v.refresh().noteText()));
-        assertFalse(read(() -> v.createButton().isEnabled() || v.importButton().isEnabled()), "sem ambiente, nenhuma acao");
+        assertFalse(read(() -> v.importButton().isEnabled()), "sem ambiente, nada e importado para ele");
         evidence("sakura-dark-atualizar-ambiente-revogado");
     }
 
