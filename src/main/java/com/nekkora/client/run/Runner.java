@@ -58,8 +58,35 @@ public final class Runner implements AutoCloseable {
                          boolean succeeded, String state, String detail, long elapsedMillis, String outputFolder, boolean cancelRequested) {
     }
 
+    /**
+     * Um ambiente Python que a pessoa pode escolher, com a situacao CONTRA o pacote conferido. {@code id}: identidade do
+     * ambiente (preserva a escolha entre buscas). {@code folderName}: {@code .venv}/{@code venv} no ambiente do projeto.
+     * {@code version}: vazio quando nao foi possivel verificar. {@code pending}: os requisitos declarados nao atendidos,
+     * cada um com o que foi encontrado.
+     */
+    public record PythonOption(String id, PythonEnvironments.Kind kind, String folderName, String path, String version, PythonEnvironments.State state,
+                               List<String> pending) {
+        public boolean usable() {
+            return state == PythonEnvironments.State.COMPATIBLE;
+        }
+    }
+
+    /**
+     * As instalacoes encontradas neste computador. {@code requirement}: a faixa de Python que o pacote declara.
+     * {@code failedSources}: fontes que nao responderam (busca parcial). {@code unanswered}: candidatos que nao
+     * responderam como Python e por isso nao sao opcao.
+     */
+    public record PythonList(List<PythonOption> options, String requirement, List<String> failedSources, int unanswered, boolean cancelled) {
+    }
+
+    /** Os ambientes da pasta indicada. {@code problems}: o que nao virou ambiente ({@code nome} + motivo). */
+    public record ProjectPythons(String folder, List<PythonOption> options, List<PythonEnvironments.Problem> problems, boolean cancelled) {
+    }
+
     private final LocalPackages packages;
     private final RunController controller;
+    private final PythonEnvironments environments;
+    private final java.util.Map<String, PythonEnvironments.Environment> known = new java.util.concurrent.ConcurrentHashMap<>();
     private final List<Consumer<Status>> listeners = new CopyOnWriteArrayList<>();
     private volatile String lastOutputRoot;
 
@@ -75,8 +102,13 @@ public final class Runner implements AutoCloseable {
     }
 
     public Runner(LocalPackages packages, RunController controller) {
+        this(packages, controller, new PythonEnvironments(PythonSources.system(controller.probeDir()), controller.probeDir()));
+    }
+
+    public Runner(LocalPackages packages, RunController controller, PythonEnvironments environments) {
         this.packages = packages;
         this.controller = controller;
+        this.environments = environments;
         controller.addListener(s -> {
             Status status = status(s);
             listeners.forEach(l -> l.accept(status));
@@ -126,6 +158,72 @@ public final class Runner implements AutoCloseable {
         } catch (ExecRefused e) {
             throw new Refused(e.code().message());
         }
+    }
+
+    /**
+     * As instalacoes de Python deste computador, cada uma conferida contra o pacote (versao e dependencias declaradas).
+     * Descoberta LIMITADA as fontes do sistema; nada e instalado nem alterado. Bloqueia: fora da linha de eventos.
+     */
+    public PythonList pythons(UUID organization, UUID workspace, String fingerprint, PythonProbe.Cancel cancel) throws Refused {
+        ExecutionPackage pkg = inspected(organization, workspace, fingerprint);
+        PythonEnvironments.Discovery d = environments.discover(pkg, cancel);
+        return new PythonList(remember(d.environments()), pkg.pythonRequirement(), d.failedSources(), d.unanswered(), d.cancelled());
+    }
+
+    /**
+     * Os ambientes virtuais convencionais ({@code .venv} e {@code venv}) DIRETAMENTE dentro da pasta que a pessoa
+     * indicou, conferidos contra o pacote. Nada e procurado em subpastas nem em outras pastas; nada e criado.
+     */
+    public ProjectPythons projectPythons(UUID organization, UUID workspace, String fingerprint, String folder, PythonProbe.Cancel cancel) throws Refused {
+        ExecutionPackage pkg = inspected(organization, workspace, fingerprint);
+        Path dir = path(folder, "Selecione a pasta da automação.");
+        PythonEnvironments.Project p = environments.project(dir, pkg, cancel);
+        return new ProjectPythons(String.valueOf(p.folder()), remember(p.environments()), p.problems(), p.cancelled());
+    }
+
+    /**
+     * Confere de novo UM ambiente ja listado contra o pacote como ele esta AGORA. Se o interpretador sumiu ou nao
+     * responde, volta "nao foi possivel verificar": nenhum outro ambiente e posto no lugar. Vazio: cancelado.
+     */
+    public Optional<PythonOption> recheckPython(UUID organization, UUID workspace, String fingerprint, String id, PythonProbe.Cancel cancel) throws Refused {
+        ExecutionPackage pkg = inspected(organization, workspace, fingerprint);
+        PythonEnvironments.Environment before = known.get(id);
+        if (before == null) {
+            throw new Refused("Este ambiente Python não está mais na lista. Use Buscar novamente.");
+        }
+        PythonEnvironments.Environment now = environments.recheck(before, pkg, cancel);
+        if (now == null) {
+            return Optional.empty();
+        }
+        known.put(now.id(), now);
+        return Optional.of(option(now));
+    }
+
+    private ExecutionPackage inspected(UUID organization, UUID workspace, String fingerprint) throws Refused {
+        try {
+            return packages.inspect(new PackageContext(organization, workspace), fingerprint);
+        } catch (ExecRefused e) {
+            throw new Refused(e.code().message());
+        } catch (IllegalArgumentException e) {
+            throw new Refused("Este pacote não está neste computador, neste ambiente. Abra Editar e escolha o pacote desta máquina.");
+        }
+    }
+
+    private List<PythonOption> remember(List<PythonEnvironments.Environment> list) {
+        List<PythonOption> out = new java.util.ArrayList<>();
+        for (PythonEnvironments.Environment e : list) {
+            known.put(e.id(), e);
+            out.add(option(e));
+        }
+        return List.copyOf(out);
+    }
+
+    private static PythonOption option(PythonEnvironments.Environment e) {
+        List<String> pending = new java.util.ArrayList<>();
+        for (PythonEnvironments.Pending p : e.pending()) {
+            pending.add(p.requirement() + (p.installed() == null ? " (não instalado)" : " (instalada a versão " + p.installed() + ")"));
+        }
+        return new PythonOption(e.id(), e.kind(), e.folderName(), e.python().toString(), e.version() == null ? "" : e.version(), e.state(), List.copyOf(pending));
     }
 
     /** A pasta de saida precisa existir (a execucao cria nela uma subpasta propria). */
