@@ -170,16 +170,17 @@ final class LocalActions implements ContextView.Actions {
 
             @Override
             public void generateFromFolder() {
-                String folder = pendingLocalPath;
-                openGenerate();
-                if (folder != null) {
-                    setProjectFolder(folder);
-                }
+                openGenerate(pendingLocalPath);
             }
 
             @Override
             public void download() {
                 downloadChosen();
+            }
+
+            @Override
+            public void retryVersions() {
+                loadVersions();
             }
 
             @Override
@@ -192,6 +193,7 @@ final class LocalActions implements ContextView.Actions {
                 LocalActions.this.close();
             }
         });
+        EditTarget target = new EditTarget(context, entry.automation(), caps);
         open(NavText.EDIT_TITLE, new EditForm(r, p), () -> {
             if (packageForm == p) {
                 // fechou (ou trocou de contexto, ou a sessao acabou): um download em curso e interrompido e descartado
@@ -200,13 +202,14 @@ final class LocalActions implements ContextView.Actions {
                 editTarget = null;
                 pendingLocalPath = null;
             }
+        }, () -> {
+            packageForm = p;
+            editTarget = target;
+            pendingLocalPath = null;
+            downloadCancelled.set(false);
+            refreshPackageStatus();
+            loadVersions();
         });
-        packageForm = p;
-        editTarget = new EditTarget(context, entry.automation(), caps);
-        pendingLocalPath = null;
-        downloadCancelled.set(false);
-        refreshPackageStatus();
-        loadVersions();
     }
 
     /** O formulario ainda e o deste alvo, no mesmo contexto? */
@@ -244,7 +247,7 @@ final class LocalActions implements ContextView.Actions {
             java.util.List<Workshop.LocalItem> items;
             try {
                 items = workshop.list(t.context().organization().id(), t.context().workspace().id());
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 items = java.util.List.of();
             }
             com.nekkora.client.nav.Automation.Published pub = t.automation().published();
@@ -341,7 +344,7 @@ final class LocalActions implements ContextView.Actions {
             } catch (Workshop.Refused r) {
                 text = r.getMessage();
                 error = true;
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 text = NavText.PKG_LOCAL_FAILED;
                 error = true;
             }
@@ -384,7 +387,7 @@ final class LocalActions implements ContextView.Actions {
                 all = directory.versions(t.context().organization().id(), t.automation().id());
             } catch (Directory.Failed x) {
                 failure = x.failure();
-            } catch (RuntimeException x) {
+            } catch (RuntimeException | LinkageError x) {
                 failure = Directory.Failure.INVALID;
             }
             java.util.List<com.nekkora.client.nav.Automation.Version> list = all;
@@ -481,7 +484,7 @@ final class LocalActions implements ContextView.Actions {
                 text = NavText.downloadFailed(x.failure());
             } catch (Workshop.Refused r) {
                 text = r.getMessage();
-            } catch (java.io.IOException | RuntimeException e) {
+            } catch (java.io.IOException | RuntimeException | LinkageError e) {
                 text = NavText.downloadFailed(Directory.Failure.LOCAL);
             } finally {
                 if (out != null) {
@@ -494,7 +497,7 @@ final class LocalActions implements ContextView.Actions {
                 if (partial != null) {
                     try {
                         workshop.discardDownload(partial);
-                    } catch (Workshop.Refused | RuntimeException e) {
+                    } catch (Workshop.Refused | RuntimeException | LinkageError e) {
                         // sobra de parcial e limpa pela propria area de downloads (nunca vira pacote)
                     }
                 }
@@ -547,6 +550,11 @@ final class LocalActions implements ContextView.Actions {
      * onde salvar. Nao depende de organizacao nem de ambiente: o resultado e so um arquivo .zip neste computador.
      */
     void openGenerate() {
+        openGenerate(null);
+    }
+
+    /** {@code folder}: a pasta ja escolhida em Editar (codigo sem manifesto), ou nulo para comecar sem pasta. */
+    void openGenerate(String folder) {
         GenerateForm f = new GenerateForm(new GenerateForm.Events() {
             @Override
             public void browse() {
@@ -583,14 +591,21 @@ final class LocalActions implements ContextView.Actions {
                 }
             }
         });
-        open(NavText.GENERATE_TITLE, f, this::dropGenerate);
-        generateForm = f;
-        generatedPath = null;
-        generateCancelled.set(false);
+        open(NavText.GENERATE_TITLE, f, () -> dropGenerate(f), () -> {
+            generateForm = f;
+            generatedPath = null;
+            generateCancelled.set(false);
+            if (folder != null) {
+                setProjectFolder(folder);
+            }
+        });
     }
 
-    /** Fecha o retrato da pasta (apaga a copia de trabalho) e esquece o formulario. */
-    private void dropGenerate() {
+    /** Fecha o retrato da pasta (apaga a copia de trabalho) e esquece o formulario - se ainda for o da tela. */
+    private void dropGenerate(GenerateForm closed) {
+        if (generateForm != closed) {
+            return;
+        }
         generateTurn++;
         generateCancelled.set(true);
         Workshop.Draft d = generateDraft;
@@ -648,7 +663,7 @@ final class LocalActions implements ContextView.Actions {
                 draft = workshop.openFolder(folderPath);
             } catch (Workshop.Refused r) {
                 refused = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 refused = NavText.GENERATE_FOLDER_FAILED;
             }
             Workshop.Draft opened = draft;
@@ -691,7 +706,7 @@ final class LocalActions implements ContextView.Actions {
                 summary = workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
             } catch (Workshop.Refused r) {
                 refused = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 refused = NavText.GENERATE_FAILED;
             }
             Workshop.PackageSummary done = summary;
@@ -746,7 +761,7 @@ final class LocalActions implements ContextView.Actions {
                         replace, generateCancelled::get);
             } catch (Workshop.Refused r) {
                 refused = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 refused = NavText.GENERATE_FAILED;
             }
             Workshop.Generated done = generated;
@@ -783,7 +798,7 @@ final class LocalActions implements ContextView.Actions {
                 : new RenameForm(NavText.RENAME_REMOTE_TITLE, NavText.RENAME_REMOTE_SCOPE, entry.automation().name(), true, n -> renameRemote(context, entry, holder[0], n),
                         this::close);
         holder[0] = f;
-        open(entry.localOnly() ? NavText.RENAME_LOCAL_TITLE : NavText.RENAME_REMOTE_TITLE, f, null);
+        open(entry.localOnly() ? NavText.RENAME_LOCAL_TITLE : NavText.RENAME_REMOTE_TITLE, f, null, null);
     }
 
     private void renameRemote(Navigation.Context context, ContextView.Entry entry, RenameForm f, String name) {
@@ -803,7 +818,7 @@ final class LocalActions implements ContextView.Actions {
                 directory.rename(context.organization().id(), entry.automation().id(), name);
             } catch (Directory.Failed x) {
                 failure = x.failure();
-            } catch (RuntimeException x) {
+            } catch (RuntimeException | LinkageError x) {
                 failure = Directory.Failure.INVALID;
             }
             Directory.Failure why = failure;
@@ -837,7 +852,7 @@ final class LocalActions implements ContextView.Actions {
                 workshop.rename(context.organization().id(), context.workspace().id(), entry.local().fingerprint(), name.isEmpty() ? null : name);
             } catch (Workshop.Refused r) {
                 failure = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 failure = "Não foi possível alterar o nome.";
             }
             String why = failure;
@@ -905,7 +920,7 @@ final class LocalActions implements ContextView.Actions {
                 checked = runner.check(context.organization().id(), context.workspace().id(), target.fingerprint());
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 problem = "Não foi possível conferir o pacote.";
             }
             Runner.Checked ok = checked;
@@ -952,7 +967,7 @@ final class LocalActions implements ContextView.Actions {
                 found = runner.python(t.context().organization().id(), t.context().workspace().id(), t.fingerprint(), path);
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 problem = "Não foi possível conferir este interpretador.";
             }
             Runner.Python ok = found;
@@ -979,7 +994,7 @@ final class LocalActions implements ContextView.Actions {
                 ok = runner.output(folder);
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 problem = "Não foi possível usar esta pasta.";
             }
             String out = ok == null ? folder : ok;
@@ -1007,7 +1022,7 @@ final class LocalActions implements ContextView.Actions {
                 runner.approve(t.context().organization().id(), t.context().workspace().id(), t.fingerprint());
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 problem = "Não foi possível registrar a aprovação.";
             }
             String why = problem;
@@ -1041,7 +1056,7 @@ final class LocalActions implements ContextView.Actions {
                         f.outputFolder());
             } catch (Runner.Refused r) {
                 problem = r.getMessage();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 problem = "Não foi possível iniciar a execução.";
             }
             Runner.Status s = started;
@@ -1084,7 +1099,12 @@ final class LocalActions implements ContextView.Actions {
 
     // ------------------------------------------------------------------ formularios
 
-    private void open(String title, JPanel content, Runnable onDispose) {
+    /**
+     * Abre o formulario. O dialogo e MODAL: {@code setVisible(true)} so retorna quando ele FECHA. Por isso tudo o que liga
+     * o formulario as acoes (o estado que os retornos conferem, as consultas iniciais) vai em {@code ready}, que roda
+     * ANTES de a janela aparecer. Nada que o formulario precise pode ficar depois da chamada a este metodo.
+     */
+    private void open(String title, JPanel content, Runnable onDispose, Runnable ready) {
         close();
         JDialog d = new JDialog(host.frame(), title, modal);
         d.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -1101,6 +1121,9 @@ final class LocalActions implements ContextView.Actions {
         }
         dialog = d;
         form = content;
+        if (ready != null) {
+            ready.run();
+        }
         d.setVisible(true);
     }
 
