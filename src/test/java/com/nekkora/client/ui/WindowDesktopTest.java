@@ -234,6 +234,15 @@ class WindowDesktopTest {
             assertEquals(ClientTheme.FONT_SIZE_XS, read(() -> versao.getFont().getSize()), "fonte do rodape da lib, sem diminuir alem dela");
             assertEquals(Themes.color(theme.textSecondary()), read(versao::getForeground));
             assertTrue(Rgb.contrast(theme.textSecondary(), theme.bg()) >= 4.5, theme + ": contraste do rodape");
+            // direitos: abaixo da versao, mesma fonte e cor, com o ano dos metadados do build
+            JLabel direitos = read(() -> v.footer().rightsLabel());
+            int ano = com.nekkora.client.BuildInfo.load().year().orElseThrow();
+            assertEquals("© " + ano + " Nekkora. Todos os direitos reservados.", read(direitos::getText));
+            assertEquals(List.of(versao, direitos), read(() -> all(v.footer(), JLabel.class)), "so as duas linhas, nessa ordem");
+            assertTrue(read(() -> direitos.getY() >= versao.getY() + versao.getHeight()), "direitos abaixo da versao");
+            assertEquals(ClientTheme.FONT_SIZE_XS, read(() -> direitos.getFont().getSize()));
+            assertEquals(Themes.color(theme.textSecondary()), read(direitos::getForeground));
+            assertFalse(read(direitos::isFocusable));
             assertFalse(read(versao::isFocusable) || read(() -> v.footer().isFocusable()), "o rodape nao entra na ordem do teclado");
             assertFooterClear(p + " inicial");
             evidence(p + "-rodape-inicial");
@@ -277,6 +286,8 @@ class WindowDesktopTest {
         settle();
         try {
             assertEquals("Versão de desenvolvimento", read(() -> outra.get().signInView().footer().versionLabel().getText()));
+            assertEquals("© " + java.time.Year.now(java.time.ZoneOffset.UTC).getValue() + " Nekkora. Todos os direitos reservados.",
+                    read(() -> outra.get().signInView().footer().rightsLabel().getText()));
         } finally {
             SwingUtilities.invokeAndWait(() -> outra.get().dispose());
         }
