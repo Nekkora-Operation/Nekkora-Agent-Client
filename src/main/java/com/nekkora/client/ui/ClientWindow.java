@@ -20,6 +20,7 @@ import com.nekkora.client.nav.Directory;
 import com.nekkora.client.nav.Loadable;
 import com.nekkora.client.nav.Navigation;
 import com.nekkora.client.pack.Workshop;
+import com.nekkora.client.run.Runner;
 import com.nekkora.client.signin.SignInFlow;
 import com.nekkora.client.signin.SignInState;
 import com.nekkora.client.signin.SignInState.Phase;
@@ -52,6 +53,31 @@ public final class ClientWindow extends JFrame {
     private final GhostButton themeToggle;
     private final AvatarButton avatar;
     private final transient Workshop workshop;
+    private final transient Runner runner;
+    private final transient Runnable onClose;
+
+    /** Como a janela pergunta e avisa nas salvaguardas (os testes trocam por respostas fixas, sem dialogos). */
+    interface Guard {
+        /** Sair com execucao em andamento: {@code true} so se a pessoa confirmar que quer encerrar a execucao. */
+        boolean confirmExit(String title, String text);
+
+        /** Operacao bloqueada: explica e nada muda. */
+        void blocked(String text);
+    }
+
+    transient Guard guard = new Guard() {
+        @Override
+        public boolean confirmExit(String title, String text) {
+            Object[] options = {NavText.EXIT_STAY, NavText.EXIT_CONFIRM};
+            return javax.swing.JOptionPane.showOptionDialog(ClientWindow.this, text, title, javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE,
+                    null, options, options[0]) == 1;
+        }
+
+        @Override
+        public void blocked(String text) {
+            javax.swing.JOptionPane.showMessageDialog(ClientWindow.this, text, SignInText.APP_NAME, javax.swing.JOptionPane.INFORMATION_MESSAGE);
+        }
+    };
     private final transient LocalActions actions;
     private transient Navigation navigation;
     /** O contexto cujos pacotes locais a tela mostra (ou pediu). Mudou o contexto, a lista anterior nao serve mais. */
@@ -78,10 +104,18 @@ public final class ClientWindow extends JFrame {
 
     /** {@code workshop}: a area local de pacotes. Nulo: as acoes locais ficam indisponiveis (e a tela diz isso). */
     public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose, BuildInfo build, Executor background, Workshop workshop) {
+        this(flow, onThemeChosen, onClose, build, background, workshop, null);
+    }
+
+    /** {@code runner}: a execucao local. Nulo: "Executar" fica indisponivel (e a tela diz isso). */
+    public ClientWindow(SignInFlow flow, Consumer<ClientTheme> onThemeChosen, Runnable onClose, BuildInfo build, Executor background, Workshop workshop,
+                        Runner runner) {
         super(SignInText.APP_NAME);
         this.flow = flow;
         this.background = background;
         this.workshop = workshop;
+        this.runner = runner;
+        this.onClose = onClose;
         setIconImages(BrandAssets.appIcons());
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
@@ -96,14 +130,10 @@ public final class ClientWindow extends JFrame {
             }
         }, build);
         contextView = new ContextView(() -> {
-            if (navigation != null) {
+            if (navigation != null && !blockedByRun(NavText.RUNNING_BLOCKS_CONTEXT)) {
                 navigation.back();
             }
-        }, w -> {
-            if (navigation != null) {
-                navigation.selectWorkspace(w);
-            }
-        }, () -> {
+        }, this::chooseWorkspace, () -> {
             if (navigation != null) {
                 navigation.loadWorkspaces();
             }
@@ -112,7 +142,7 @@ public final class ClientWindow extends JFrame {
                 navigation.loadAutomations();
             }
         }, build);
-        actions = workshop == null ? null : new LocalActions(workshop, background, new LocalActions.Host() {
+        actions = workshop == null ? null : new LocalActions(workshop, runner, background, new LocalActions.Host() {
             @Override
             public JFrame frame() {
                 return ClientWindow.this;
@@ -144,7 +174,7 @@ public final class ClientWindow extends JFrame {
         content.add(contextView, CONTEXT);
         setContentPane(content);
 
-        avatar = new AvatarButton(flow::signOut, onClose);
+        avatar = new AvatarButton(this::requestSignOut, this::requestExit);
         avatar.setVisible(false);
         themeToggle = GhostButton.themeGlyph(toggleText());
         themeToggle.addActionListener(e -> {
@@ -166,7 +196,7 @@ public final class ClientWindow extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                onClose.run();
+                requestExit();
             }
 
             @Override
@@ -267,6 +297,47 @@ public final class ClientWindow extends JFrame {
         }
         contextView.show(state);
         to(state.selected() != null ? CONTEXT : ORGANIZATIONS);
+    }
+
+    /** Troca de ambiente pedida no seletor. Com execucao em andamento, e bloqueada e o seletor volta ao ambiente dela. */
+    private void chooseWorkspace(com.nekkora.client.nav.Workspace w) {
+        if (navigation == null) {
+            return;
+        }
+        Navigation.Context now = navigation.state().context();
+        boolean same = now != null && w != null && now.workspace().id().equals(w.id());
+        if (!same && blockedByRun(NavText.RUNNING_BLOCKS_CONTEXT)) {
+            contextView.show(navigation.state());
+            return;
+        }
+        navigation.selectWorkspace(w);
+    }
+
+    /** Ha execucao local em andamento? Entao a operacao e BLOQUEADA, com a explicacao, e nada muda. */
+    private boolean blockedByRun(String text) {
+        if (runner != null && runner.running().isPresent()) {
+            guard.blocked(text);
+            return true;
+        }
+        return false;
+    }
+
+    /** "Terminar sessao": bloqueado enquanto uma execucao local estiver em andamento. */
+    void requestSignOut() {
+        if (!blockedByRun(NavText.RUNNING_BLOCKS_SIGN_OUT)) {
+            flow.signOut();
+        }
+    }
+
+    /**
+     * "Sair" ou fechar a janela. Com execucao em andamento, pergunta antes: so com a confirmacao a execucao e encerrada
+     * (registrada como cancelada pelo encerramento) e o aplicativo sai. Sem confirmacao, nada muda.
+     */
+    void requestExit() {
+        if (runner != null && runner.running().isPresent() && !guard.confirmExit(NavText.EXIT_TITLE, NavText.EXIT_WHILE_RUNNING)) {
+            return;
+        }
+        onClose.run();
     }
 
     private static boolean same(Navigation.Context a, Navigation.Context b) {

@@ -40,6 +40,13 @@ mesmo a um Client alterado.
   pasta de dados deste aplicativo.
 - **Editar** renomeia. Automação da Platform: o servidor confere a permissão e grava; o pacote e as versões publicadas
   não mudam. Item que só existe neste computador: muda só o nome mostrado aqui. O formulário diz o alcance antes do campo.
+- **Executar** é só local e nunca começa sozinho: abre a preparação (pacote conferido, Python escolhido por você e
+  conferido contra o pacote, pasta de saída, aprovação explícita daquele conteúdo) e só **Iniciar execução** lança o
+  processo. Nada é instalado. Nada vai para a Platform: sem registro de execução, monitoramento ou gatilho remoto.
+- **Estado da integração:** este aplicativo não tem vínculo de máquina com a Platform, e a tela diz "Somente local —
+  integração com a Platform não configurada". O pareamento fica para uma etapa futura.
+- Com uma execução em andamento, trocar de organização ou de ambiente e terminar a sessão ficam bloqueados; sair pede
+  confirmação antes de encerrar o processo.
 - Cada linha diz se o pacote está neste computador. Listar os metadados na Platform não traz o código.
 - No topo, o **avatar** com as iniciais do nome (o contrato não tem foto) e o menu: nome, Configurações e Ajuda
   (desabilitadas nesta etapa), **Terminar sessão** e **Sair**. Terminar sessão descarta o token, pede o encerramento à
@@ -63,6 +70,7 @@ A sessão dura 15 minutos, sem renovação, e fica só em memória.
 | `com.nekkora.client.auth` | entrada real pelo navegador (retorno local, PKCE, troca com a Platform) e as consultas da pessoa | rede; nada de interface |
 | `com.nekkora.client.nav` | o que a pessoa vê depois de entrar (perfil, organizações, escolha) e a porta das consultas | nada de interface nem de rede |
 | `com.nekkora.client.pack` | área local de pacotes: validação de ZIP, validador e impressão digital do pacote, empacotador, guarda por organização e ambiente | arquivos; nada de interface nem de rede |
+| `com.nekkora.client.run` | execução local: sondagem do Python, aprovações, lançamento sem shell, cancelamento, registros | processos e arquivos; nada de interface nem de rede |
 | `com.nekkora.client.ui` | janela, tela de entrada, seletor de organizações, avatar e menu, componentes | Swing e FlatLaf |
 
 O teste `ArchitectureTest` confere essas fronteiras, a dependência única de execução (FlatLaf) e a ausência de código

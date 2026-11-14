@@ -76,6 +76,42 @@ public final class NavText {
         return "Pacote preparado: " + name + " (versão do pacote " + version + "). Ele fica só neste computador; nada foi criado na Platform.";
     }
 
+    public static final String INTEGRATION_LOCAL_ONLY = "Somente local — integração com a Platform não configurada";
+    public static final String INTEGRATION_LOCAL_ONLY_HINT = "Este aplicativo não está vinculado a uma máquina na Platform. As execuções daqui são só deste computador: "
+            + "sem gatilhos da Platform e sem envio de registros de monitoramento.";
+    public static final String RUN_DENIED = "Você não tem permissão para executar automações neste ambiente.";
+    public static final String RUN_NO_PACKAGE = "O pacote desta automação não está neste computador. Use Importar (.zip) para trazê-lo: o aplicativo não baixa "
+            + "código da Platform.";
+    public static final String RUN_TITLE = "Executar neste computador";
+    public static final String RUN_SCOPE = "Execução local. Nada é enviado à Platform: sem registro de execução lá, sem monitoramento e sem gatilho remoto. Nada "
+            + "começa até você clicar em Iniciar execução.";
+    public static final String RUN_CHECKING = "Conferindo o pacote...";
+    public static final String CHOOSE = "Escolher...";
+    public static final String CLOSE = "Fechar";
+    public static final String RUN_APPROVE = "Aprovar este pacote";
+    public static final String RUN_APPROVAL_TEXT = "Ao aprovar, ESTE conteúdo exato poderá ser executado por você neste computador; qualquer mudança nos arquivos exige "
+            + "nova aprovação. Aprovar não inicia nada.";
+    public static final String RUN_APPROVED = "Este conteúdo exato foi aprovado por você neste computador.";
+    public static final String RUN_START = "Iniciar execução";
+    public static final String RUN_START_NEEDS = "Falta conferir o pacote, escolher o Python e a pasta de saída, ou aprovar o pacote.";
+    public static final String RUN_CANCEL = "Cancelar execução";
+    public static final String RUN_OUTPUT_HINT = "A execução cria uma subpasta própria aqui.";
+    public static final String RUN_LOCAL_RECORD = "Registro só neste computador.";
+    public static final String RUN_BUSY = "Já há uma execução local em andamento. Aguarde o fim dela, ou cancele-a, antes de iniciar outra.";
+    public static final String RUNNING_BLOCKS_CONTEXT = "Há uma execução local em andamento. Conclua ou cancele a execução antes de trocar de organização ou de ambiente.";
+    public static final String RUNNING_BLOCKS_SIGN_OUT = "Há uma execução local em andamento. Conclua ou cancele a execução antes de terminar a sessão.";
+    public static final String EXIT_TITLE = "Sair do Nekkora Agent?";
+    public static final String EXIT_WHILE_RUNNING = "Há uma execução local em andamento. Sair encerra o processo dela (e os que ele abriu) e a registra como "
+            + "cancelada; o que já foi feito no sistema não é desfeito.";
+    public static final String EXIT_STAY = "Voltar";
+    public static final String EXIT_CONFIRM = "Encerrar execução e sair";
+
+    /** "1 min 05 s". */
+    public static String elapsed(long millis) {
+        long s = Math.max(0, millis / 1000);
+        return s < 60 ? s + " s" : (s / 60) + " min " + String.format("%02d", s % 60) + " s";
+    }
+
     public static final String MENU = "Menu do usuário";
     public static final String MENU_SETTINGS = "Configurações";
     public static final String MENU_HELP = "Ajuda";

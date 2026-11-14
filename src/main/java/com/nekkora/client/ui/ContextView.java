@@ -367,6 +367,12 @@ final class ContextView extends JPanel {
             showing = next;
             states.show(body, next);
         }
+        // estado da integracao com a Platform: este aplicativo nao tem vinculo de maquina, e a tela diz isso (fato local, nao
+        // uma suposicao sobre a Platform)
+        status.setText(chosen == null ? "" : NavText.INTEGRATION_LOCAL_ONLY);
+        status.setToolTipText(chosen == null ? null : NavText.INTEGRATION_LOCAL_ONLY_HINT);
+        status.getAccessibleContext().setAccessibleDescription(chosen == null ? null : NavText.INTEGRATION_LOCAL_ONLY_HINT);
+        status.setVisible(chosen != null);
         refreshActions();
         revalidate();
         repaint();
@@ -377,7 +383,9 @@ final class ContextView extends JPanel {
         GhostButton edit = GhostButton.text(NavText.EDIT);
         Consumer<Entry> onRun = actions == null ? null : actions.run();
         Consumer<Entry> onEdit = actions == null ? null : actions.edit();
-        enable(run, onRun != null, NavText.RUN + ": " + e.name(), NavText.ACTION_UNAVAILABLE);
+        // item so local: e do proprio computador. Linha de uma automacao da Platform: so com a permissao de executar no ambiente
+        boolean mayRun = e.localOnly() || capabilities.execute();
+        enable(run, onRun != null && mayRun, NavText.RUN + ": " + e.name(), onRun == null ? NavText.ACTION_UNAVAILABLE : NavText.RUN_DENIED);
         // item so local: o nome mostrado aqui e da pessoa. Automacao da Platform: so com a permissao (o servidor confere de
         // novo); sem ela o botao fica desabilitado dizendo por que
         boolean mayEdit = e.localOnly() || capabilities.rename();
