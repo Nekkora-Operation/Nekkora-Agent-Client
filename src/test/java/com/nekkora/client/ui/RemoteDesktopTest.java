@@ -208,6 +208,8 @@ class RemoteDesktopTest {
         assertFalse(read(() -> p.codeField().isShowing() || p.enableButton().isShowing()));
         assertEquals("", read(() -> p.codeField().getText()));
         assertTrue(Files.exists(vaultFile));
+        // T01b: a tela diz ate quando a credencial vale e que a renovacao e automatica
+        assertTrue(read(p::validityText).matches("A credencial deste computador vale até [0-9]{2}/02/2027 e é renovada automaticamente.*"), read(p::validityText));
 
         // pausar e retomar
         assertEquals(RemoteText.PAUSE, read(() -> p.toggleButton().getText()));
@@ -243,6 +245,7 @@ class RemoteDesktopTest {
         assertFalse(Files.exists(vaultFile));
         assertEquals(RemoteText.DISABLED_NOW, read(() -> p.resultNotice().text()));
         assertTrue(read(() -> p.enableButton().isShowing()), "volta a oferecer a habilitacao");
+        assertEquals("", read(p::validityText));
 
         // fechar pelo botao
         click(p.closeButton());

@@ -50,6 +50,28 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
   administra revoga a máquina na Platform.
 - **Vínculo encerrado na Platform** (máquina revogada): a credencial deixa de ser enviada e a tela oferece só remover.
 
+## Renovação da credencial (T01b)
+
+A credencial da máquina vale 90 dias. O aplicativo a renova **sozinho**, sem pessoa e sem código, quando faltarem até 30
+dias, a cada presença (portanto só com o aplicativo aberto):
+
+1. gera o segredo novo e o **grava protegido** (`remotaenovacao.json`, DPAPI) antes de pedir qualquer coisa;
+2. pede a troca com a credencial atual; a resposta traz só o identificador e a validade da nova;
+3. grava a credencial nova e só então apaga o segredo pendente. A presença seguinte já usa a nova.
+
+- **Resposta perdida, ou aplicativo fechado no meio:** a troca é repetida com a credencial anterior e o **mesmo** segredo;
+  o servidor devolve a mesma credencial nova. Enquanto houver uma troca em curso, a recusa da credencial antiga **não**
+  é tratada como fim do vínculo.
+- **Falha passageira** (rede, servidor): nova tentativa com espera crescente (1 min, dobrando, até 60 min). A credencial
+  atual continua valendo até vencer.
+- **Vencida ou revogada:** nunca é renovada. O aplicativo para de enviar qualquer coisa, a tela diz que a habilitação
+  expirou ou foi revogada e oferece só remover; para voltar, é preciso habilitar de novo com um código novo. Não há
+  atalho pela conta de quem entrou.
+- A tela mostra até quando a credencial vale.
+
+Limite: com o aplicativo **fechado** durante toda a janela de 30 dias, a credencial vence e a habilitação precisa ser
+refeita.
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
@@ -68,11 +90,12 @@ temporária.
 |---|---|
 | Habilitar, recusas, resposta perdida, pausar, desabilitar, vínculo encerrado, outro endereço, arquivo adulterado, sem proteção | `RemoteMachineTest` (canal simulado em HTTPS; DPAPI real) |
 | Tela: menu, diálogo modal, cliques, confirmação obrigatória, segundo passo, troca de tema | `RemoteDesktopTest` (`-Pdesktop`) |
+| Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
 
 ## Limites desta entrega
 
 - Não há execução remota: só o vínculo.
-- Renovação da credencial (90 dias) sem refazer a habilitação: T01b.
+- A renovação só acontece com o aplicativo aberto dentro da janela de 30 dias.
 - Desabilitar exige contato com a Platform.
 - Os testes automatizados usam um canal simulado; a prova contra a API real é a do laboratório, registrada na entrega.

@@ -46,6 +46,11 @@ public final class RemoteMachine implements AutoCloseable {
 
     static final Pattern CODE = Pattern.compile("^nkp1\\.[0-9a-f-]{36}\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{43}$");
     static final long BEAT_SECONDS = 60;
+    /** A credencial e renovada quando faltarem ate estes dias para o vencimento (a mesma janela padrao do servidor). */
+    static final long RENEW_WITHIN_DAYS = 30;
+    /** Depois de uma falha passageira da renovacao: espera crescente, limitada. A credencial atual continua valendo. */
+    static final long RENEW_RETRY_FIRST_SECONDS = 60;
+    static final long RENEW_RETRY_MAX_SECONDS = 3600;
 
     private final MachineVault vault;
     private final MachineChannel channel;
@@ -64,9 +69,19 @@ public final class RemoteMachine implements AutoCloseable {
     /** Encerramento em curso: a mesma operacao em toda nova tentativa. So em memoria. */
     private String pendingUnlink;
     private ScheduledExecutorService beats;
+    private final java.time.Clock clock;
+    /** Renovacao: quando tentar de novo depois de uma falha passageira, e a espera da proxima. So em memoria. */
+    private java.time.Instant renewNotBefore = java.time.Instant.MIN;
+    private long renewWaitSeconds = RENEW_RETRY_FIRST_SECONDS;
 
     /** {@code appVersion}: a versao do build, ou vazio na execucao de desenvolvimento. */
     public RemoteMachine(MachineVault vault, MachineChannel channel, Optional<String> appVersion) {
+        this(vault, channel, appVersion, java.time.Clock.systemUTC());
+    }
+
+    /** {@code clock}: o relogio que decide a janela de renovacao (os testes adiantam o tempo por ele). */
+    RemoteMachine(MachineVault vault, MachineChannel channel, Optional<String> appVersion, java.time.Clock clock) {
+        this.clock = clock;
         this.vault = vault;
         this.channel = channel;
         this.appVersion = appVersion.map(v -> v + "+client").orElse("0.0.0+client.dev");
@@ -235,6 +250,12 @@ public final class RemoteMachine implements AutoCloseable {
             if (current == null) {
                 return;
             }
+            // perto do vencimento (ou com uma troca interrompida), a credencial e renovada ANTES da presenca: se a troca ja
+            // aconteceu no servidor e a resposta se perdeu, a credencial antiga nao serve mais para a presenca
+            current = renewIfDue(current);
+            if (current == null) {
+                return;
+            }
             try {
                 MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion);
                 MachineVault.Link next = current.withPaused(p.paused());
@@ -248,6 +269,107 @@ public final class RemoteMachine implements AutoCloseable {
                 failed(e.problem());
             }
         }
+    }
+
+    /**
+     * Renova a credencial se estiver na janela, ou conclui uma troca interrompida. Devolve o vinculo a usar agora (o novo,
+     * se a troca concluiu; o atual, se nao era hora ou se a falha foi passageira) ou {@code null} se o vinculo acabou.
+     * <ol>
+     * <li>o segredo novo e gerado aqui e GRAVADO (protegido) antes de qualquer pedido;</li>
+     * <li>a troca e pedida com a credencial atual; a resposta traz so o identificador e a validade da nova;</li>
+     * <li>a credencial nova e gravada; so entao o segredo pendente e apagado.</li>
+     * </ol>
+     * Caiu no meio: na proxima vez, a troca e repetida com o MESMO segredo, e o servidor devolve a mesma credencial.
+     */
+    private MachineVault.Link renewIfDue(MachineVault.Link current) {
+        Optional<String> pending = vault.pending(current.credentialId());
+        java.time.Instant now = clock.instant();
+        if (pending.isEmpty() && !due(current, now)) {
+            return current;
+        }
+        synchronized (this) {
+            if (now.isBefore(renewNotBefore)) {
+                return current;
+            }
+        }
+        String secret;
+        if (pending.isPresent()) {
+            secret = pending.get();
+        } else {
+            byte[] bytes = new byte[32];
+            random.nextBytes(bytes);
+            secret = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            try {
+                vault.savePending(current.credentialId(), secret);
+            } catch (IOException e) {
+                // sem conseguir guardar o segredo novo, a troca nem e pedida: a credencial atual continua valendo
+                retryLater(now);
+                return current;
+            }
+        }
+        MachineChannel.Redeemed r;
+        try {
+            r = channel.renew(current.credential(), secret,
+                    new MachineChannel.Redeemed(current.organizationId(), current.agentId(), current.workerId(), current.credentialId(), current.credentialExpiresAt()));
+        } catch (Refused e) {
+            switch (e.problem()) {
+                case LINK_ENDED, NOT_ENABLED -> {
+                    // vencida, revogada ou a maquina nao esta mais habilitada: nunca volta a valer
+                    ended();
+                    return null;
+                }
+                case RENEWAL_NOT_DUE -> {
+                    // o servidor diz que ainda nao e hora: o segredo gerado nao sera usado
+                    try {
+                        vault.clearPending();
+                    } catch (IOException ignored) {
+                        // fica para a proxima; o arquivo so vale para esta credencial
+                    }
+                    retryLater(now);
+                    return current;
+                }
+                default -> {
+                    retryLater(now);
+                    return current;
+                }
+            }
+        }
+        MachineVault.Link renewed;
+        try {
+            renewed = current.renewed(r.credentialId(), r.credentialExpiresAt(), secret);
+            vault.save(renewed);
+        } catch (IOException | IllegalArgumentException e) {
+            // a troca aconteceu no servidor, mas nao foi gravada aqui: o segredo pendente continua guardado e a troca e
+            // repetida depois (o servidor devolve a mesma credencial)
+            retryLater(now);
+            failed(Problem.STORAGE);
+            return null;
+        }
+        try {
+            vault.clearPending();
+        } catch (IOException ignored) {
+            // o arquivo pendente e de outra credencial agora: nao e mais lido
+        }
+        synchronized (this) {
+            link = renewed;
+            renewNotBefore = java.time.Instant.MIN;
+            renewWaitSeconds = RENEW_RETRY_FIRST_SECONDS;
+        }
+        changed();
+        return renewed;
+    }
+
+    private static boolean due(MachineVault.Link link, java.time.Instant now) {
+        try {
+            return !java.time.OffsetDateTime.parse(link.credentialExpiresAt()).toInstant().isAfter(now.plus(java.time.Duration.ofDays(RENEW_WITHIN_DAYS)));
+        } catch (java.time.DateTimeException e) {
+            return false;
+        }
+    }
+
+    private synchronized void retryLater(java.time.Instant now) {
+        renewNotBefore = now.plusSeconds(renewWaitSeconds);
+        renewWaitSeconds = Math.min(renewWaitSeconds * 2, RENEW_RETRY_MAX_SECONDS);
     }
 
     /** Inicia a presenca periodica (uma agora, depois a cada minuto) enquanto o aplicativo estiver aberto. */
@@ -306,14 +428,31 @@ public final class RemoteMachine implements AutoCloseable {
         }
     }
 
+    /** O vinculo acabou de vez (a propria renovacao foi recusada por credencial vencida, revogada ou maquina nao habilitada). */
+    private void ended() {
+        boolean notify;
+        synchronized (this) {
+            notify = !ended || inContact;
+            ended = true;
+            inContact = false;
+        }
+        if (notify) {
+            changed();
+        }
+    }
+
     private void failed(Problem problem) {
         boolean notify;
         synchronized (this) {
             boolean wasEnded = ended;
             boolean wasInContact = inContact;
-            if (problem == Problem.LINK_ENDED || problem == Problem.NOT_ENABLED) {
+            // com uma troca de credencial interrompida, a recusa da credencial antiga nao e o fim do vinculo: a troca pode
+            // ter acontecido no servidor. Quem decide e a repeticao da troca, na proxima presenca
+            boolean renewing = link != null && vault.pending(link.credentialId()).isPresent();
+            if ((problem == Problem.LINK_ENDED && !renewing) || problem == Problem.NOT_ENABLED) {
                 ended = true;
             }
+            // falha so deste computador (gravar): o contato com a Platform nao e o problema, mas o estado nao foi confirmado
             inContact = false;
             notify = wasEnded != ended || wasInContact;
         }
