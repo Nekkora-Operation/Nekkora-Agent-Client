@@ -339,7 +339,7 @@ public final class MachineChannel {
      * computador) e vai num cabecalho, com escape de URL; os bytes vao no corpo, com o SHA-256 calculado aqui. O token e a epoca
      * vao em cabecalhos. Repetir o mesmo arquivo no mesmo numero nao muda nada na Platform.
      */
-    void sendResult(String credential, String attemptId, String token, int epoch, int number, String name, java.nio.file.Path file) throws Refused {
+    String sendResult(String credential, String attemptId, String token, int epoch, int number, String name, java.nio.file.Path file) throws Refused {
         if (!UUID.matcher(attemptId).matches() || number < 1 || number > MAX_RESULTS) {
             throw new Refused(Problem.UNEXPECTED);
         }
@@ -376,14 +376,25 @@ public final class MachineChannel {
             // nome ou tamanho que a Platform nao aceita: este arquivo fica de fora, como os que passam do limite
             throw new Refused(Problem.RESULT_LIMIT);
         }
+        // a confirmacao e DESTE arquivo: o numero, o tamanho e o SHA-256 que a Platform diz ter guardado sao os enviados
         Map<String, Object> o = ok(authenticated(r));
-        if (!sha.equals(o.get("sha256"))) {
+        if (!sha.equals(o.get("sha256")) || whole(o.get("number")) != number || whole(o.get("sizeBytes")) != data.length) {
             throw new Refused(Problem.UNEXPECTED);
+        }
+        return sha;
+    }
+
+    /** Um inteiro de uma resposta; -1 se nao e um. */
+    private static long whole(Object value) {
+        try {
+            return new java.math.BigDecimal(String.valueOf(value)).longValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            return -1;
         }
     }
 
     /** Fecha o envio de resultados: quantos arquivos foram enviados e quantos ficaram de fora por limite. */
-    void completeResults(String credential, String attemptId, String token, int epoch, int sent, int skippedByLimit) throws Refused {
+    boolean completeResults(String credential, String attemptId, String token, int epoch, int sent, int skippedByLimit) throws Refused {
         if (!UUID.matcher(attemptId).matches()) {
             throw new Refused(Problem.UNEXPECTED);
         }
@@ -403,7 +414,9 @@ public final class MachineChannel {
         if (r.statusCode() == 400) {
             throw new Refused(Problem.UNEXPECTED);
         }
-        ok(authenticated(r));
+        // o fechamento que a Platform gravou tem de ser o desta entrega: as mesmas contagens
+        Map<String, Object> o = ok(authenticated(r));
+        return whole(o.get("sent")) == sent && whole(o.get("skippedByLimit")) == skippedByLimit;
     }
 
     /** Limite do pacote baixado (o mesmo da Platform para um pacote publicado). */

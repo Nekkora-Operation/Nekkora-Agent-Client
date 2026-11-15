@@ -176,6 +176,50 @@ public final class RemoteMachine implements AutoCloseable {
 
         /** Os arquivos que a execucao gravou na pasta de saida dela, em ordem estavel (a mesma a cada chamada). */
         List<ResultFile> results(String attemptId, String run);
+
+        /**
+         * A pasta de saida da tentativa FICA neste computador, marcada como pendente com o motivo ({@code OUT_OF_LIMIT},
+         * {@code NOT_CONFIRMED} ou {@code CHANGED_AFTER_SEND}). A marca data o inicio do prazo de guarda.
+         */
+        default void holdOutputs(String attemptId, String reason) {
+        }
+
+        /** As pastas de saida guardadas neste computador sem confirmacao de recebimento (fora a de {@code exceptAttemptId}). */
+        default List<Held> held(String exceptAttemptId) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Resultados de uma tentativa que ficaram neste computador. {@code dir}: a pasta, neste computador (nao sai daqui).
+     * {@code removeAtEpochSecond}: a partir de quando a limpeza os remove.
+     */
+    public record Held(String attemptId, String reason, String dir, int files, long bytes, long sinceEpochSecond, long removeAtEpochSecond) {
+    }
+
+    /** A pasta, neste computador, onde estao os resultados guardados: a da tentativa, ou a que reune as tentativas se ha mais de uma. */
+    public static String heldFolder(List<Held> held) {
+        try {
+            Path attempt = Path.of(held.get(0).dir()).getParent();
+            return String.valueOf(held.size() == 1 || attempt == null ? attempt : attempt.getParent());
+        } catch (RuntimeException x) {
+            return "";
+        }
+    }
+
+    /** O que ha de resultado guardado neste computador sem confirmacao de recebimento. Nunca lanca. */
+    public List<Held> heldResults() {
+        Work w = work;
+        if (w == null) {
+            return List.of();
+        }
+        try {
+            MachineVault.Link current = usable();
+            String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
+            return w.held(keep);
+        } catch (RuntimeException x) {
+            return List.of();
+        }
     }
 
     /** {@code name}: relativo a pasta de saida, com {@code /}; e o que vai a Platform. {@code file}: o caminho neste computador; nao sai daqui. */
@@ -325,14 +369,20 @@ public final class RemoteMachine implements AutoCloseable {
                 keep(e);
             }
             // a pasta de saida so e apagada com o recebimento de TUDO confirmado pela Platform; senao, fica neste computador
-            boolean confirmed = sendResults(credential, e, w);
+            String pending = sendResults(credential, e, w);
             forget(e, w);
-            if (confirmed && w != null) {
+            if (w != null) {
                 try {
-                    w.discardOutputs(e.attemptId());
+                    if (pending == null) {
+                        w.discardOutputs(e.attemptId());
+                    } else {
+                        // sem a confirmacao de TUDO, a pasta fica: marcada como pendente, visivel na tela e com prazo de guarda
+                        w.holdOutputs(e.attemptId(), pending);
+                    }
                 } catch (RuntimeException x) {
-                    // os arquivos ja estao na Platform; a pasta fica para a proxima limpeza
+                    // a pasta fica para a proxima limpeza
                 }
+                changed();
             }
         } catch (Refused x) {
             if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
@@ -429,7 +479,13 @@ public final class RemoteMachine implements AutoCloseable {
      * quantos ficaram de fora. Falha de rede: o envio e retomado na proxima consulta (repetir um arquivo ja enviado nao muda
      * nada). Se a Platform disser que o envio ja foi fechado, ou que esta entrega nao vale mais, para aqui.
      */
-    private boolean sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
+    /**
+     * Devolve {@code null} quando a pasta de saida PODE ser apagada: cada arquivo foi confirmado pela Platform com o mesmo
+     * SHA-256 e tamanho, o fechamento desta tentativa foi aceito com as mesmas contagens, nenhum arquivo ficou de fora, e o que
+     * esta na pasta agora e exatamente o que foi confirmado. Senao, o motivo da pendencia.
+     */
+    private String sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
+        java.util.Map<String, String> confirmed = new java.util.LinkedHashMap<>();
         List<ResultFile> files;
         try {
             files = w == null ? List.of() : w.results(e.attemptId(), e.run());
@@ -447,7 +503,7 @@ public final class RemoteMachine implements AutoCloseable {
                 continue;
             }
             try {
-                channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file()));
+                confirmed.put(f.file(), channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file())));
                 sent++;
                 total += f.size();
             } catch (Refused x) {
@@ -457,7 +513,7 @@ public final class RemoteMachine implements AutoCloseable {
                 } else if (x.problem() == Problem.RESULT_CONFLICT) {
                     // o envio desta tentativa ja foi fechado (ou este numero ja tem outro arquivo): nao ha mais o que enviar,
                     // e nao ha confirmacao de que TUDO chegou
-                    return false;
+                    return files.isEmpty() ? null : "NOT_CONFIRMED";
                 } else {
                     throw x;
                 }
@@ -466,14 +522,43 @@ public final class RemoteMachine implements AutoCloseable {
             }
         }
         try {
-            channel.completeResults(credential, e.attemptId(), e.token(), e.epoch(), sent, skipped);
-            // confirmado: a Platform aceitou o fechamento com a contagem que ela mesma recebeu. Com arquivo de fora, nada e apagado
-            return skipped == 0;
+            if (!channel.completeResults(credential, e.attemptId(), e.token(), e.epoch(), sent, skipped)) {
+                return files.isEmpty() ? null : "NOT_CONFIRMED";
+            }
         } catch (Refused x) {
             if (x.problem() != Problem.RESULT_CONFLICT) {
                 throw x;
             }
-            return false;
+            return files.isEmpty() ? null : "NOT_CONFIRMED";
+        }
+        if (skipped > 0) {
+            // arquivo que ficou de fora so existe neste computador
+            return "OUT_OF_LIMIT";
+        }
+        // ultima conferencia antes de apagar: o que esta na pasta AGORA e exatamente o que a Platform confirmou
+        List<ResultFile> now;
+        try {
+            now = w == null ? List.of() : w.results(e.attemptId(), e.run());
+        } catch (RuntimeException x) {
+            return files.isEmpty() ? null : "NOT_CONFIRMED";
+        }
+        if (now.size() != confirmed.size()) {
+            return "CHANGED_AFTER_SEND";
+        }
+        for (ResultFile f : now) {
+            String sha = confirmed.get(f.file());
+            if (sha == null || !sha.equals(sha256(f.file()))) {
+                return "CHANGED_AFTER_SEND";
+            }
+        }
+        return null;
+    }
+
+    private static String sha256(String file) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(java.nio.file.Files.readAllBytes(Path.of(file))));
+        } catch (IOException | java.security.NoSuchAlgorithmException | RuntimeException x) {
+            return null;
         }
     }
 
@@ -898,6 +983,15 @@ public final class RemoteMachine implements AutoCloseable {
         }, 0, BEAT_SECONDS, TimeUnit.SECONDS);
         beats.scheduleWithFixedDelay(() -> {
             try {
+                if (sweep() > 0) {
+                    changed();
+                }
+            } catch (RuntimeException | LinkageError e) {
+                // a limpeza nunca derruba o aplicativo
+            }
+        }, 1, 1, TimeUnit.HOURS);
+        beats.scheduleWithFixedDelay(() -> {
+            try {
                 pull();
             } catch (RuntimeException | LinkageError e) {
                 // a consulta de entrega nunca derruba o aplicativo
@@ -906,8 +1000,8 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /**
-     * Uma vez, ao abrir: limpa o codigo deixado por tentativas que nao sao a pendente. Nunca lanca; sem quem execute, nao faz
-     * nada. Devolve quantas pastas foram limpas.
+     * Ao abrir, e depois de hora em hora: limpa o codigo deixado por tentativas que nao sao a pendente e remove os resultados
+     * guardados cujo prazo de guarda venceu. Nunca lanca; sem quem execute, nao faz nada. Devolve quantas pastas foram limpas.
      */
     public int sweep() {
         Work w = work;

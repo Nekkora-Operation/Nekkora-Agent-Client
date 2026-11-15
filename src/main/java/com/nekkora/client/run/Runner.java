@@ -335,14 +335,108 @@ public final class Runner implements AutoCloseable {
     public void discardManagedOutputs(String key) {
         managedDir(key).ifPresent(dir -> {
             RunStore.deleteTree(dir.resolve("saida"));
+            try {
+                Files.deleteIfExists(dir.resolve(HELD_MARK));
+            } catch (java.io.IOException e) {
+                // fica para a proxima limpeza
+            }
             removeIfEmpty(dir);
         });
     }
 
+    /** Por quanto tempo uma pasta de saida sem confirmacao de recebimento fica neste computador antes de ser removida. */
+    public static final java.time.Duration MANAGED_OUTPUT_RETENTION = java.time.Duration.ofDays(7);
+
+    private static final String HELD_MARK = "pendente.txt";
+    private volatile Clock managedClock = Clock.systemUTC();
+
+    /** O relogio do prazo de guarda (para testes). */
+    public void setManagedClock(Clock clock) {
+        managedClock = clock;
+    }
+
+    /** Uma pasta de saida guardada sem confirmacao de recebimento. {@code removeAt}: a partir de quando a limpeza a remove. */
+    public record ManagedHeld(String key, String reason, String dir, int files, long bytes, long sinceEpochSecond, long removeAtEpochSecond) {
+    }
+
+    /**
+     * Marca a pasta de saida de {@code key} como pendente, com o motivo: ela fica neste computador ate o prazo de guarda vencer.
+     * A marca e gravada uma vez (o prazo conta da primeira). Pasta de saida sem arquivo nenhum nao e pendencia: sai.
+     */
+    public void holdManagedOutputs(String key, String reason) {
+        managedDir(key).ifPresent(dir -> {
+            if (count(dir.resolve("saida"))[0] == 0) {
+                discardManagedOutputs(key);
+                return;
+            }
+            mark(dir, reason);
+        });
+    }
+
+    /** As pastas de saida guardadas (fora a de {@code exceptKey}). Uma sobra sem marca e marcada agora: o prazo dela comeca aqui. */
+    public List<ManagedHeld> heldManaged(String exceptKey) {
+        Path root = managedRoot;
+        if (root == null || !Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return List.of();
+        List<ManagedHeld> found = new java.util.ArrayList<>();
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+            for (Path dir : ds) {
+                String key = String.valueOf(dir.getFileName());
+                if (key.equals(exceptKey) || managedDir(key).isEmpty() || !Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
+                long[] n = count(dir.resolve("saida"));
+                if (n[0] == 0) continue;
+                String[] m = mark(dir, "NOT_CONFIRMED");
+                long since = Long.parseLong(m[0]);
+                found.add(new ManagedHeld(key, m[1], dir.resolve("saida").toString(), (int) n[0], n[1], since, since + MANAGED_OUTPUT_RETENTION.toSeconds()));
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // o que ja foi lido vale
+        }
+        found.sort(java.util.Comparator.comparing(ManagedHeld::sinceEpochSecond).thenComparing(ManagedHeld::key));
+        return List.copyOf(found);
+    }
+
+    /** Le a marca de pendencia de {@code dir} (inicio em segundos, motivo); se nao ha uma legivel, grava agora com {@code reason}. */
+    private String[] mark(Path dir, String reason) {
+        Path file = dir.resolve(HELD_MARK);
+        try {
+            List<String> lines = Files.readAllLines(file, java.nio.charset.StandardCharsets.UTF_8);
+            if (lines.size() >= 2 && lines.get(0).matches("[0-9]{1,12}") && lines.get(1).matches("[A-Z_]{1,40}")) {
+                return new String[] {lines.get(0), lines.get(1)};
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // sem marca legivel: grava
+        }
+        String why = reason != null && reason.matches("[A-Z_]{1,40}") ? reason : "NOT_CONFIRMED";
+        String since = String.valueOf(managedClock.instant().getEpochSecond());
+        try {
+            Files.writeString(file, since + "\n" + why + "\n", java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException | RuntimeException e) {
+            // sem conseguir gravar, o prazo recomeca na proxima leitura: a pasta fica mais tempo, nunca menos
+        }
+        return new String[] {since, why};
+    }
+
+    /** Quantos arquivos comuns ha em {@code out} e quantos bytes somam. Ligacoes nao sao seguidas. */
+    private static long[] count(Path out) {
+        long[] n = new long[2];
+        if (!Files.isDirectory(out, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return n;
+        try (java.util.stream.Stream<Path> walk = Files.walk(out, 17)) {
+            for (Path p : walk.limit(10_000).toList()) {
+                if (!Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS) || String.valueOf(p.getFileName()).equals(ExternalSignal.SIGNAL_FILE)) continue;
+                n[0]++;
+                n[1] += Files.size(p);
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // o que ja foi contado vale
+        }
+        return n;
+    }
+
     /**
      * Apaga o CODIGO (ZIP e copia extraida) das pastas de execucoes gerenciadas que nao sao a de {@code keepKey} - sobra de uma
-     * queda entre o desfecho e a limpeza. Com uma execucao em andamento, nao faz nada. Nunca apaga pasta de saida. Devolve
-     * quantas pastas foram limpas.
+     * queda entre o desfecho e a limpeza. Com uma execucao em andamento, nao faz nada. Uma pasta de saida so e apagada depois de
+     * {@link #MANAGED_OUTPUT_RETENTION} contados da marca de pendencia dela (a sobra sem marca e marcada agora). So mexe em
+     * pastas de tentativa (nome no formato) dentro da pasta das execucoes gerenciadas. Devolve quantas pastas foram limpas.
      */
     public int sweepManaged(String keepKey) {
         Path root = managedRoot;
@@ -357,8 +451,16 @@ public final class Runner implements AutoCloseable {
                 if (code) {
                     discardManaged(key, null);
                     n++;
-                } else {
-                    removeIfEmpty(dir);
+                }
+                // resultado sem confirmacao de recebimento: fica ate o prazo de guarda vencer, contado da marca de pendencia
+                if (count(dir.resolve("saida"))[0] > 0) {
+                    long since = Long.parseLong(mark(dir, "NOT_CONFIRMED")[0]);
+                    if (managedClock.instant().getEpochSecond() >= since + MANAGED_OUTPUT_RETENTION.toSeconds()) {
+                        discardManagedOutputs(key);
+                        if (!code) n++;
+                    }
+                } else if (Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    discardManagedOutputs(key);
                 }
             }
         } catch (java.io.IOException | RuntimeException e) {

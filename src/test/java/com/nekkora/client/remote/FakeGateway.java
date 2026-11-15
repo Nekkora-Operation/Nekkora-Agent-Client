@@ -133,6 +133,10 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String resultsClosure;
     /** Respostas 503 para os proximos envios de resultado (nada e processado). */
     public volatile int failResults;
+    /** O "servidor" confirma um arquivo com OUTRO tamanho (confirmacao que nao corresponde ao que foi enviado). */
+    public volatile boolean wrongResultSize;
+    /** O "servidor" aceita o fechamento mas responde com OUTRA contagem. */
+    public volatile boolean wrongClosure;
     /** Um nome que o "servidor" recusa por limite (409 remote_result_limit). */
     public volatile String resultOverLimit;
 
@@ -164,7 +168,7 @@ public final class FakeGateway implements AutoCloseable {
                 respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_result_conflict\"}");
             } else {
                 resultsClosure = sent + "|" + skipped;
-                respond(x, 200, "{\"sent\":" + sent + ",\"skippedByLimit\":" + skipped + "}");
+                respond(x, 200, "{\"sent\":" + (Integer.parseInt(sent) + (wrongClosure ? 1 : 0)) + ",\"skippedByLimit\":" + skipped + "}");
             }
             return;
         }
@@ -179,7 +183,8 @@ public final class FakeGateway implements AutoCloseable {
             respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_result_conflict\"}");
         } else {
             boolean created = results.put(number, name + "|" + sha + "|" + raw.length) == null;
-            respond(x, 200, "{\"number\":" + number + ",\"fileName\":\"x\",\"sizeBytes\":" + raw.length + ",\"sha256\":\"" + sha + "\",\"created\":" + created + "}");
+            respond(x, 200, "{\"number\":" + number + ",\"fileName\":\"x\",\"sizeBytes\":" + (raw.length + (wrongResultSize ? 1 : 0)) + ",\"sha256\":\"" + sha
+                    + "\",\"created\":" + created + "}");
         }
     }
 

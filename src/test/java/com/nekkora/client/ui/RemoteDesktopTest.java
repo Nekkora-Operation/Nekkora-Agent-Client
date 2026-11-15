@@ -302,4 +302,84 @@ class RemoteDesktopTest {
         assertEquals(Status.RECEIVING, machine.view().status());
         assertTrue(Files.exists(vaultFile));
     }
+
+    @Test
+    void resultadoGuardadoSemConfirmacaoApareceNaTelaComAPastaEADataDeRemocao() throws Exception {
+        java.util.List<RemoteMachine.Held> held = new java.util.concurrent.CopyOnWriteArrayList<>();
+        machine.setWork(new RemoteMachine.Work() {
+            @Override
+            public boolean busy() {
+                return false;
+            }
+
+            @Override
+            public Optional<String> dir(String attemptId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public String start(RemoteMachine.Job job) throws RemoteMachine.WorkRefused {
+                throw new RemoteMachine.WorkRefused("BUSY");
+            }
+
+            @Override
+            public Optional<RemoteMachine.Progress> progress(String run) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void cancel(String run) {
+            }
+
+            @Override
+            public void discard(String attemptId, String run) {
+            }
+
+            @Override
+            public void discardOutputs(String attemptId) {
+            }
+
+            @Override
+            public int sweep(String keepAttemptId) {
+                return 0;
+            }
+
+            @Override
+            public java.util.List<RemoteMachine.ResultFile> results(String attemptId, String run) {
+                return java.util.List.of();
+            }
+
+            @Override
+            public java.util.List<RemoteMachine.Held> held(String exceptAttemptId) {
+                return held;
+            }
+        });
+        edt(() -> window.setRemote(machine));
+        RemotePanel p = openDialog();
+        assertEquals("", read(() -> p.heldNotice().text()), "sem pendencia, nada e mostrado");
+        edt(() -> window.closeRemote());
+
+        // uma tentativa com arquivo acima do limite: a tela diz quanto, onde esta e a partir de quando sai deste computador
+        String attempt = tmp.resolve("remota").resolve("tentativas").resolve("11111111-1111-4111-8111-111111111111").toString();
+        long removeAt = java.time.LocalDate.of(2026, 11, 22).atTime(12, 0).atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+        held.add(new RemoteMachine.Held("11111111-1111-4111-8111-111111111111", "OUT_OF_LIMIT", attempt + java.io.File.separator + "saida", 2, 3L * 1024 * 1024,
+                removeAt - 7 * 24 * 3600, removeAt));
+        RemotePanel q = openDialog();
+        String text = read(() -> q.heldNotice().text());
+        assertTrue(text.startsWith("Resultados pendentes neste computador: 2 arquivos (3,0 MB) de 1 execução remota."), text);
+        assertTrue(text.contains("há arquivo acima do limite de envio"), text);
+        assertTrue(text.contains("guardados em " + attempt + " e são removidos deste computador a partir de 22/11/2026"), text);
+        edt(() -> window.closeRemote());
+
+        // duas tentativas, nenhuma por limite: a pasta mostrada e a que reune as tentativas, e a data e a da mais antiga
+        held.add(new RemoteMachine.Held("22222222-2222-4222-8222-222222222222", "NOT_CONFIRMED",
+                tmp.resolve("remota").resolve("tentativas").resolve("22222222-2222-4222-8222-222222222222").resolve("saida").toString(), 1, 10, removeAt, removeAt + 86400));
+        held.remove(0);
+        held.add(0, new RemoteMachine.Held("11111111-1111-4111-8111-111111111111", "NOT_CONFIRMED", attempt + java.io.File.separator + "saida", 2, 2048,
+                removeAt - 7 * 24 * 3600, removeAt));
+        RemotePanel r = openDialog();
+        String both = read(() -> r.heldNotice().text());
+        assertTrue(both.startsWith("Resultados pendentes neste computador: 3 arquivos (2 KB) de 2 execuções remotas. A Platform não confirmou o recebimento."), both);
+        assertTrue(both.contains("guardados em " + tmp.resolve("remota").resolve("tentativas") + " e são removidos deste computador a partir de 22/11/2026"), both);
+    }
 }
