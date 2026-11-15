@@ -1,0 +1,638 @@
+package com.nekkora.client.ui;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import java.awt.Container;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+
+import javax.imageio.ImageIO;
+import javax.swing.JButton;
+import javax.swing.SwingUtilities;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import com.nekkora.client.BuildInfo;
+import com.nekkora.client.nav.FakeDirectory;
+import com.nekkora.client.nav.Organization;
+import com.nekkora.client.nav.Workspace;
+import com.nekkora.client.pack.AtomicWriter;
+import com.nekkora.client.pack.PackFixtures;
+import com.nekkora.client.pack.Workshop;
+import com.nekkora.client.run.ApprovalLedger;
+import com.nekkora.client.run.PythonEnvironments;
+import com.nekkora.client.run.PythonSources;
+import com.nekkora.client.run.RunController;
+import com.nekkora.client.run.RunStore;
+import com.nekkora.client.run.Runner;
+import com.nekkora.client.run.SessionProbe;
+import com.nekkora.client.signin.FakeSignIn;
+import com.nekkora.client.signin.FakeSignIn.FakeSession;
+import com.nekkora.client.signin.SignInFlow;
+import com.nekkora.client.signin.SignInState.Phase;
+import com.nekkora.client.theme.ClientTheme;
+
+/**
+ * Execucao local e estado da integracao (AGENT-CLIENT-NAVEGACAO-001 T05), na janela real. Area de pacotes e executor
+ * REAIS em pasta temporaria; entrada e Platform SIMULADAS. Os testes que lancam um processo usam o Python de
+ * {@code NEKKORA_TEST_PYTHON} e sao PULADOS (nunca dados por aprovados) quando a variavel nao existe.
+ */
+@Tag("desktop")
+class RunDesktopTest {
+
+    private static final Path EVIDENCE = Path.of("target", "evidencias");
+    private static final String PYTHON = System.getenv("NEKKORA_TEST_PYTHON");
+    private static final String SKIP = "sem Python de teste (NEKKORA_TEST_PYTHON): execucao real NAO conferida; teste pulado, nunca dado por aprovado";
+
+    private static final String GRAVA = "import os\nopen(os.path.join(os.environ['NEKKORA_SAIDA'], 'feito.txt'), 'w').write('ok')\n";
+    private static final String LENTO = "import time\ntime.sleep(300)\n";
+
+    @TempDir
+    Path tmp;
+    private FakeSignIn fake;
+    private FakeDirectory.Manual background;
+    private SignInFlow flow;
+    private ClientWindow window;
+    private Workshop workshop;
+    private Runner runner;
+    /** Os candidatos que a "descoberta" devolve neste teste (as fontes reais da maquina ficam de fora). */
+    private final List<Path> candidatos = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private FakeSession session;
+    private final AtomicInteger closes = new AtomicInteger();
+    private final List<String> blocked = new ArrayList<>();
+    private final List<String> exitQuestions = new ArrayList<>();
+    private volatile boolean confirmExit;
+    private final Organization a = FakeDirectory.org(1, "Acme Indústria");
+    private final Organization b = FakeDirectory.org(2, "Beta Serviços");
+    private final Workspace fin = FakeDirectory.ws(1, "Financeiro");
+    private final Workspace fis = FakeDirectory.ws(2, "Fiscal");
+    private final Workspace deB = FakeDirectory.ws(4, "Financeiro");
+
+    @BeforeEach
+    void open() throws Exception {
+        fake = new FakeSignIn();
+        background = new FakeDirectory.Manual();
+        Path dados = tmp.resolve("dados");
+        workshop = new Workshop(dados);
+        // sessao interativa "presente": o que se testa aqui e a tela e o executor, nao a sonda de sessao do Windows
+        SessionProbe sessao = () -> new SessionProbe.Session(true, 1, false, null);
+        RunController controller = new RunController(new RunStore(dados.resolve("execucoes"), AtomicWriter.DEFAULT),
+                new ApprovalLedger(ApprovalLedger.defaultFile(dados), AtomicWriter.DEFAULT), sessao, Clock.systemUTC(), dados);
+        if (PYTHON != null && !PYTHON.isBlank()) {
+            candidatos.add(Path.of(PYTHON));
+        }
+        runner = new Runner(workshop.packages(), controller,
+                new PythonEnvironments(cancel -> List.of(new PythonSources.Found(PythonSources.PATH, List.copyOf(candidatos), false)), controller.probeDir()));
+        SwingUtilities.invokeAndWait(() -> {
+            Themes.apply(ClientTheme.SAKURA_DARK);
+            flow = new SignInFlow(fake, r -> {
+                if (SwingUtilities.isEventDispatchThread()) {
+                    r.run();
+                } else {
+                    SwingUtilities.invokeLater(r);
+                }
+            });
+            window = new ClientWindow(flow, t -> { }, closes::incrementAndGet, BuildInfo.load(), background, workshop, runner);
+            window.actions().modal = false;
+            window.guard = new ClientWindow.Guard() {
+                @Override
+                public boolean confirmExit(String title, String text) {
+                    exitQuestions.add(title + " | " + text);
+                    return confirmExit;
+                }
+
+                @Override
+                public void blocked(String text) {
+                    blocked.add(text);
+                }
+            };
+            window.setLocation(40, 40);
+            window.setVisible(true);
+        });
+        settle();
+        session = new FakeSession();
+        FakeDirectory d = session.directory;
+        d.organizations = List.of(a, b);
+        d.workspaces.put(a.id(), List.of(fin, fis));
+        d.workspaces.put(b.id(), List.of(deB));
+        d.automations.put(fin.id(), FakeDirectory.listing(true, true, FakeDirectory.automation(1, "Conciliação bancária", 3, "1.2.0")));
+        d.automations.put(fis.id(), FakeDirectory.listing(false, false, FakeDirectory.automation(4, "Apuração", 7, "2.0.1")));
+        d.automations.put(deB.id(), FakeDirectory.listing(false, false));
+        edt(() -> window.signInView().signInButton().doClick(0));
+        edt(() -> fake.last().listener.signedIn(session));
+        answer();
+    }
+
+    @AfterEach
+    void close() throws Exception {
+        runner.close(); // nenhum processo de teste sobrevive
+        SwingUtilities.invokeAndWait(() -> {
+            window.actions().close();
+            flow.close();
+            window.dispose();
+        });
+    }
+
+    private static void settle() throws Exception {
+        for (int i = 0; i < 4; i++) {
+            SwingUtilities.invokeAndWait(() -> {
+            });
+        }
+    }
+
+    private void edt(Runnable r) throws Exception {
+        SwingUtilities.invokeAndWait(r);
+        settle();
+    }
+
+    private <T> T read(java.util.function.Supplier<T> s) throws Exception {
+        AtomicReference<T> v = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> v.set(s.get()));
+        return v.get();
+    }
+
+    private void answer() throws Exception {
+        for (int i = 0; i < 6; i++) {
+            background.runAll();
+            settle();
+        }
+        edt(window::validate);
+    }
+
+    private void await(String what, BooleanSupplier ok) throws Exception {
+        long end = System.nanoTime() + 40_000_000_000L;
+        while (!ok.getAsBoolean()) {
+            if (System.nanoTime() > end) {
+                throw new AssertionError("nao aconteceu: " + what);
+            }
+            Thread.sleep(50);
+            answer();
+        }
+    }
+
+    /** A busca dos ambientes Python (processos reais, fora da fila de eventos) terminou e a lista esta na tela. */
+    private void aguardarPythons(RunForm f) throws Exception {
+        await("ambientes Python listados", () -> {
+            try {
+                return !read(f::pythonSearching) && read(() -> f.searchAgainButton().isEnabled());
+            } catch (Exception e) {
+                return false;
+            }
+        });
+    }
+
+    private void enter(Organization o, Workspace w) throws Exception {
+        edt(() -> window.organizationsView().cards().stream().filter(c -> c.organization().id().equals(o.id())).findFirst().orElseThrow().choose());
+        answer();
+        edt(() -> window.contextView().workspaceBox().setSelectedItem(w));
+        answer();
+    }
+
+    private void importar(String name, String script, List<String> dependencies) throws Exception {
+        Path zip = PackFixtures.packageZip(tmp.resolve("zips"), name, Map.of("main.py", script), "main.py", dependencies);
+        Workspace atual = (Workspace) read(() -> window.contextView().workspaceBox().getSelectedItem());
+        workshop.importZip(a.id(), atual.id(), zip.toString());
+        edt(() -> window.reloadLocal());
+        answer();
+    }
+
+    private AutomationRow row(String name) throws Exception {
+        return read(() -> window.contextView().rows().stream().filter(r -> r.name().equals(name)).findFirst().orElseThrow());
+    }
+
+    private RunForm abrir(String name) throws Exception {
+        JButton executar = row(name).actions().get(0);
+        assertTrue(read(executar::isEnabled), "Executar habilitado em " + name);
+        edt(() -> executar.doClick(0));
+        answer();
+        RunForm f = read(() -> window.actions().runForm());
+        assertNotNull(f);
+        return f;
+    }
+
+    private void evidence(String name, Container root) throws Exception {
+        Files.createDirectories(EVIDENCE);
+        BufferedImage img = read(() -> {
+            BufferedImage i = new BufferedImage(root.getWidth() * 2, root.getHeight() * 2, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = i.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.scale(2, 2);
+            root.paint(g);
+            g.dispose();
+            return i;
+        });
+        ImageIO.write(img, "png", EVIDENCE.resolve(name + "-200.png").toFile());
+    }
+
+    // ------------------------------------------------------------------ estado da integracao e disponibilidade
+
+    @Test
+    void estadoDaIntegracaoESomenteLocalEANotaDeIndisponibilidadeSome() throws Exception {
+        ContextView v = window.contextView();
+        edt(() -> window.organizationsView().cards().get(0).choose());
+        answer();
+        assertFalse(read(() -> v.statusLabel().isVisible()), "sem ambiente, nenhum estado de integracao e afirmado");
+        edt(() -> v.workspaceBox().setSelectedItem(fin));
+        answer();
+        assertEquals("Somente local — integração com a Platform não configurada", read(() -> v.statusLabel().getText()));
+        assertTrue(read(() -> v.statusLabel().isShowing()));
+        assertTrue(read(() -> v.statusLabel().getToolTipText()).contains("sem gatilhos da Platform e sem envio de registros de monitoramento"));
+        assertEquals("", read(v::unavailableNote), "todas as acoes existem: a nota de indisponibilidade nao aparece");
+        evidence("sakura-dark-estado-somente-local", window.getRootPane());
+        // nenhum botao promete integracao
+        for (JButton bt : read(() -> List.<JButton>of(v.generateButton()))) {
+            assertFalse(read(bt::getText).toLowerCase().matches(".*(vincul|parear|conectar|integra).*"));
+        }
+    }
+
+    @Test
+    void executarSemOPacoteNoComputadorExplicaEApontaAImportacao() throws Exception {
+        ContextView v = window.contextView();
+        enter(a, fin);
+        JButton executar = row("Conciliação bancária").actions().get(0);
+        assertTrue(read(executar::isEnabled));
+        edt(() -> executar.doClick(0));
+        answer();
+        assertEquals(NavText.RUN_NO_PACKAGE,
+                read(v::noticeText));
+        assertNull(read(() -> window.actions().runForm()), "nenhuma preparacao aberta");
+        assertTrue(runner.current().isEmpty(), "nada foi iniciado");
+        assertFalse(session.directory.calls.stream().anyMatch(c -> c.contains("download") || c.contains("artifact")), "nenhum download inventado");
+    }
+
+    @Test
+    void semPermissaoDeExecutarNoAmbienteALinhaDaPlatformFicaDesabilitadaEOItemLocalNao() throws Exception {
+        enter(a, fis); // capacidades: execute=false
+        JButton daPlatform = row("Apuração").actions().get(0);
+        assertFalse(read(daPlatform::isEnabled));
+        assertEquals("Você não tem permissão para executar automações neste ambiente.", read(daPlatform::getToolTipText));
+        importar("meu-script", GRAVA, List.of());
+        JButton local = row("meu-script").actions().get(0);
+        assertTrue(read(local::isEnabled), "o que so existe neste computador e da propria pessoa");
+    }
+
+    // ------------------------------------------------------------------ nada comeca sozinho
+
+    @Test
+    void importarSelecionarETrocarDeAmbienteNaoExecutamNada() throws Exception {
+        enter(a, fin);
+        importar("meu-script", GRAVA, List.of());
+        assertTrue(runner.current().isEmpty(), "importar nao executa");
+        edt(() -> window.contextView().workspaceBox().setSelectedItem(fis));
+        answer();
+        edt(() -> window.contextView().workspaceBox().setSelectedItem(fin));
+        answer();
+        assertTrue(runner.current().isEmpty(), "trocar de ambiente nao executa");
+        assertFalse(Files.exists(tmp.resolve("dados").resolve("execucoes")) && Files.list(tmp.resolve("dados").resolve("execucoes")).findAny().isPresent(),
+                "nenhum registro de execucao");
+    }
+
+    @Test
+    void preparacaoExigeTudoEAprovarNaoInicia() throws Exception {
+        enter(a, fin);
+        importar("meu-script", GRAVA, List.of());
+        RunForm f = abrir("meu-script");
+        assertEquals("Execução local. Os registros ficam neste computador.", read(f::scopeText), "texto curto na tela principal");
+        assertEquals("meu-script · versão 1.0.0", read(f::packageText), "so o nome e a versao; o resto fica em detalhes tecnicos");
+        assertFalse(read(f::detailsOpen), "detalhes tecnicos recolhidos");
+        assertTrue(read(f::detailsText).contains("Entrada: main.py") && read(f::detailsText).contains("Impressão digital: sha256:"), read(f::detailsText));
+        assertTrue(read(f::detailsText).contains("nada desta execução é enviado à Platform"), "a regra da execucao local continua escrita, nos detalhes");
+        assertFalse(read(() -> f.startButton().isEnabled()), "abrir a preparacao nao habilita o inicio");
+        assertTrue(runner.current().isEmpty());
+        evidence("sakura-dark-preparar-execucao", read(() -> (Container) window.actions().runForm()));
+
+        // aprovacao explicita: o clique da pessoa; nao inicia nada
+        assertTrue(read(f::approvalText).contains("Aprovar não inicia nada"));
+        edt(() -> f.approveButton().doClick(0));
+        answer();
+        assertEquals("Este conteúdo exato foi aprovado por você neste computador.", read(f::approvalText));
+        assertTrue(runner.current().isEmpty(), "aprovar nao inicia");
+        assertFalse(read(() -> f.startButton().isEnabled()), "falta Python e pasta de saida");
+
+        // um arquivo chamado python.exe que nao e um interpretador: nao vira opcao, e a tela diz o que a automacao precisa
+        Path naoPython = Files.writeString(tmp.resolve("python.exe"), "nao sou um interpretador");
+        candidatos.clear();
+        candidatos.add(naoPython);
+        edt(() -> f.searchAgainButton().doClick(0));
+        aguardarPythons(f);
+        assertEquals(List.of(), read(f::pythonLines));
+        assertTrue(read(f::pythonText).contains("Nenhum ambiente Python compatível encontrado. Esta automação precisa de Python "), read(f::pythonText));
+        assertNull(read(f::chosenPython), "o ambiente de antes sumiu: nenhum outro e selecionado no lugar");
+        assertFalse(read(() -> f.startButton().isEnabled()));
+        // pasta de saida inexistente
+        edt(() -> window.actions().setOutput(tmp.resolve("nao-existe").toString()));
+        answer();
+        assertEquals("A pasta de saída não existe. Escolha uma pasta existente.", read(f::outputText));
+        assertFalse(read(() -> f.startButton().isEnabled()));
+
+        // preparacao cancelada: fechar nao deixa nada rodando nem registrado
+        edt(() -> f.closeButton().doClick(0));
+        assertNull(read(() -> window.actions().runForm()));
+        assertTrue(runner.current().isEmpty());
+        assertTrue(runner.running().isEmpty());
+    }
+
+    @Test
+    void aprovacaoValeParaOConteudoExatoENaoParaOutroPacote() throws Exception {
+        enter(a, fin);
+        importar("primeiro", GRAVA, List.of());
+        importar("segundo", GRAVA + "# outro conteudo\n", List.of());
+        RunForm f = abrir("primeiro");
+        edt(() -> f.approveButton().doClick(0));
+        answer();
+        edt(() -> f.closeButton().doClick(0));
+        RunForm g = abrir("segundo");
+        assertTrue(read(g::approvalText).contains("Aprovar não inicia nada"), "o segundo pacote nao herda a aprovacao do primeiro");
+        assertTrue(read(() -> g.approveButton().isVisible()));
+        edt(() -> g.closeButton().doClick(0));
+        RunForm h = abrir("primeiro");
+        assertEquals("Este conteúdo exato foi aprovado por você neste computador.", read(h::approvalText), "a aprovacao do primeiro continua");
+    }
+
+    // ------------------------------------------------------------------ execucao real (precisa de Python)
+
+    private RunForm preparado(String name, String script) throws Exception {
+        importar(name, script, List.of());
+        RunForm f = abrir(name);
+        edt(() -> f.approveButton().doClick(0));
+        answer();
+        // a unica instalacao compativel da descoberta inicial vem selecionada, e a tela diz qual sera usada
+        aguardarPythons(f);
+        assertEquals(1, (int) read(() -> f.pythonLines().size()));
+        assertTrue(read(f::pythonShown).matches("Python \\d+\\.\\d+\\.\\d+ — Compatível"), read(f::pythonShown));
+        assertEquals(NavText.PY_COMPATIBLE, read(f::pythonText));
+        Path saida = Files.createDirectories(tmp.resolve("saida"));
+        edt(() -> window.actions().setOutput(saida.toString()));
+        answer();
+        assertTrue(read(() -> f.startButton().isEnabled()), "tudo conferido: pode iniciar");
+        return f;
+    }
+
+    @Test
+    void execucaoLocalRealGravaNaSaidaENaoFalaComAPlatform() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        enter(a, fin);
+        RunForm f = preparado("grava", GRAVA);
+        int chamadas = session.directory.calls.size();
+        assertTrue(runner.current().isEmpty(), "ate aqui nada foi lancado");
+        edt(() -> f.startButton().doClick(0));
+        await("execucao terminada", () -> runner.current().map(Runner.Status::finished).orElse(false));
+        Runner.Status s = runner.current().orElseThrow();
+        assertTrue(s.succeeded(), s.state() + " " + s.detail());
+        assertEquals(a.id(), s.organizationId(), "o contexto do inicio fica no registro");
+        assertEquals(fin.id(), s.workspaceId());
+        assertEquals("grava", s.name());
+        assertEquals("ok", Files.readString(Path.of(s.outputFolder()).resolve("feito.txt")), "o script rodou e gravou na pasta de saida da execucao");
+        await("resultado na tela", () -> {
+            try {
+                return read(f::statusText).startsWith("Concluída com sucesso");
+            } catch (Exception e) {
+                return false;
+            }
+        });
+        assertTrue(read(f::statusText).contains("Registro só neste computador."));
+        assertEquals(chamadas, session.directory.calls.size(), "nenhuma chamada a Platform durante a execucao: sem registro, monitoramento ou envio");
+        evidence("sakura-dark-execucao-concluida", read(() -> (Container) window.actions().runForm()));
+        // o registro local guarda o contexto e nao existe fila de envio
+        Path registros = tmp.resolve("dados").resolve("execucoes");
+        String estado = Files.readString(registros.resolve(s.id()).resolve("estado.json"));
+        assertTrue(estado.contains(a.id().toString()) && estado.contains(fin.id().toString()), "organizacao e ambiente do inicio no registro");
+        assertFalse(Files.exists(tmp.resolve("dados").resolve("plataforma")), "nenhuma pasta de integracao");
+    }
+
+    /**
+     * AGENT-CLIENT-PACOTES-001 T04: executar no Agent e SEMPRE local, mesmo com a conta conectada e com um estado de
+     * pareamento e de autorizacao de monitoramento no disco (FIXTURE: este aplicativo nao pareia; os arquivos imitam o que
+     * um vinculo deixaria). Nada desta execucao vai a Platform, nenhuma fila de envio nasce, e reiniciar, voltar a "ter rede"
+     * ou trocar de organizacao nao a transforma em remota.
+     */
+    @Test
+    void execucaoIniciadaNoAgentNaoEnviaNemEnfileiraNadaMesmoComPareamentoEAutorizacaoEmFixture() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        Path dados = tmp.resolve("dados");
+        Path plataforma = Files.createDirectories(dados.resolve("plataforma"));
+        Files.writeString(plataforma.resolve("vinculo.json"), "{\"fixture\":true,\"organizationId\":\"" + a.id() + "\",\"workerId\":\"" + java.util.UUID.randomUUID() + "\"}");
+        Files.writeString(plataforma.resolve("autorizacoes.json"), "{\"fixture\":true,\"items\":[{\"mode\":\"EXTERNAL_MONITORED\",\"workspaceId\":\"" + fin.id() + "\"}]}");
+        String fixtureAntes = Files.readString(plataforma.resolve("vinculo.json")) + Files.readString(plataforma.resolve("autorizacoes.json"));
+        enter(a, fin);
+        RunForm f = preparado("grava", GRAVA);
+        List<String> antes = List.copyOf(session.directory.calls);
+        edt(() -> f.startButton().doClick(0));
+        await("execucao terminada", () -> runner.current().map(Runner.Status::finished).orElse(false));
+        Runner.Status s = runner.current().orElseThrow();
+        assertTrue(s.succeeded(), s.state() + " " + s.detail());
+        answer();
+
+        // 1. trafego: NENHUMA chamada a Platform por causa da execucao (o que ha antes e login, catalogo e listas)
+        assertEquals(antes, session.directory.calls, "zero envio: nem estado, nem evento, nem termino");
+        assertTrue(session.directory.calls.stream().allMatch(c -> c.startsWith("workspaces") || c.startsWith("automations") || c.startsWith("versions")),
+                "so consultas de catalogo: " + session.directory.calls);
+        // 2. disco: o registro diz a origem local; nenhuma fila de envio; a fixture de pareamento nao foi lida para enviar nem alterada
+        String estado = Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json"));
+        assertTrue(estado.contains("\"origin\": \"LOCAL_AGENT\""), estado);
+        assertEquals(fixtureAntes, Files.readString(plataforma.resolve("vinculo.json")) + Files.readString(plataforma.resolve("autorizacoes.json")));
+        List<String> suspeitos = new ArrayList<>();
+        List<String> naPlataforma = new ArrayList<>();
+        try (java.util.stream.Stream<Path> all = Files.walk(dados)) {
+            for (Path p : all.toList()) {
+                String rel = dados.relativize(p).toString().replace('\\', '/').toLowerCase();
+                if (rel.matches(".*(fila|outbox|queue|spool|pendente|pending|envio|upload|monitor|remote|remot).*")) {
+                    suspeitos.add(rel);
+                }
+                if (rel.startsWith("plataforma/")) {
+                    naPlataforma.add(rel);
+                }
+            }
+        }
+        assertEquals(List.of(), suspeitos, "nenhuma fila ou pendencia de envio no disco");
+        assertEquals(List.of("plataforma/autorizacoes.json", "plataforma/vinculo.json"), naPlataforma.stream().sorted().toList(), "nada novo junto do vinculo de fixture");
+
+        // 3. "a rede voltou" / reinicio: um aplicativo novo sobre os mesmos dados reconcilia e NAO envia nada depois
+        SessionProbe sessao = () -> new SessionProbe.Session(true, 1, false, null);
+        Runner depois = new Runner(workshop.packages(), new RunController(new RunStore(dados.resolve("execucoes"), AtomicWriter.DEFAULT),
+                new ApprovalLedger(ApprovalLedger.defaultFile(dados), AtomicWriter.DEFAULT), sessao, Clock.systemUTC(), dados));
+        depois.reconcile();
+        answer();
+        assertEquals(antes, session.directory.calls, "reiniciar nao envia retroativamente");
+        assertTrue(Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json")).contains("\"origin\": \"LOCAL_AGENT\""));
+        depois.close();
+
+        // 4. trocar de organizacao depois: o registro continua do contexto original e continua local
+        edt(() -> window.actions().closeRun());
+        edt(() -> window.contextView().backButton().doClick(0));
+        answer();
+        String registro = Files.readString(dados.resolve("execucoes").resolve(s.id()).resolve("estado.json"));
+        assertTrue(registro.contains(a.id().toString()) && registro.contains(fin.id().toString()) && registro.contains("\"origin\": \"LOCAL_AGENT\""));
+        assertTrue(session.directory.calls.stream().noneMatch(c -> c.startsWith("rename") || c.startsWith("download")));
+    }
+
+    @Test
+    void dependenciaAusenteNoPythonEscolhidoNaoIniciaNada() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        enter(a, fin);
+        importar("com-dependencia", GRAVA, List.of("pacote-que-nao-existe-nekkora==9.9.9"));
+        RunForm f = abrir("com-dependencia");
+        edt(() -> f.approveButton().doClick(0));
+        answer();
+        aguardarPythons(f);
+        assertTrue(read(f::pythonLines).get(0).endsWith("— Dependências ausentes"), read(f::pythonLines).toString());
+        assertNull(read(f::chosenPython), "o que nao e totalmente compativel nao vem selecionado");
+        assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9"), "sem ambiente compativel, a tela diz o requisito real: " + read(f::pythonText));
+        edt(() -> f.pythonBox().setSelectedIndex(0));
+        assertTrue(read(f::pythonText).contains("pacote-que-nao-existe-nekkora==9.9.9 (não instalado)"), read(f::pythonText));
+        assertTrue(read(f::pythonText).contains("Nada é instalado pelo aplicativo"));
+        Path saida = Files.createDirectories(tmp.resolve("saida"));
+        edt(() -> window.actions().setOutput(saida.toString()));
+        answer();
+        assertFalse(read(() -> f.startButton().isEnabled()), "ambiente incompativel: nao inicia (e nada e instalado)");
+        assertTrue(runner.current().isEmpty());
+    }
+
+    @Test
+    void comExecucaoEmAndamentoTrocarContextoETerminarSessaoSaoBloqueadosESairPergunta() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        ContextView v = window.contextView();
+        enter(a, fin);
+        RunForm f = preparado("lento", LENTO);
+        edt(() -> f.startButton().doClick(0));
+        await("em andamento", () -> runner.running().isPresent());
+        answer();
+        assertTrue(read(() -> f.cancelButton().isVisible()));
+        evidence("sakura-dark-execucao-em-andamento", read(() -> (Container) window.actions().runForm()));
+
+        // trocar de ambiente: bloqueado, o seletor volta, a lista nao muda
+        edt(() -> v.workspaceBox().setSelectedItem(fis));
+        answer();
+        assertEquals(List.of(NavText.RUNNING_BLOCKS_CONTEXT), blocked);
+        assertEquals(fin, read(() -> v.workspaceBox().getSelectedItem()), "continua no ambiente da execucao");
+        // voltar para as organizacoes: bloqueado
+        edt(() -> v.backButton().doClick(0));
+        assertEquals(ClientWindow.CONTEXT, read(window::showing));
+        assertEquals(2, blocked.size());
+        // terminar sessao: bloqueado, a sessao continua
+        edt(window::requestSignOut);
+        assertEquals(NavText.RUNNING_BLOCKS_SIGN_OUT, blocked.get(2));
+        assertEquals(Phase.SIGNED_IN, flow.state().phase());
+        assertEquals(0, session.ended);
+        // segunda execucao: recusada enquanto a primeira corre
+        JButton outra = row("lento").actions().get(0);
+        edt(() -> outra.doClick(0));
+        answer();
+        assertEquals(NavText.RUN_BUSY, read(v::noticeText));
+        // sair: pergunta; sem confirmar, nada muda e o processo segue
+        confirmExit = false;
+        edt(window::requestExit);
+        assertEquals(1, exitQuestions.size());
+        assertTrue(exitQuestions.get(0).contains("Sair encerra o processo dela") && exitQuestions.get(0).startsWith("Sair do Nekkora Agent?"));
+        assertEquals(0, closes.get());
+        assertTrue(runner.running().isPresent(), "sem confirmacao, a execucao nao e tocada");
+        // fechar a janela da execucao nao cancela
+        edt(() -> f.closeButton().doClick(0));
+        assertTrue(runner.running().isPresent());
+        // a sessao vence (15 min): a tela volta para a entrada, a execucao NAO e morta e continua no contexto dela
+        edt(session::expire);
+        assertEquals(ClientWindow.SIGN_IN, read(window::showing));
+        Runner.Status ainda = runner.running().orElseThrow();
+        assertEquals(a.id(), ainda.organizationId());
+        assertEquals(fin.id(), ainda.workspaceId());
+        // sair confirmando: so entao o aplicativo pede o encerramento
+        confirmExit = true;
+        edt(window::requestExit);
+        assertEquals(1, closes.get(), "confirmado: o aplicativo encerra (e o encerramento cancela a execucao)");
+        runner.close();
+        Runner.Status fim = runner.current().orElseThrow();
+        assertTrue(fim.finished());
+        assertEquals("Cancelada", fim.state());
+        assertEquals(a.id(), fim.organizationId(), "cancelada no contexto em que comecou, sem reatribuicao");
+    }
+
+    /**
+     * AGENT-CLIENT-NAVEGACAO-002 T01: atualizar com uma execucao em andamento nao inicia, interrompe, reatribui nem
+     * modifica a execucao - nem quando a atualizacao descobre que o ambiente saiu do alcance da pessoa.
+     */
+    @Test
+    void atualizarComExecucaoEmAndamentoNaoTocaNaExecucao() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        ContextView v = window.contextView();
+        enter(a, fin);
+        RunForm f = preparado("lento", LENTO);
+        edt(() -> f.startButton().doClick(0));
+        await("em andamento", () -> runner.running().isPresent());
+        answer();
+        Runner.Status antes = runner.running().orElseThrow();
+
+        // 1. atualizacao comum: versao nova publicada na Platform
+        session.directory.automations.put(fin.id(), FakeDirectory.listing(true, true, FakeDirectory.automation(1, "Conciliação bancária", 9, "9.9.9")));
+        edt(() -> v.refresh().button().doClick(0));
+        answer();
+        assertEquals("Dados atualizados.", read(() -> v.refresh().noteText()));
+        Runner.Status depois = runner.running().orElseThrow();
+        assertEquals(antes.organizationId(), depois.organizationId());
+        assertEquals(antes.workspaceId(), depois.workspaceId());
+        assertEquals(antes.state(), depois.state(), "a execucao segue como estava");
+        assertTrue(blocked.isEmpty(), "atualizar no mesmo contexto nao e troca de contexto: nada a bloquear");
+        assertTrue(read(() -> f.cancelButton().isVisible()), "a tela da execucao continua acompanhando");
+
+        // 2. a atualizacao descobre que o ambiente saiu do alcance: a tela larga o ambiente, a execucao NAO e morta
+        session.directory.workspaces.put(a.id(), List.of(fis));
+        edt(() -> v.refresh().button().doClick(0));
+        answer();
+        assertEquals("Você não tem mais acesso ao ambiente “Financeiro”. Selecione outro ambiente.", read(() -> v.refresh().noteText()));
+        Runner.Status ainda = runner.running().orElseThrow();
+        assertEquals(a.id(), ainda.organizationId(), "continua no contexto em que comecou, sem reatribuicao");
+        assertEquals(fin.id(), ainda.workspaceId());
+        // e continua protegida: uma segunda execucao e recusada e sair pergunta
+        confirmExit = false;
+        edt(window::requestExit);
+        assertEquals(1, exitQuestions.size());
+        assertEquals(0, closes.get());
+        assertTrue(runner.running().isPresent());
+        runner.close();
+        assertEquals("Cancelada", runner.current().orElseThrow().state());
+    }
+
+    @Test
+    void cancelarPelaTelaEncerraOProcessoERegistraComoCancelada() throws Exception {
+        assumeTrue(PYTHON != null && !PYTHON.isBlank(), SKIP);
+        enter(a, fin);
+        RunForm f = preparado("lento", LENTO);
+        edt(() -> f.startButton().doClick(0));
+        await("em andamento", () -> runner.running().isPresent());
+        answer();
+        edt(() -> f.cancelButton().doClick(0));
+        await("cancelada", () -> runner.current().map(Runner.Status::finished).orElse(false));
+        assertEquals("Cancelada", runner.current().orElseThrow().state());
+        // o ultimo aviso do executor chega a tela logo depois de o registro fechar
+        await("resultado na tela", () -> {
+            try {
+                return read(f::statusText).startsWith("Cancelada");
+            } catch (Exception e) {
+                return false;
+            }
+        });
+        // depois do fim, trocar de contexto volta a ser permitido
+        edt(() -> window.contextView().workspaceBox().setSelectedItem(fis));
+        answer();
+        assertEquals(List.of(), blocked);
+        assertEquals(fis, read(() -> window.contextView().workspaceBox().getSelectedItem()));
+    }
+}

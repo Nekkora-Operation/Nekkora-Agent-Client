@@ -1,0 +1,122 @@
+package com.nekkora.client.nav;
+
+import java.util.List;
+
+/**
+ * O que a pessoa que entrou pode consultar na Platform. Porta: quem fala com a rede e a camada {@code auth}; daqui para
+ * cima ninguem conhece token, endereco ou HTTP.
+ * <p>
+ * As chamadas BLOQUEIAM e sao feitas fora da fila de eventos por {@link Navigation}. Toda falha chega como
+ * {@link Failed}, ja classificada; uma consulta que falhou nunca devolve lista vazia.
+ */
+public interface Directory {
+
+    /** A propria identidade, como a Platform a conhece. */
+    Profile profile() throws Failed;
+
+    /**
+     * As organizacoes de que a pessoa participa, na ordem da Platform (nome e, no empate, identificador), e se a lista e
+     * a de AGORA ({@link Organizations#current()}).
+     */
+    Organizations organizations() throws Failed;
+
+    /**
+     * A lista de organizacoes como a Platform a devolveu. {@code current}: a Platform resolveu a lista nesta consulta
+     * (contrato desktop-navigation/2). Falso: Platform do contrato anterior, em que a lista e a do momento do login - o
+     * que a pessoa perdeu sai dela, mas uma organizacao nova so aparece depois de entrar de novo.
+     */
+    record Organizations(List<Organization> items, boolean current) {
+        public Organizations {
+            items = List.copyOf(items);
+        }
+    }
+
+    /**
+     * Os ambientes ATIVOS da organizacao que a pessoa pode acessar, na ordem da Platform. A organizacao e conferida pelo
+     * servidor a cada chamada: fora do alcance da pessoa, {@link Failure#NOT_FOUND}.
+     */
+    List<Workspace> workspaces(java.util.UUID organization) throws Failed;
+
+    /** As automacoes ativas do ambiente e o que a pessoa pode fazer com elas, na ordem da Platform. */
+    Automation.Listing automations(java.util.UUID organization, java.util.UUID workspace) throws Failed;
+
+    /**
+     * Renomeia a automacao NA PLATFORM. Quem decide se a pessoa pode e o servidor, nesta chamada: sem a permissao,
+     * {@link Failure#DENIED}; fora do alcance, {@link Failure#NOT_FOUND}; nome recusado, {@link Failure#REJECTED};
+     * automacao ou ambiente inativo, {@link Failure#CONFLICT}. Nao toca em versoes, pacotes nem manifestos.
+     *
+     * @return o nome como ficou gravado
+     */
+    String rename(java.util.UUID organization, java.util.UUID automation, String name) throws Failed;
+
+    /**
+     * As versoes da automacao, da mais nova para a mais antiga, com o que a Platform informa do pacote de cada uma. So
+     * metadados: nenhum byte do pacote vem aqui.
+     */
+    java.util.List<Automation.Version> versions(java.util.UUID organization, java.util.UUID automation) throws Failed;
+
+    /**
+     * Baixa o pacote (ZIP) de uma versao PUBLICADA, entregando os bytes a {@code sink} na ordem. Quem decide se a pessoa pode
+     * e o servidor, nesta chamada: sem permissao de baixar, {@link Failure#DENIED}; fora do alcance,
+     * {@link Failure#NOT_FOUND}; versao nao publicada ou arquivo indisponivel na Platform, {@link Failure#CONFLICT}.
+     * <p>
+     * So termina sem falha se chegaram EXATAMENTE {@code expectedSize} bytes de uma resposta {@code application/zip} do
+     * proprio endereco da Platform (redirecionamento nao e seguido e o token nunca vai a outro endereco). Interrompido pela
+     * pessoa: {@link Failure#CANCELLED}. O destino recusou gravar: {@link Failure#LOCAL}. Em qualquer falha, o que ja foi
+     * entregue e LIXO: quem chamou descarta. Conferir sha256 e conteudo e de quem recebe os bytes.
+     */
+    void download(java.util.UUID organization, java.util.UUID automation, java.util.UUID version, long expectedSize, Sink sink) throws Failed;
+
+    /** Destino dos bytes de um download. Sem arquivo nem rede aqui: quem grava e a area local de pacotes. */
+    interface Sink {
+        /** Recebe o proximo trecho. {@code false}: o destino nao conseguiu gravar; o download para. */
+        boolean write(byte[] data, int length);
+
+        /** A pessoa cancelou? Consultado entre os trechos. */
+        boolean cancelled();
+
+        /** Quanto ja chegou, de quanto. */
+        default void progress(long received, long total) {
+        }
+    }
+
+    /** Por que uma consulta nao trouxe o resultado. */
+    enum Failure {
+        /** A sessao nao vale mais: o aplicativo volta para a entrada. */
+        SESSION_ENDED,
+        /** A Platform respondeu que esta conta nao pode ver isto. */
+        DENIED,
+        /** Fora do alcance da pessoa, ou nao existe mais. */
+        NOT_FOUND,
+        /** A Platform nao aceitou o que foi enviado (um nome invalido, por exemplo). */
+        REJECTED,
+        /** O estado atual nao permite a acao (automacao ou ambiente inativo). */
+        CONFLICT,
+        RATE_LIMITED,
+        SERVER,
+        NETWORK,
+        TIMEOUT,
+        TLS,
+        /** Resposta que nao e a do contrato. */
+        INVALID,
+        /** A pessoa interrompeu a operacao (download). */
+        CANCELLED,
+        /** O destino local nao pode gravar (disco cheio, pasta indisponivel). */
+        LOCAL
+    }
+
+    /** Consulta que nao trouxe resultado. Sem mensagem tecnica nem pilha: so a classificacao. */
+    final class Failed extends Exception {
+        private static final long serialVersionUID = 1L;
+        private final Failure failure;
+
+        public Failed(Failure failure) {
+            super(failure.name(), null, false, false);
+            this.failure = failure;
+        }
+
+        public Failure failure() {
+            return failure;
+        }
+    }
+}

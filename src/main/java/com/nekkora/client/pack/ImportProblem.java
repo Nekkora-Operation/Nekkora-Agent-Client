@@ -1,0 +1,154 @@
+package com.nekkora.client.pack;
+
+import java.util.Optional;
+
+/**
+ * Recusa da importacao ou do empacotamento, com motivo de vocabulario FECHADO e texto para a pessoa. Portado do Nekkora
+ * Agent (9b1e7e1): codigos e textos mantidos sem mudanca; sairam os dois motivos do pacote do Studio e entraram
+ * {@code AGT-PAC-046} e {@code AGT-PAC-060..062}.
+ * O {@code detail} e um nome de arquivo ou parametro ja saneado ({@link ZipNames#display}); ele aparece so na tela e nunca
+ * vai para o log (pode ser nome de um cliente).
+ */
+public final class ImportProblem extends Exception {
+
+    /** Motivos. O codigo ({@code AGT-PAC-xxx}) pode ir para o log; o texto vai para a tela. */
+    public enum Code {
+        // arquivo de origem
+        SOURCE_NOT_FOUND("AGT-PAC-001", "O arquivo escolhido não existe ou não pôde ser aberto."),
+        SOURCE_LOCKED("AGT-PAC-002", "O arquivo está em uso por outro programa e não pôde ser lido. Feche o programa e tente de novo."),
+        SOURCE_CHANGED("AGT-PAC-003", "O arquivo mudou enquanto era lido ou depois da leitura. Importe o ZIP de novo."),
+        EMPTY_FILE("AGT-PAC-004", "O arquivo está vazio."),
+        NOT_ZIP("AGT-PAC-005", "O arquivo não é um ZIP válido: o conteúdo não é de um arquivo compactado, mesmo que o nome termine em .zip."),
+        TRUNCATED("AGT-PAC-006", "O ZIP está incompleto ou corrompido (por exemplo, um download interrompido). Gere ou baixe o ZIP de novo."),
+        CORRUPT_ENTRY("AGT-PAC-007", "Um arquivo dentro do ZIP está corrompido: o conteúdo não confere com o que o ZIP registra."),
+        ENCRYPTED("AGT-PAC-008", "O ZIP está protegido por senha. Gere o ZIP sem senha."),
+        UNSUPPORTED_METHOD("AGT-PAC-009", "O ZIP usa um método de compressão não suportado. Gere de novo com a compressão padrão (Deflate) do Windows ou do seu compactador."),
+        UNSUPPORTED_FORMAT("AGT-PAC-010", "O ZIP usa um formato estendido (ZIP64 ou dividido em partes), que não é suportado."),
+        ZIP_TOO_LARGE("AGT-PAC-011", "O ZIP passa do limite de 50 MiB."),
+        TOO_MANY_ENTRIES("AGT-PAC-012", "O ZIP tem mais de 1000 itens."),
+        CONTENT_TOO_LARGE("AGT-PAC-013", "O conteúdo descompactado passa do limite de 100 MiB."),
+        FILE_TOO_LARGE("AGT-PAC-014", "Um arquivo do ZIP passa do limite de 50 MiB."),
+        EXPANSION("AGT-PAC-015", "Um arquivo do ZIP se expande demais ao descompactar (possível bomba de descompactação)."),
+        MORE_THAN_DECLARED("AGT-PAC-016", "Um arquivo do ZIP tem mais conteúdo do que o ZIP declara (cabeçalho enganoso)."),
+        OVERLAPPING("AGT-PAC-017", "O ZIP tem itens sobrepostos ou ambíguos."),
+        NO_FILES("AGT-PAC-018", "O ZIP não tem nenhum arquivo."),
+        // nomes e tipos de item
+        UNSAFE_PATH("AGT-PAC-020", "O ZIP tem um caminho que sai da pasta do projeto (caminho absoluto, “..”, unidade do Windows ou caminho de rede)."),
+        SPECIAL_ENTRY("AGT-PAC-021", "O ZIP tem uma ligação simbólica ou outro tipo especial de item, que não é aceito."),
+        DUPLICATE("AGT-PAC-022", "O ZIP tem o mesmo caminho mais de uma vez (inclusive só com maiúsculas e minúsculas diferentes, que no Windows são o mesmo)."),
+        FILE_DIR_CONFLICT("AGT-PAC-023", "O ZIP tem um arquivo e uma pasta com o mesmo caminho."),
+        WINDOWS_NAME("AGT-PAC-024", "O ZIP tem um nome que o Windows não aceita (nome reservado, caractere inválido ou terminado em ponto ou espaço)."),
+        TOO_DEEP("AGT-PAC-025", "O ZIP tem pastas aninhadas demais (mais de 16 níveis)."),
+        UNDECLARED_ENCODING("AGT-PAC-026", "O ZIP tem nomes com acentos sem declarar a codificação (UTF-8); o nome não pode ser lido com segurança. Gere o ZIP de novo com um compactador atual."),
+        // projeto e pacote
+        DESCRIPTOR_CONFLICT("AGT-PAC-030", "O ZIP traz descritores de formatos diferentes na raiz (pacote Python externo e pacote do Studio ou de laboratório). Um pacote tem um único formato."),
+        EXTERNAL_INVALID("AGT-PAC-031", "O ZIP tem um nekkora-external.json, mas o pacote não é válido."),
+        NO_PYTHON_FILES("AGT-PAC-033", "O ZIP não tem nenhum arquivo .py para servir de entrada."),
+        ENTRY_INVALID("AGT-PAC-034", "Escolha um arquivo .py do projeto como entrada."),
+        NAME_INVALID("AGT-PAC-035", "O nome precisa começar com letra ou número e ter só letras sem acento, números, ponto, hífen ou sublinhado (até 80)."),
+        VERSION_INVALID("AGT-PAC-036", "A versão precisa ter o formato x.y.z, só com números (por exemplo, 1.0.0)."),
+        PYTHON_INVALID("AGT-PAC-037", "O requisito de Python não foi entendido. Use, por exemplo, 3.12 (qualquer 3.12.x), 3.12.0 (só essa versão) ou >=3.10,<3.14 — ou deixe o campo em branco para não declarar restrição."),
+        DEPENDENCY_INVALID("AGT-PAC-038", "Cada dependência precisa ter versão exata (nome==1.2.3), sem repetir."),
+        NAME_OUTSIDE_CONTRACT("AGT-PAC-039", "Há arquivos com nome que o formato de pacote não aceita (espaços, acentos ou caracteres especiais). Renomeie no projeto ou deixe-os fora do pacote."),
+        PACKAGE_LIMIT("AGT-PAC-040", "O pacote passaria dos limites do formato (500 arquivos ou 50 MiB de conteúdo)."),
+        FORBIDDEN_INCLUDED("AGT-PAC-041", "Ambiente virtual, cache, controle de versão e credenciais nunca entram no pacote."),
+        ALREADY_PACKAGE("AGT-PAC-044", "Este ZIP já é um pacote Python externo válido. Use-o como está ou escolha preparar de novo para mudar a entrada ou os requisitos."),
+        RESERVED_ROOT_NAME("AGT-PAC-045", "A raiz do projeto tem um manifest.json ou nekkora-agent-lab.json que não é de um pacote reconhecido. O formato do pacote reserva esses nomes na raiz: deixe o arquivo fora do pacote, renomeie ou mova-o para uma subpasta."),
+        DEPENDENCIES_UNCONFIRMED("AGT-PAC-042", "Confirme as dependências do projeto: o Agent não as deduz pelos imports."),
+        // NOVO neste aplicativo: formato que existe e que nao e aceito aqui (nunca aceito em silencio)
+        FORMAT_UNSUPPORTED("AGT-PAC-046", "Este ZIP é um pacote do Studio ou de laboratório. Este aplicativo só aceita pacotes Python externos (nekkora-external.json) ou o código de um projeto Python."),
+        // gravacao
+        TARGET_EXISTS("AGT-PAC-050", "Já existe um arquivo com esse nome na pasta escolhida."),
+        SAME_AS_SOURCE("AGT-PAC-056", "O pacote não pode ser gravado sobre o ZIP de origem. Escolha outra pasta ou outro nome."),
+        NO_SPACE("AGT-PAC-051", "Não há espaço suficiente no disco para gravar o pacote. Nada foi deixado pela metade."),
+        WRITE_FAILED("AGT-PAC-052", "Não foi possível gravar o pacote na pasta escolhida (sem permissão ou arquivo em uso). Nada foi deixado pela metade."),
+        // NOVOS (AGENT-CLIENT-PREPARACAO-002): o motivo da falha de gravacao, quando o sistema o informa
+        WRITE_DENIED("AGT-PAC-057", "Sem permissão para gravar na pasta escolhida. Escolha outra pasta. Nada foi deixado pela metade."),
+        TARGET_LOCKED("AGT-PAC-058", "O arquivo de destino está em uso por outro programa. Feche o programa ou escolha outro nome. Nada foi deixado pela metade."),
+        REQUIREMENTS_UNRESOLVED("AGT-PAC-047", "O arquivo de dependências tem linhas que o pacote não consegue representar. Ajuste o arquivo, edite a lista manualmente ou remova a seleção."),
+        REQUIREMENTS_CHANGED("AGT-PAC-048", "O arquivo de dependências mudou depois de lido. Leia o arquivo de novo antes de gerar."),
+        REQUIREMENTS_UNREADABLE("AGT-PAC-049", "O arquivo de dependências não pôde ser lido como texto (não existe, é grande demais ou não é UTF-8)."),
+        REQUIREMENTS_COLLISION("AGT-PAC-043", "Não há nome livre na raiz do pacote para copiar o arquivo de dependências escolhido. Copie-o você para a pasta do projeto ou desmarque a cópia."),
+        DEPENDENCY_SOURCES_CONFLICT("AGT-PAC-059", "O manifesto da pasta e o arquivo de dependências declaram listas diferentes. Escolha qual delas vale antes de gerar."),
+        DEPENDENCY_SOURCE_MISSING("AGT-PAC-063", "A origem das dependências escolhida não existe mais. Escolha outra origem."),
+        VERIFY_FAILED("AGT-PAC-053", "O pacote gravado não passou na conferência final e foi descartado."),
+        WORK_FAILED("AGT-PAC-054", "O Agent não conseguiu usar a pasta de trabalho temporária dele."),
+        CANCELLED("AGT-PAC-055", "Operação cancelada. Nada foi gerado e o ZIP original não foi alterado."),
+        // NOVOS neste aplicativo: pacotes guardados por organizacao e ambiente
+        LOCAL_NAME_INVALID("AGT-PAC-060", "O nome local precisa ter de 1 a 80 caracteres, sem quebra de linha nem caracteres de controle."),
+        LOCAL_NOT_FOUND("AGT-PAC-061", "Este pacote não está guardado neste ambiente."),
+        STORE_FAILED("AGT-PAC-062", "Não foi possível gravar na pasta de pacotes do aplicativo. Nada foi deixado pela metade."),
+        // NOVOS (AGENT-CLIENT-PACOTES-001 T01): pacote gerado a partir de uma PASTA de projeto
+        FOLDER_NOT_FOUND("AGT-PAC-070", "A pasta escolhida não existe ou não pôde ser aberta."),
+        FOLDER_LINK("AGT-PAC-071", "A pasta tem uma ligação simbólica, uma junção ou outro item especial, que não é aceito: só entram no pacote arquivos que estão de fato dentro da pasta escolhida."),
+        FOLDER_CHANGED("AGT-PAC-072", "Os arquivos da pasta mudaram depois que ela foi aberta. Abra a pasta de novo para gerar o pacote."),
+        FOLDER_TOO_MANY("AGT-PAC-073", "A pasta tem mais de 1000 arquivos para o pacote (sem contar ambiente virtual, cache, controle de versão e dados)."),
+        FOLDER_FILE_TOO_LARGE("AGT-PAC-074", "Um arquivo da pasta passa do limite de 50 MiB."),
+        FOLDER_CONTENT_TOO_LARGE("AGT-PAC-075", "O conteúdo da pasta passa do limite de 100 MiB (sem contar ambiente virtual, cache, controle de versão e dados)."),
+        FOLDER_NAME("AGT-PAC-076", "A pasta tem um nome que não pode ser lido com segurança no Windows (nome reservado, caractere inválido, terminado em ponto ou espaço, ou dois nomes que só diferem por maiúsculas e minúsculas)."),
+        FOLDER_TOO_DEEP("AGT-PAC-077", "A pasta tem subpastas aninhadas demais (mais de 16 níveis)."),
+        FOLDER_UNREADABLE("AGT-PAC-078", "Um arquivo ou uma subpasta não pôde ser lido (sem permissão ou em uso por outro programa)."),
+        FOLDER_NO_PYTHON("AGT-PAC-079", "A pasta não tem nenhum arquivo .py que possa servir de entrada."),
+        FOLDER_DESCRIPTOR_CONFLICT("AGT-PAC-080", "A pasta traz descritores de formatos diferentes na raiz (nekkora-external.json junto com manifest.json ou nekkora-agent-lab.json). Um pacote tem um único formato; nada foi misturado nem regravado."),
+        FOLDER_EXTERNAL_INVALID("AGT-PAC-081", "A pasta tem um nekkora-external.json que não é válido para o conteúdo atual. Corrija ou remova o arquivo no projeto; ele não é regravado por este aplicativo."),
+        FOLDER_FORMAT_UNSUPPORTED("AGT-PAC-082", "Esta pasta é um pacote do Studio ou de laboratório. Este aplicativo só aceita pacotes Python externos (nekkora-external.json) ou o código de um projeto Python."),
+        FOLDER_IS_APP("AGT-PAC-083", "Escolha a pasta do projeto, não uma pasta do próprio aplicativo."),
+        FOLDER_CANCELLED("AGT-PAC-084", "Operação cancelada. Nada foi gerado e a pasta do projeto não foi alterada."),
+        DESTINATION_INVALID("AGT-PAC-085", "Escolha onde salvar o pacote: um arquivo .zip numa pasta que existe."),
+        DESTINATION_EXISTS("AGT-PAC-086", "Já existe um arquivo com esse nome no destino escolhido. Nada foi substituído."),
+        // NOVOS (AGENT-CLIENT-PACOTES-001 T02): pacote escolhido nesta maquina e pacote baixado da Platform
+        LOCAL_PICK_INVALID("AGT-PAC-090", "Escolha um arquivo .zip de pacote ou uma pasta."),
+        LOCAL_PICK_NOT_FOUND("AGT-PAC-091", "O arquivo ou a pasta escolhida não existe ou não pôde ser aberto."),
+        LOCAL_CODE_FOLDER("AGT-PAC-092", "Esta pasta tem o código de um projeto Python, mas ainda não é um pacote (não tem nekkora-external.json). Use “Gerar pacote novo” para criar o pacote a partir dela. Nada foi associado à automação."),
+        LOCAL_ZIP_NOT_PACKAGE("AGT-PAC-093", "Este ZIP não é um pacote (não tem nekkora-external.json na raiz). Se ele tem o código de um projeto, extraia para uma pasta e use “Gerar pacote novo”."),
+        LOCAL_FOLDER_NOT_PACKAGE("AGT-PAC-094", "Esta pasta não é um pacote nem um projeto Python que possa virar pacote."),
+        DOWNLOAD_MISMATCH("AGT-PAC-095", "O pacote baixado não confere com o que a Platform informou (tamanho, SHA-256 ou impressão digital). O arquivo foi descartado e nada foi instalado. Tente baixar de novo."),
+        DOWNLOAD_INVALID("AGT-PAC-096", "O pacote baixado não confere com o que a Platform informou: o arquivo não é um pacote válido. Ele foi descartado e nada foi instalado."),
+        DOWNLOAD_NOT_MANAGED("AGT-PAC-097", "Este arquivo não é um download em andamento deste aplicativo."),
+        DOWNLOAD_STORE_FAILED("AGT-PAC-098", "Não foi possível gravar na pasta de pacotes baixados do aplicativo. Nada foi deixado pela metade."),
+        DOWNLOAD_CANCELLED("AGT-PAC-099", "Download cancelado. O arquivo parcial foi descartado e nada foi instalado.");
+
+        private final String code;
+        private final String text;
+
+        Code(String code, String text) {
+            this.code = code;
+            this.text = text;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        public String text() {
+            return text;
+        }
+    }
+
+    private final Code code;
+    private final String detail;
+
+    public ImportProblem(Code code) {
+        this(code, null);
+    }
+
+    public ImportProblem(Code code, String detail) {
+        super(code.code(), null, false, false);
+        this.code = code;
+        this.detail = detail;
+    }
+
+    public Code code() {
+        return code;
+    }
+
+    /** Nome (saneado) do item ou o valor que causou a recusa, quando ajuda a pessoa; nunca para log. */
+    public Optional<String> detail() {
+        return Optional.ofNullable(detail);
+    }
+
+    /** Texto completo para a tela. */
+    public String message() {
+        return code.text() + (detail == null ? "" : " (" + detail + ")") + " [" + code.code() + "]";
+    }
+}
