@@ -84,6 +84,11 @@ public final class ClientDataDir {
         return root.resolve("execucao").resolve("aprovacoes.json");
     }
 
+    /** Vinculo deste computador para execucao remota (identidade e segredo protegido pelo sistema). */
+    public Path remoteDir() {
+        return root.resolve("remota");
+    }
+
     public void create() throws IOException {
         Files.createDirectories(root);
     }

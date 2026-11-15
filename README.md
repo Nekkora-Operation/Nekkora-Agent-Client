@@ -3,7 +3,9 @@
 Aplicativo desktop do **cliente** Nekkora. Na tela aparece como "Nekkora Agent".
 
 Este repositório é separado do `Nekkora-Agent` (administrativo) de propósito: aqui **não há** telas, comandos ou módulos
-de catálogo da máquina, pareamento, monitoramento, gatilhos remotos, operação global ou gestão de outros clientes.
+de catálogo da máquina, monitoramento, operação global ou gestão de outros clientes. O vínculo deste computador com a
+Platform para **execução remota** (PLATFORM-CLIENT-EXECUCAO-REMOTA-001) é código próprio do Client, numa camada à parte
+(`remote`); ver `docs/execucao-remota.md`.
 
 O que o cliente faz no próprio computador (importar um pacote, preparar um pacote a partir de código) reaproveita só o
 núcleo necessário do outro repositório: a validação de ZIP, o validador do pacote e o empacotador. A origem exata, classe
@@ -43,8 +45,11 @@ mesmo a um Client alterado.
 - **Executar** é só local e nunca começa sozinho: abre a preparação (pacote conferido, Python escolhido por você e
   conferido contra o pacote, pasta de saída, aprovação explícita daquele conteúdo) e só **Iniciar execução** lança o
   processo. Nada é instalado. Nada vai para a Platform: sem registro de execução, monitoramento ou gatilho remoto.
-- **Estado da integração:** este aplicativo não tem vínculo de máquina com a Platform, e a tela diz "Somente local —
-  integração com a Platform não configurada". O pareamento fica para uma etapa futura.
+- **Executar aqui é somente local:** a tela diz isso, com o computador habilitado para execução remota ou não.
+- **Execução remota** (menu da conta): habilita **este computador** a receber execuções solicitadas pela Platform. Exige
+  um código de habilitação criado na Platform por quem administra as máquinas e a confirmação explícita aqui; entrar com
+  a conta não habilita nada. Dá para pausar e retomar o recebimento e desabilitar. **Nesta versão o aplicativo ainda não
+  executa o que a Platform solicitar**: ele mantém o vínculo e a presença, e a Platform o mostra como incompatível.
 - Com uma execução em andamento, trocar de organização ou de ambiente e terminar a sessão ficam bloqueados; sair pede
   confirmação antes de encerrar o processo.
 - Cada linha diz se o pacote está neste computador. Listar os metadados na Platform não traz o código.
@@ -81,7 +86,7 @@ administrativo, de login simulado e de qualquer endereço ou certificado de labo
 - Pasta de dados: `%LOCALAPPDATA%\Nekkora\AgentClient`. A pasta do Nekkora Agent (`...\Nekkora\Agent`) é recusada mesmo se
   for pedida por configuração.
 - Instância única por arquivo próprio (`client.lock`). Os dois aplicativos podem ficar abertos ao mesmo tempo.
-- Abrir o Client não inicia o Nekkora Agent, nem tarefa, automação ou pareamento.
+- Abrir o Client não inicia o Nekkora Agent, nem tarefa ou automação, e não habilita este computador para nada.
 
 ## Construir e testar
 
