@@ -331,7 +331,7 @@ class PythonEnvironmentsTest {
         Files.writeString(projeto.resolve("json.py"), "raise SystemExit('modulo do projeto carregado')\n");
         venv(projeto.resolve(".venv"));
         List<String> antes = tree(projeto);
-        PythonEnvironments.Project p = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+        PythonEnvironments.Project p = service(sources()).virtual(projeto.resolve(".venv"), pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
         assertEquals(State.COMPATIBLE, p.environments().get(0).state());
         assertEquals(antes, tree(projeto), "a pasta do projeto nao muda: nada criado, nada gravado, nenhum .pyc");
         try (Stream<Path> s = Files.list(work)) {
@@ -339,83 +339,84 @@ class PythonEnvironmentsTest {
         }
     }
 
-    // ------------------------------------------------------------------ pasta da automacao
+    // ------------------------------------------------------------------ ambiente virtual apontado pela pessoa
 
+    /** AGENT-CLIENT-PREPARACAO-002: a pessoa escolhe a pasta RAIZ do ambiente virtual, com o nome que ele tiver. */
     @Test
-    void pastaComPontoVenvEncontraOAmbienteDoProjeto() throws Exception {
+    void pastaDoAmbienteVirtualEValidadaComQualquerNome() throws Exception {
         needsPython();
         Path projeto = tmp.resolve("Automação São João");
-        Path exe = venv(projeto.resolve(".venv"));
-        PythonEnvironments.Project p = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(List.of(), p.problems());
-        assertEquals(1, p.environments().size());
-        Environment e = p.environments().get(0);
-        assertEquals(Kind.PROJECT, e.kind());
-        assertEquals(".venv", e.folderName());
-        assertEquals(exe.toRealPath(), e.python().toRealPath(), "caminho com espacos e acentos");
-        assertEquals(State.COMPATIBLE, e.state());
+        for (String nome : List.of(".venv", "venv", "ambiente do robô")) {
+            Path exe = venv(projeto.resolve(nome));
+            PythonEnvironments.Project p = service(sources()).virtual(projeto.resolve(nome), pkg("p" + nome.length(), ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+            assertEquals(List.of(), p.problems(), nome);
+            assertEquals(1, p.environments().size(), nome);
+            Environment e = p.environments().get(0);
+            assertEquals(Kind.PROJECT, e.kind());
+            assertEquals(nome, e.folderName(), "o nome nao precisa ser um dos convencionais");
+            assertEquals(exe.toRealPath(), e.python().toRealPath(), "caminho com espacos e acentos");
+            assertEquals(State.COMPATIBLE, e.state());
+        }
+        // dois ambientes na mesma pasta de projeto sao ambientes diferentes, cada um com o seu interpretador
+        Environment a = service(sources()).virtual(projeto.resolve(".venv"), pkg("a", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment b = service(sources()).virtual(projeto.resolve("venv"), pkg("b", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).environments().get(0);
+        assertNotEquals(a.id(), b.id());
+        assertNotEquals(a.python(), b.python());
     }
 
     @Test
-    void pastaComVenvEComOsDoisListaTodosSemEscolher() throws Exception {
-        needsPython();
-        Path so = tmp.resolve("so-venv");
-        venv(so.resolve("venv"));
-        PythonEnvironments.Project um = service(sources()).project(so, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(List.of("venv"), um.environments().stream().map(Environment::folderName).toList());
-
-        Path dois = tmp.resolve("dois");
-        venv(dois.resolve(".venv"));
-        venv(dois.resolve("venv"));
-        PythonEnvironments.Project p = service(sources()).project(dois, pkg("q", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(List.of(".venv", "venv"), p.environments().stream().map(Environment::folderName).toList(), "os dois, cada um com o seu caminho");
-        assertNotEquals(p.environments().get(0).id(), p.environments().get(1).id());
-        assertNotEquals(p.environments().get(0).python(), p.environments().get(1).python());
-    }
-
-    @Test
-    void pastaSemAmbienteNaoProcuraEmSubpastasNemEmOutrasPastas() throws Exception {
+    void pastaQueNaoEUmAmbienteVirtualNaoProcuraDentroNemAoLado() throws Exception {
         needsPython();
         Path projeto = Files.createDirectories(tmp.resolve("projeto"));
-        venv(projeto.resolve("subprojeto").resolve(".venv"));
-        venv(projeto.resolve("env")); // nome nao convencional
+        venv(projeto.resolve(".venv")); // a pessoa apontou o PROJETO, nao o ambiente
+        venv(projeto.resolve("subprojeto").resolve("venv"));
         venv(tmp.resolve(".venv")); // na pasta de cima
-        PythonEnvironments.Project p = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(List.of(), p.environments(), "so .venv e venv diretamente na pasta escolhida");
-        assertEquals(List.of(), p.problems());
+        PythonEnvironments.Project p = service(sources()).virtual(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+        assertEquals(List.of(), p.environments(), "so a pasta escolhida e conferida: nada e procurado dentro, ao lado ou acima");
+        assertEquals(List.of(new PythonEnvironments.Problem("projeto", Issue.NOT_AN_ENVIRONMENT)), p.problems());
+        // a instalacao-base que um ambiente referencia nao e um ambiente virtual
+        assertEquals(Issue.NOT_AN_ENVIRONMENT, service(sources()).virtual(python.getParent(), pkg("q", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).problems().get(0).issue());
     }
 
     @Test
-    void ambienteIncompletoEInformadoENaoViraOpcao() throws Exception {
+    void ambienteIncompletoOuInexistenteEInformadoENaoViraOpcao() throws Exception {
         Path projeto = Files.createDirectories(tmp.resolve("projeto"));
-        Files.createDirectories(projeto.resolve(".venv").resolve("Scripts"));
+        Path semCfg = Files.createDirectories(projeto.resolve(".venv").resolve("Scripts")).getParent();
+        assertEquals(List.of(new PythonEnvironments.Problem(".venv", Issue.NOT_AN_ENVIRONMENT)),
+                service(sources()).virtual(semCfg, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).problems(), "o nome da pasta nao basta");
         Path semExe = Files.createDirectories(projeto.resolve("venv"));
         Files.writeString(semExe.resolve("pyvenv.cfg"), "home = C:\\nada\n");
-        PythonEnvironments.Project p = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(List.of(), p.environments(), "o nome da pasta nao basta");
-        assertEquals(List.of(new PythonEnvironments.Problem(".venv", Issue.INCOMPLETE), new PythonEnvironments.Problem("venv", Issue.INCOMPLETE)), p.problems());
+        PythonEnvironments.Project p = service(sources()).virtual(semExe, pkg("q", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+        assertEquals(List.of(), p.environments());
+        assertEquals(List.of(new PythonEnvironments.Problem("venv", Issue.INCOMPLETE)), p.problems(), "falta o interpretador deste sistema");
+        // o interpretador do outro sistema nao serve
+        Path outroSistema = Files.createDirectories(projeto.resolve("outro"));
+        Files.writeString(outroSistema.resolve("pyvenv.cfg"), "home = /usr/bin\n");
+        Path errado = Files.createDirectories(outroSistema.resolve(windows ? "bin" : "Scripts")).resolve(windows ? "python" : "python.exe");
+        Files.writeString(errado, "x");
+        assertEquals(Issue.INCOMPLETE, service(sources()).virtual(outroSistema, pkg("r", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).problems().get(0).issue());
 
-        assertEquals(List.of(new PythonEnvironments.Problem(null, Issue.NOT_A_FOLDER)),
-                service(sources()).project(tmp.resolve("nao-existe"), pkg("q", ">=3.10", List.of()), PythonProbe.Cancel.NEVER).problems());
+        for (Path naoEPasta : List.of(tmp.resolve("nao-existe"), Files.writeString(tmp.resolve("arquivo.txt"), "x"), Path.of("relativa"))) {
+            assertEquals(List.of(new PythonEnvironments.Problem(null, Issue.NOT_A_FOLDER)),
+                    service(sources()).virtual(naoEPasta, pkg("s" + naoEPasta.getFileName().toString().length(), ">=3.10", List.of()), PythonProbe.Cancel.NEVER).problems());
+        }
     }
 
     @Test
-    void interpretadorComPyvenvCfgQueNaoRespondeFicaComoNaoVerificado() throws Exception {
+    void interpretadorComPyvenvCfgQueNaoRespondeNaoViraOpcao() throws Exception {
         Path projeto = Files.createDirectories(tmp.resolve("projeto"));
         Path dir = Files.createDirectories(projeto.resolve(".venv").resolve(windows ? "Scripts" : "bin"));
         Files.writeString(projeto.resolve(".venv").resolve("pyvenv.cfg"), "home = C:\\instalacao-base-que-nao-existe-mais\n");
         Path exe = dir.resolve(windows ? "python.exe" : "python");
         Files.writeString(exe, "nao e um interpretador");
         exe.toFile().setExecutable(true);
-        PythonEnvironments.Project p = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-        assertEquals(1, p.environments().size());
-        assertEquals(State.UNVERIFIED, p.environments().get(0).state());
-        assertNull(p.environments().get(0).version());
-        assertFalse(p.environments().get(0).usable());
+        PythonEnvironments.Project p = service(sources()).virtual(projeto.resolve(".venv"), pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+        assertEquals(List.of(), p.environments(), "estrutura sem um Python que responda nao e um ambiente utilizavel");
+        assertEquals(List.of(new PythonEnvironments.Problem(".venv", Issue.NOT_VERIFIED)), p.problems());
     }
 
     @Test
-    void juncaoParaForaDaPastaNaoESeguidaEEInformada() throws Exception {
+    void juncaoNaoESeguidaEEInformada() throws Exception {
         needsPython();
         Assumptions.assumeTrue(windows, "juncao e do Windows");
         Path outro = tmp.resolve("outro-projeto");
@@ -425,8 +426,8 @@ class PythonEnvironmentsTest {
                 .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
         Assumptions.assumeTrue(p.waitFor(30, TimeUnit.SECONDS) && p.exitValue() == 0, "fixture: nao foi possivel criar a juncao");
         try {
-            PythonEnvironments.Project r = service(sources()).project(projeto, pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
-            assertEquals(List.of(), r.environments(), "o ambiente de outro projeto nao entra por uma juncao");
+            PythonEnvironments.Project r = service(sources()).virtual(projeto.resolve(".venv"), pkg("p", ">=3.10", List.of()), PythonProbe.Cancel.NEVER);
+            assertEquals(List.of(), r.environments(), "o ambiente de outro lugar nao entra por uma juncao");
             assertEquals(List.of(new PythonEnvironments.Problem(".venv", Issue.LINK_NOT_FOLLOWED)), r.problems());
         } finally {
             Files.delete(projeto.resolve(".venv")); // remove so a juncao (a limpeza da pasta temporaria nao a atravessa)
@@ -444,18 +445,18 @@ class PythonEnvironmentsTest {
         distribution(projeto.resolve(".venv"), "nekkora-fixture-b", "2.0.0");
         PythonEnvironments s = service(sources());
 
-        Environment ok = s.project(projeto, pkg("ok", ">=3.10", List.of("nekkora-fixture-a==1.2.3", "nekkora_fixture_b==2.0.0")), PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment ok = s.virtual(projeto.resolve(".venv"), pkg("ok", ">=3.10", List.of("nekkora-fixture-a==1.2.3", "nekkora_fixture_b==2.0.0")), PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.COMPATIBLE, ok.state());
         assertEquals(List.of(), ok.pending());
 
-        Environment pendente = s.project(projeto, pkg("pendente", ">=3.10", List.of("nekkora-fixture-a==1.2.3", "nekkora-fixture-b==2.1.0", "nekkora-fixture-c==0.1.0")),
+        Environment pendente = s.virtual(projeto.resolve(".venv"), pkg("pendente", ">=3.10", List.of("nekkora-fixture-a==1.2.3", "nekkora-fixture-b==2.1.0", "nekkora-fixture-c==0.1.0")),
                 PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.DEPENDENCIES_PENDING, pendente.state());
         assertEquals(List.of(new PythonEnvironments.Pending("nekkora-fixture-b==2.1.0", "2.0.0"), new PythonEnvironments.Pending("nekkora-fixture-c==0.1.0", null)),
                 pendente.pending(), "o que falta e o que foi encontrado, requisito por requisito");
         assertFalse(pendente.usable(), "versao compativel sozinha nao e compatibilidade completa");
 
-        Environment versao = s.project(projeto, pkg("versao", ">=3.99", List.of("nekkora-fixture-a==1.2.3")), PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment versao = s.virtual(projeto.resolve(".venv"), pkg("versao", ">=3.99", List.of("nekkora-fixture-a==1.2.3")), PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.VERSION_INCOMPATIBLE, versao.state());
     }
 
@@ -488,7 +489,7 @@ class PythonEnvironmentsTest {
         Path exe = venv(projeto.resolve(".venv"));
         PythonEnvironments s = service(sources());
         ExecutionPackage simples = pkg("simples", ">=3.10", List.of());
-        Environment e = s.project(projeto, simples, PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment e = s.virtual(projeto.resolve(".venv"), simples, PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.COMPATIBLE, e.state());
 
         // o pacote mudou: agora declara uma dependencia que o ambiente nao tem
@@ -528,7 +529,7 @@ class PythonEnvironmentsTest {
         distribution(projeto.resolve(".venv"), "nekkora-fixture-a", "1.2.3");
         ExecutionPackage p = ExecutionPackage.inspect(RunFixtures.pkg(tmp.resolve("pacotes").resolve("onde"), "onde", Map.of("main.py", ONDE), "main.py", ">=3.10",
                 List.of("nekkora-fixture-a==1.2.3")));
-        Environment e = service(sources()).project(projeto, p, PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment e = service(sources()).virtual(projeto.resolve(".venv"), p, PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.COMPATIBLE, e.state());
 
         Path dados = tmp.resolve("dados");
@@ -561,7 +562,7 @@ class PythonEnvironmentsTest {
         distribution(projeto.resolve(".venv"), "nekkora-fixture-a", "1.2.3");
         ExecutionPackage p = ExecutionPackage.inspect(RunFixtures.pkg(tmp.resolve("pacotes").resolve("onde"), "onde", Map.of("main.py", ONDE), "main.py", ">=3.10",
                 List.of("nekkora-fixture-a==1.2.3")));
-        Environment e = service(sources()).project(projeto, p, PythonProbe.Cancel.NEVER).environments().get(0);
+        Environment e = service(sources()).virtual(projeto.resolve(".venv"), p, PythonProbe.Cancel.NEVER).environments().get(0);
         assertEquals(State.COMPATIBLE, e.state(), "validado e compativel...");
 
         Path saida = Files.createDirectories(tmp.resolve("saida"));

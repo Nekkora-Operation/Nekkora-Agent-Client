@@ -541,6 +541,43 @@ class GenerateFlowDesktopTest {
     }
 
     @Test
+    void aJanelaDeGerarCabeNaTelaRolaQuandoPrecisaEAcompanhaATrocaDeTema() throws Exception {
+        Path pasta = projeto("projeto-encaixe");
+        Files.writeString(pasta.resolve("requirements.txt"), "requests>=2.0\nopenpyxl==3.1.5\n");
+        // area util de uma tela de 1080 linhas a 200%: a janela, com as opcoes avancadas abertas, e mais alta que ela
+        edt(() -> window.actions().usableArea = new java.awt.Rectangle(0, 0, 960, 500));
+        GenerateForm f = preenchido(pasta, "encaixe");
+        assertTrue(read(f::advancedOpen));
+        java.awt.Window w = read(() -> SwingUtilities.getWindowAncestor(f));
+        java.awt.Rectangle b = read(w::getBounds);
+        assertTrue(b.height <= 500 && b.y >= 0 && b.y + b.height <= 500 && b.x >= 0 && b.x + b.width <= 960, "a janela fica dentro da area util: " + b);
+        javax.swing.JScrollPane scroll = read(() -> (javax.swing.JScrollPane) SwingUtilities.getAncestorOfClass(javax.swing.JScrollPane.class, f));
+        assertNotNull(scroll, "o formulario fica dentro de uma rolagem");
+        assertTrue(read(() -> scroll.getVerticalScrollBar().isVisible()), "o conteudo nao cabe: rola");
+        assertFalse(read(() -> scroll.getHorizontalScrollBar().isVisible()));
+        // o botao Gerar, abaixo da dobra, e alcancavel pela rolagem
+        edt(() -> f.generateButton().scrollRectToVisible(new java.awt.Rectangle(0, 0, f.generateButton().getWidth(), f.generateButton().getHeight())));
+        assertTrue(read(() -> scroll.getViewport().getViewRect().contains(SwingUtilities.convertRectangle(f.generateButton().getParent(), f.generateButton().getBounds(), f))),
+                "Gerar pacote visivel depois de rolar");
+        edt(() -> window.actions().usableArea = new java.awt.Rectangle(0, 0, 1920, 2000));
+        // com as opcoes avancadas recolhidas, o formulario cabe: a janela tem o tamanho do conteudo, sem barra, e continua assim
+        // depois de trocar o tema
+        edt(() -> f.advancedToggle().doClick(0));
+        answer();
+        assertFalse(read(f::advancedOpen));
+        assertFalse(read(() -> scroll.getVerticalScrollBar().isVisible()), "cabe: sem barra - janela " + read(w::getBounds) + " conteudo " + read(f::getPreferredSize));
+        try {
+            edt(() -> window.themeToggle().doClick(0));
+            answer();
+            assertEquals(ClientTheme.NEKKORA_LIGHT, read(Themes::current));
+            assertFalse(read(() -> scroll.getVerticalScrollBar().isVisible()), "trocar o tema nao deixa uma barra de rolagem que nao precisa");
+            assertEquals(Themes.color(ClientTheme.NEKKORA_LIGHT.bg()), read(f::getBackground));
+        } finally {
+            edt(() -> Themes.apply(ClientTheme.SAKURA_DARK));
+        }
+    }
+
+    @Test
     void enquantoGeraOBotaoNaoAceitaOutroPedido() throws Exception {
         Path pasta = projeto("projeto-duplo");
         GenerateForm f = preenchido(pasta, "duplo");

@@ -212,6 +212,19 @@ public final class RunController implements AutoCloseable {
         }
     }
 
+    /**
+     * A pasta de onde o processo desta execucao roda: a copia conferida do pacote, criada no inicio ({@link Launch#snapshot}).
+     * Vazio se ela nao existe (execucao recusada antes da copia, ou registro ja removido pela retencao).
+     */
+    public Optional<Path> runCopy(ExecutionId id) {
+        try {
+            Path copy = store.dir(id).resolve("pacote");
+            return Files.isDirectory(copy) ? Optional.of(copy) : Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     /** A execucao ativa, ou a ultima terminada desde que o aplicativo abriu. */
     public Optional<Snapshot> current() {
         Optional<Snapshot> now = running();

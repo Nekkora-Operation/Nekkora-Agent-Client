@@ -87,20 +87,23 @@ public final class PythonEnvironments {
     public enum Issue {
         /** O caminho indicado nao e uma pasta. */
         NOT_A_FOLDER,
-        /** A pasta do ambiente existe, mas falta {@code pyvenv.cfg} ou o interpretador. */
+        /** A pasta nao e a raiz de um ambiente virtual: nao tem {@code pyvenv.cfg}. */
+        NOT_AN_ENVIRONMENT,
+        /** Tem {@code pyvenv.cfg}, mas falta o interpretador deste sistema ({@code Scripts\python.exe} ou {@code bin/python}). */
         INCOMPLETE,
-        /** {@code .venv}/{@code venv} e um link ou juncao para fora da pasta escolhida: nao foi seguido. */
-        LINK_NOT_FOLLOWED
+        /** A pasta escolhida e um link ou uma juncao: o destino nao e inspecionado. */
+        LINK_NOT_FOLLOWED,
+        /** A estrutura existe, mas o interpretador nao respondeu como um ambiente virtual DESTA pasta. */
+        NOT_VERIFIED
     }
 
-    /** O que nao virou ambiente e por que. {@code name}: {@code .venv} ou {@code venv} (ou {@code null} para a pasta). */
+    /** O que nao virou ambiente e por que. {@code name}: o nome da pasta escolhida (ou {@code null} se ela nao existe). */
     public record Problem(String name, Issue issue) {}
 
     /** Os ambientes convencionais da pasta indicada. Lista vazia e sem problemas: nao ha ambiente virtual ali. */
     public record Project(Path folder, List<Environment> environments, List<Problem> problems, boolean cancelled) {}
 
     /** Os unicos nomes procurados, nesta ordem, diretamente dentro da pasta indicada. */
-    public static final List<String> PROJECT_FOLDERS = List.of(".venv", "venv");
 
     private final PythonSources sources;
     private final Path workDir;
@@ -174,41 +177,41 @@ public final class PythonEnvironments {
 
     // ------------------------------------------------------------------ pasta da automacao
 
-    /** Os ambientes convencionais DIRETAMENTE dentro de {@code folder}. Bloqueia: fora da linha de eventos. */
-    public Project project(Path folder, ExecutionPackage pkg, PythonProbe.Cancel cancel) {
-        Path root = folder == null || !folder.isAbsolute() ? null : real(folder);
-        if (root == null || !Files.isDirectory(root)) {
+    /**
+     * A pasta que a pessoa escolheu e, ELA MESMA, a raiz de um ambiente virtual? (AGENT-CLIENT-PREPARACAO-002: a pessoa
+     * aponta o ambiente, com o nome que ele tiver; o aplicativo nao procura ambientes dentro de uma pasta de projeto.)
+     * Confere a estrutura - {@code pyvenv.cfg} e o interpretador deste sistema, arquivos comuns - e pergunta ao proprio
+     * interpretador se ele e um ambiente virtual DESTA pasta. Nada e procurado em subpastas, em pastas vizinhas ou acima; a
+     * instalacao-base que o ambiente referencia NAO vira outro ambiente. Um link ou uma juncao nao e seguido. Uma tentativa
+     * que nao serve volta sem ambiente e com o motivo: quem chamou mantem a escolha anterior. Bloqueia: fora da linha de
+     * eventos.
+     */
+    public Project virtual(Path folder, ExecutionPackage pkg, PythonProbe.Cancel cancel) {
+        Path given = folder == null || !folder.isAbsolute() ? null : folder.normalize();
+        Path dir = given == null ? null : real(given);
+        if (dir == null || !Files.isDirectory(dir) || given.getParent() == null || given.getFileName() == null) {
             return new Project(folder, List.of(), List.of(new Problem(null, Issue.NOT_A_FOLDER)), false);
         }
-        List<Environment> found = new ArrayList<>();
-        List<Problem> problems = new ArrayList<>();
-        boolean cancelled = false;
-        for (String name : PROJECT_FOLDERS) {
-            if (cancel.cancelled()) {
-                cancelled = true;
-                break;
-            }
-            Path dir = root.resolve(name);
-            if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) continue;
-            Path realDir = real(dir);
-            if (Files.isSymbolicLink(dir) || realDir == null || !key(realDir).equals(key(dir))) {
-                problems.add(new Problem(name, Issue.LINK_NOT_FOLLOWED)); // link ou juncao: o destino nao e inspecionado
-                continue;
-            }
-            Path python = windows ? dir.resolve("Scripts").resolve("python.exe") : dir.resolve("bin").resolve("python");
-            if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS) || !Files.isRegularFile(dir.resolve("pyvenv.cfg"), LinkOption.NOFOLLOW_LINKS)
-                    || !Files.isRegularFile(python, LinkOption.NOFOLLOW_LINKS)) {
-                problems.add(new Problem(name, Issue.INCOMPLETE));
-                continue;
-            }
-            Environment e = check(Kind.PROJECT, name, python, dir, pkg, cancel);
-            if (e == null) {
-                cancelled = true;
-                break;
-            }
-            found.add(e);
+        String name = fileName(given);
+        // a pasta escolhida, vista a partir da pasta-mae REAL: se o ultimo nome leva a outro lugar, e link ou juncao
+        Path parent = real(given.getParent());
+        if (Files.isSymbolicLink(given) || parent == null || !key(dir).equals(key(parent.resolve(given.getFileName())))) {
+            return new Project(given, List.of(), List.of(new Problem(name, Issue.LINK_NOT_FOLLOWED)), false); // o destino nao e inspecionado
         }
-        return new Project(root, List.copyOf(found), List.copyOf(problems), cancelled);
+        if (!Files.isRegularFile(dir.resolve("pyvenv.cfg"), LinkOption.NOFOLLOW_LINKS)) {
+            return new Project(dir, List.of(), List.of(new Problem(name, Issue.NOT_AN_ENVIRONMENT)), false);
+        }
+        Path python = windows ? dir.resolve("Scripts").resolve("python.exe") : dir.resolve("bin").resolve("python");
+        if (!Files.isRegularFile(python, LinkOption.NOFOLLOW_LINKS)) {
+            return new Project(dir, List.of(), List.of(new Problem(name, Issue.INCOMPLETE)), false);
+        }
+        if (cancel.cancelled()) return new Project(dir, List.of(), List.of(), true);
+        Environment e = check(Kind.PROJECT, name, python, dir, pkg, cancel);
+        if (e == null) return new Project(dir, List.of(), List.of(), true);
+        if (e.state() == State.UNVERIFIED) {
+            return new Project(dir, List.of(), List.of(new Problem(name, Issue.NOT_VERIFIED)), false);
+        }
+        return new Project(dir, List.of(e), List.of(), false);
     }
 
     // ------------------------------------------------------------------ um ambiente
