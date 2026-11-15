@@ -84,3 +84,62 @@ Arquivo existente só é substituído com o sim da pessoa; o não é uma informa
 `Notice` escreve a gravidade em palavras — **Informação**, **Aviso**, **Erro**, **Concluído** — com a cor do token
 correspondente da lib (`--nk-color-*-text`). Só erro impede algo. O código de suporte (`AGT-PAC-xxx`) fica numa linha de
 detalhe, fora da frase.
+
+## 5. Dependências e o `requirements.txt`
+
+Código: `RequirementsFile` (leitura), `Workshop.Draft.requirements / selectRequirements / clearRequirements`,
+`Workshop.DependencyChoice`.
+
+O manifesto só representa `nome==versão` (com extras opcionais), sem repetir. A leitura do arquivo é **estática**: só texto
+UTF-8, até 1 MiB. Nada é instalado, nada é resolvido na rede, nenhum `setup.py` roda, e inclusões e endereços não são
+seguidos.
+
+### O que cada linha vira
+
+| Linha | Situação |
+|---|---|
+| `requests==2.31.0`, `openpyxl[lxml] == 3.1.5` | dependência exata: vai para o manifesto |
+| em branco, `# comentário`, comentário no fim da linha | ignorada |
+| a mesma dependência, na mesma versão, outra vez | "repetida": usada uma vez |
+| a mesma dependência com outra versão ou outros extras | **conflito**, nas duas linhas: nenhuma é escolhida |
+| `requests>=2`, `~=2.31`, `==2.31.*`, `!=`, `===` | **faixa**: o pacote exige a versão exata |
+| `requests` | **sem versão** |
+| `...; sys_platform == "win32"` | **marcador de ambiente** |
+| `https://…`, `git+…`, `nome @ …` | **endereço remoto** |
+| `./pasta`, `C:\…`, `algo.whl`, `-e …` | **caminho local** |
+| `-r outro.txt`, `-c constraints.txt` | **inclusão**: não é seguida |
+| `--index-url …` e outras opções | **opção do pip** |
+| `nome==1.0 --hash=…` | **hash**: o pacote não o registra |
+| qualquer outra coisa | **não reconhecida** |
+
+Tudo o que não é dependência exata é dito **por linha**, com o número e o motivo. Nenhuma linha é descartada em silêncio,
+nenhuma versão é inventada, e um arquivo com problema nunca é tratado como "sem dependências".
+
+### Origem das dependências: uma só vale
+
+| Origem | Quando existe |
+|---|---|
+| Manifesto da pasta | a pasta tem um `nekkora-external.json` válido |
+| Arquivo de dependências | há um arquivo selecionado: o `requirements.txt` da raiz (reconhecido sozinho, e a tela diz) ou o que a pessoa escolheu |
+| Edição manual | sempre |
+
+- Sem a pessoa dizer nada: o manifesto, se houver; senão o arquivo; senão a edição manual (lista vazia).
+- Manifesto e arquivo com listas **diferentes**: nenhuma origem é escolhida. A pessoa decide antes de gerar (`AGT-PAC-059`).
+- Arquivo como origem com linha não representável: a geração não começa (`AGT-PAC-047`, com a primeira linha). A pessoa
+  ajusta o arquivo e o seleciona de novo, usa a edição manual ou remove a seleção.
+- **Sem arquivo** é permitido: o pacote sai com "Nenhuma dependência declarada" — que não quer dizer que o projeto não usa
+  bibliotecas. Na execução, só o que está declarado é conferido.
+
+### O arquivo no pacote
+
+- O arquivo original nunca é alterado, e o caminho dele nunca vai para o manifesto.
+- Um arquivo **do projeto** já entra no pacote como qualquer arquivo do projeto, e a lista do manifesto sai do mesmo
+  retrato da pasta.
+- Um arquivo **de fora do projeto** só entra se a pessoa marcar "Copiar este arquivo para o pacote". Entra só ele, na raiz,
+  como `requirements.txt`; se esse nome já é de um arquivo do projeto, como `requirements-selecionado.txt`; se os dois
+  existem, não há cópia (`AGT-PAC-043`). O destino aparece antes, na caixa e no resumo.
+- O arquivo é lido uma vez, para uma cópia estável: resumo, manifesto e a cópia no pacote saem dela. Se o arquivo mudar
+  depois de lido, a geração é recusada (`AGT-PAC-048`); o do projeto segue a regra da pasta (`AGT-PAC-072`).
+
+Limites: navegador, driver e outros programas externos não são dependências Python e não são garantidos por esta lista.
+`pyproject.toml`, `Pipfile` e arquivos de trava não são lidos como dependências.

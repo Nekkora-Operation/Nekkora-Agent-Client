@@ -83,7 +83,8 @@ public final class Workshop {
             case VERSION_INVALID -> Field.VERSION;
             case ENTRY_INVALID -> Field.ENTRY;
             case PYTHON_INVALID -> Field.PYTHON;
-            case DEPENDENCY_INVALID, DEPENDENCIES_UNCONFIRMED, REQUIREMENTS_UNRESOLVED, REQUIREMENTS_CHANGED, REQUIREMENTS_UNREADABLE -> Field.DEPENDENCIES;
+            case DEPENDENCY_INVALID, DEPENDENCIES_UNCONFIRMED, REQUIREMENTS_UNRESOLVED, REQUIREMENTS_CHANGED, REQUIREMENTS_UNREADABLE, REQUIREMENTS_COLLISION,
+                    DEPENDENCY_SOURCES_CONFLICT, DEPENDENCY_SOURCE_MISSING -> Field.DEPENDENCIES;
             case DESTINATION_INVALID, DESTINATION_EXISTS, TARGET_EXISTS, SAME_AS_SOURCE, NO_SPACE, WRITE_FAILED, WRITE_DENIED, TARGET_LOCKED -> Field.DESTINATION;
             case FOLDER_NOT_FOUND, FOLDER_CHANGED, FOLDER_UNREADABLE -> Field.FOLDER;
             default -> Field.GENERAL;
@@ -125,6 +126,89 @@ public final class Workshop {
     public record PythonReading(boolean valid, boolean declared, String text, String meaning) {
     }
 
+    // ------------------------------------------------------------------ dependencias (AGENT-CLIENT-PREPARACAO-002 T04)
+
+    /** De onde vem a lista de dependencias do pacote. Uma so origem vale de cada vez. */
+    public enum DependencySource {
+        /** O manifesto valido que ja esta na pasta. */
+        MANIFEST,
+        /** O arquivo de dependencias selecionado (requirements.txt), lido estaticamente. */
+        FILE,
+        /** A lista digitada pela pessoa nas opcoes avancadas. */
+        MANUAL
+    }
+
+    /** Uma linha com conteudo do arquivo de dependencias, com a situacao dela. */
+    public record RequirementLine(int number, String text, String status, boolean problem) {
+    }
+
+    /**
+     * O arquivo de dependencias selecionado, como foi lido (uma vez, para uma copia estavel).
+     *
+     * @param path o caminho do arquivo, para a tela (nunca vai para o manifesto)
+     * @param detected foi encontrado sozinho na raiz do projeto (e nao escolhido pela pessoa)
+     * @param external esta FORA da pasta do projeto: so entra no pacote se a pessoa mandar copiar
+     * @param packagePath onde ele esta (ou ficaria, se copiado) dentro do pacote; {@code null} se nao ha nome livre
+     * @param dependencies as dependencias exatas, sem repeticao
+     * @param lines cada linha com conteudo e a situacao dela
+     * @param resolved nenhuma linha e um problema: a lista pode ir para o manifesto
+     */
+    public record Requirements(String path, boolean detected, boolean external, String packagePath, List<String> dependencies, List<RequirementLine> lines,
+                               boolean resolved) {
+        public Requirements {
+            dependencies = List.copyOf(dependencies);
+            lines = List.copyOf(lines);
+        }
+
+        public List<RequirementLine> problems() {
+            return lines.stream().filter(RequirementLine::problem).toList();
+        }
+    }
+
+    /**
+     * A decisao da pessoa sobre as dependencias.
+     *
+     * @param source a origem que vale; {@code null}: ainda nao decidido (so e aceito quando nao ha duas origens em conflito)
+     * @param manual a lista digitada (so com {@link DependencySource#MANUAL})
+     * @param copyExternalFile copiar para o pacote o arquivo de dependencias que esta fora da pasta do projeto
+     */
+    public record DependencyChoice(DependencySource source, List<String> manual, boolean copyExternalFile) {
+        public DependencyChoice {
+            manual = manual == null ? List.of() : List.copyOf(manual);
+        }
+    }
+
+    /** Nome com que um arquivo de dependencias de fora do projeto entra no pacote (ou o alternativo, se o primeiro existe). */
+    static final String REQUIREMENTS_NAME = "requirements.txt";
+    static final String REQUIREMENTS_ALTERNATIVE = "requirements-selecionado.txt";
+
+    /** A copia estavel do arquivo de dependencias selecionado. */
+    private static final class Selection {
+        final Path file;
+        final boolean detected;
+        final boolean external;
+        final String packagePath;
+        final byte[] bytes;
+        final String sha256;
+        final RequirementsFile.Parsed parsed;
+
+        Selection(Path file, boolean detected, boolean external, String packagePath, byte[] bytes, RequirementsFile.Parsed parsed) {
+            this.file = file;
+            this.detected = detected;
+            this.external = external;
+            this.packagePath = packagePath;
+            this.bytes = bytes;
+            this.sha256 = java.util.HexFormat.of().formatHex(ProjectImporter.sha256().digest(bytes));
+            this.parsed = parsed;
+        }
+
+        Requirements view() {
+            List<RequirementLine> lines = new ArrayList<>();
+            for (RequirementsFile.Line l : parsed.lines()) lines.add(new RequirementLine(l.number(), l.text(), l.kind().label(), l.problem()));
+            return new Requirements(file.toString(), detected, external, packagePath, parsed.dependencies(), lines, parsed.resolved());
+        }
+    }
+
     /** Sem requisito: o autor nao declarou restricao. Nao e promessa de que qualquer Python serve. */
     public static final String NO_PYTHON_REQUIREMENT = "Sem restrição de Python declarada";
 
@@ -157,9 +241,13 @@ public final class Workshop {
      * @param fingerprint impressao digital do pacote ({@code sha256:...})
      * @param sizeBytes total do conteudo incluido
      * @param manifestReused o {@code nekkora-external.json} da pasta vai para o pacote como esta (mesma impressao digital)
+     * @param dependencySource de onde veio a lista de dependencias; {@code null} quando quem pediu nao disse a origem
+     * @param requirementsCopiedAs o nome, na raiz do pacote, da COPIA do arquivo de dependencias que estava fora do projeto;
+     *        {@code null} se nenhum arquivo de fora entra
      */
     public record PackageSummary(String name, String version, String entry, String python, List<String> dependencies, List<String> included,
-                                 List<ExcludedFile> excluded, List<String> warned, String fingerprint, long sizeBytes, boolean manifestReused) {
+                                 List<ExcludedFile> excluded, List<String> warned, String fingerprint, long sizeBytes, boolean manifestReused,
+                                 DependencySource dependencySource, String requirementsCopiedAs) {
         public PackageSummary {
             dependencies = List.copyOf(dependencies);
             included = List.copyOf(included);
@@ -217,9 +305,117 @@ public final class Workshop {
     public final class Draft implements AutoCloseable {
         private final ImportedProject project;
         private boolean closed;
+        private Selection requirements;
 
         private Draft(ImportedProject project) {
             this.project = project;
+            // o requirements.txt da RAIZ do projeto e reconhecido sozinho (a tela diz que foi); outro arquivo, so por escolha
+            if (project.fromFolder() && project.file(REQUIREMENTS_NAME).isPresent()) {
+                try {
+                    requirements = read(project.folder().root().resolve(REQUIREMENTS_NAME), true);
+                } catch (ImportProblem e) {
+                    requirements = null; // ilegivel: nao e origem de dependencias (continua sendo um arquivo do projeto)
+                }
+            }
+        }
+
+        /** O arquivo de dependencias selecionado agora (o da raiz, reconhecido sozinho, ou o escolhido), se houver. */
+        public synchronized Optional<Requirements> requirements() {
+            return Optional.ofNullable(requirements).map(Selection::view);
+        }
+
+        /**
+         * A pessoa escolheu um arquivo de dependencias. Ele e lido UMA vez, como texto, para uma copia estavel: o resumo, o
+         * manifesto e (se copiado) o arquivo dentro do pacote saem dessa mesma copia. Nada e instalado nem resolvido, e
+         * inclusoes ({@code -r}) e URLs nao sao seguidas. O arquivo original nunca e alterado.
+         */
+        public synchronized Requirements selectRequirements(String path) throws Refused {
+            try {
+                if (path == null || path.isBlank()) throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNREADABLE);
+                requirements = read(Path.of(path), false);
+                return requirements.view();
+            } catch (InvalidPathException e) {
+                throw refused(new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNREADABLE));
+            } catch (ImportProblem e) {
+                throw refused(e);
+            }
+        }
+
+        /** "Remover selecao": nenhum arquivo e origem das dependencias (o da raiz continua sendo um arquivo do projeto). */
+        public synchronized void clearRequirements() {
+            requirements = null;
+        }
+
+        /**
+         * O manifesto da pasta e o arquivo de dependencias dizem listas DIFERENTES? Enquanto for assim, a pessoa precisa
+         * dizer qual vale: nenhuma e escolhida sozinha.
+         */
+        public synchronized boolean dependencySourcesConflict() {
+            Optional<Manifest> m = existingManifest();
+            if (m.isEmpty() || requirements == null) return false;
+            return !requirements.parsed.resolved() || !sameDependencies(m.get().dependencies(), requirements.parsed.dependencies());
+        }
+
+        /** A origem que vale quando a pessoa nao disse nada; {@code null} com duas origens em conflito. */
+        public synchronized DependencySource defaultDependencySource() {
+            if (dependencySourcesConflict()) return null;
+            if (existingManifest().isPresent()) return DependencySource.MANIFEST;
+            return requirements != null ? DependencySource.FILE : DependencySource.MANUAL;
+        }
+
+        private Selection read(Path chosen, boolean detected) throws ImportProblem {
+            Path file;
+            byte[] bytes;
+            boolean external;
+            String packagePath;
+            try {
+                file = chosen.toAbsolutePath().normalize();
+                if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) > RequirementsFile.MAX_BYTES) {
+                    throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNREADABLE);
+                }
+                Path real = file.toRealPath();
+                Path root = project.fromFolder() ? project.folder().root() : null;
+                String rel = root != null && real.startsWith(root) ? root.relativize(real).toString().replace('\\', '/') : null;
+                Optional<ImportedProject.ProjectFile> inProject = rel == null ? Optional.empty() : project.file(rel);
+                if (inProject.isPresent() && project.folder().stamps().containsKey(rel)) {
+                    // dentro do projeto e copiado no retrato: o conteudo e o do retrato (o mesmo que vai para o pacote)
+                    bytes = Files.readAllBytes(project.root().resolve(rel));
+                    external = false;
+                    packagePath = rel;
+                } else {
+                    bytes = Files.readAllBytes(file);
+                    external = true;
+                    packagePath = freeName();
+                }
+            } catch (IOException | RuntimeException e) {
+                throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNREADABLE);
+            }
+            String text = RequirementsFile.decode(bytes).orElseThrow(() -> new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNREADABLE));
+            return new Selection(file, detected, external, packagePath, bytes, RequirementsFile.parse(text));
+        }
+
+        /** Um nome livre na raiz do pacote para a copia do arquivo de fora: o habitual ou o alternativo; {@code null} se os dois existem. */
+        private String freeName() {
+            for (String name : List.of(REQUIREMENTS_NAME, REQUIREMENTS_ALTERNATIVE)) {
+                boolean taken = false;
+                for (ImportedProject.ProjectFile f : project.files()) {
+                    if (ZipNames.collisionKey(f.path()).equals(ZipNames.collisionKey(name))) taken = true;
+                }
+                if (!taken) return name;
+            }
+            return null;
+        }
+
+        /** O arquivo de FORA do projeto continua como foi lido? (o de dentro e conferido com a pasta) */
+        private synchronized boolean requirementsUnchanged() {
+            Selection s = requirements;
+            if (s == null || !s.external) return true;
+            try {
+                return Files.isRegularFile(s.file, LinkOption.NOFOLLOW_LINKS)
+                        && s.sha256.equals(java.util.HexFormat.of().formatHex(ProjectImporter.sha256().digest(Files.readAllBytes(s.file))));
+            } catch (IOException | RuntimeException e) {
+                return false;
+            }
         }
 
         public String kind() {
@@ -445,7 +641,7 @@ public final class Workshop {
                                   boolean dependenciesConfirmed, String destinationZipPath) throws Refused {
         try {
             Path destination = destinationZipPath == null || destinationZipPath.isBlank() ? null : destination(destinationZipPath);
-            return summarize(draft, preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, destination));
+            return summarize(draft, preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, destination), null);
         } catch (ImportProblem e) {
             throw refused(e);
         }
@@ -487,22 +683,72 @@ public final class Workshop {
      */
     public Generated generate(Draft draft, String name, String version, String entry, String python, List<String> dependencies,
                               boolean dependenciesConfirmed, String destinationZipPath, boolean overwrite, SafeZip.Cancel cancel) throws Refused {
+        return generate(draft, name, version, entry, python, dependencies, dependenciesConfirmed, null, destinationZipPath, overwrite, cancel);
+    }
+
+    /**
+     * {@link #generate} com a ORIGEM das dependencias dita pela pessoa ({@link DependencyChoice}): o manifesto da pasta, o
+     * arquivo de dependencias selecionado ou a lista digitada. O arquivo selecionado e conferido de novo antes e depois de
+     * gravar: se ele mudou desde que foi lido, nada e gerado.
+     */
+    public Generated generate(Draft draft, String name, String version, String entry, String python, DependencyChoice dependencies,
+                              String destinationZipPath, boolean overwrite, SafeZip.Cancel cancel) throws Refused {
+        return generate(draft, name, version, entry, python, null, true, dependencies == null ? new DependencyChoice(null, null, false) : dependencies,
+                destinationZipPath, overwrite, cancel);
+    }
+
+    private Generated generate(Draft draft, String name, String version, String entry, String python, List<String> dependencies,
+                               boolean dependenciesConfirmed, DependencyChoice choice, String destinationZipPath, boolean overwrite, SafeZip.Cancel cancel)
+            throws Refused {
+        Path written = null;
         try {
             Path destination = destination(destinationZipPath);
             if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS) && !overwrite) {
                 throw new ImportProblem(ImportProblem.Code.DESTINATION_EXISTS, ZipNames.display(String.valueOf(destination.getFileName())));
             }
-            Packager.Preview pv = preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, destination);
+            Packager.Preview pv = preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, choice, destination);
+            boolean fromFile = choice != null && choice.source() == DependencySource.FILE;
+            if (fromFile && !draft.requirementsUnchanged()) throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_CHANGED);
+            boolean existed = Files.exists(destination, LinkOption.NOFOLLOW_LINKS);
             Packager.Built b = Packager.writeTo(draft.project, pv, destination, overwrite, cancel == null ? SafeZip.Cancel.NEVER : cancel);
+            if (fromFile && !draft.requirementsUnchanged()) {
+                // mudou DURANTE a geracao: o pacote recem-gravado nao e anunciado como pronto (um arquivo que ja existia e foi
+                // substituido com o consentimento da pessoa nao tem como voltar; os dois casos sao ditos na mesma frase)
+                if (!existed) written = b.zip();
+                throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_CHANGED);
+            }
             return new Generated(b.zip().toString(), b.name(), b.version(), b.entry(), b.fingerprint(), b.sha256(), b.files(), b.size());
         } catch (ImportProblem e) {
+            if (written != null) {
+                try {
+                    Files.deleteIfExists(written);
+                } catch (IOException ignored) {
+                    // a frase ja diz que o pacote nao vale
+                }
+            }
             if (e.code() == ImportProblem.Code.DESTINATION_EXISTS) throw new DestinationExists(e.message());
+            throw refused(e);
+        }
+    }
+
+    /** {@link #summary(Draft, String, String, String, String, List, boolean, String)} com a origem das dependencias dita pela pessoa. */
+    public PackageSummary summary(Draft draft, String name, String version, String entry, String python, DependencyChoice dependencies) throws Refused {
+        try {
+            DependencyChoice choice = dependencies == null ? new DependencyChoice(null, null, false) : dependencies;
+            Packager.Preview pv = preview(draft, name, version, entry, python, null, true, choice, null);
+            return summarize(draft, pv, choice.source() == null ? draft.defaultDependencySource() : choice.source());
+        } catch (ImportProblem e) {
             throw refused(e);
         }
     }
 
     private Packager.Preview preview(Draft draft, String name, String version, String entry, String python, List<String> dependencies,
                                      boolean dependenciesConfirmed, Path destination) throws ImportProblem, Refused {
+        return preview(draft, name, version, entry, python, dependencies, dependenciesConfirmed, null, destination);
+    }
+
+    private Packager.Preview preview(Draft draft, String name, String version, String entry, String python, List<String> dependencies,
+                                     boolean dependenciesConfirmed, DependencyChoice choice, Path destination) throws ImportProblem, Refused {
         ImportedProject p = draft.project;
         if (!p.fromFolder()) throw new Refused("Abra a pasta do projeto para gerar o pacote.");
         synchronized (draft) {
@@ -524,6 +770,38 @@ public final class Workshop {
             py = typed.text();
         }
         List<String> deps = dependencies != null ? dependencies : existing != null ? existing.dependencies() : p.declarations().exact();
+        java.util.Map<String, byte[]> extra = new java.util.HashMap<>();
+        if (choice != null) {
+            // a pessoa disse de onde vem a lista: UMA origem vale. Duas origens que divergem nunca sao misturadas nem
+            // escolhidas sozinhas, e um arquivo com linhas nao representaveis nunca vira "lista vazia"
+            DependencySource source = choice.source();
+            synchronized (draft) {
+                if (source == null) {
+                    if (draft.dependencySourcesConflict()) throw new ImportProblem(ImportProblem.Code.DEPENDENCY_SOURCES_CONFLICT);
+                    source = draft.defaultDependencySource();
+                }
+                switch (source) {
+                    case MANIFEST -> {
+                        if (existing == null) throw new ImportProblem(ImportProblem.Code.DEPENDENCY_SOURCE_MISSING);
+                        deps = existing.dependencies();
+                    }
+                    case FILE -> {
+                        Selection s = draft.requirements;
+                        if (s == null) throw new ImportProblem(ImportProblem.Code.DEPENDENCY_SOURCE_MISSING);
+                        if (!s.parsed.resolved()) {
+                            RequirementsFile.Line first = s.parsed.problems().get(0);
+                            throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_UNRESOLVED, "linha " + first.number() + ": " + first.text());
+                        }
+                        deps = s.parsed.dependencies();
+                        if (s.external && choice.copyExternalFile()) {
+                            if (s.packagePath == null) throw new ImportProblem(ImportProblem.Code.REQUIREMENTS_COLLISION);
+                            extra.put(s.packagePath, s.bytes);
+                        }
+                    }
+                    default -> deps = choice.manual();
+                }
+            }
+        }
         Set<String> data = new HashSet<>();
         if (existing != null) {
             // um arquivo de dados que o manifesto da pasta ja lista continua no pacote: nada do que ele declara some
@@ -531,7 +809,28 @@ public final class Workshop {
                 if (f.rule() == InclusionRules.Rule.DATA && existing.files().containsKey(f.path())) data.add(f.path());
             }
         }
-        return Packager.preview(p, new PackagePlan(n, v, en, py, deps, dependenciesConfirmed, data, selfInclusion(p, destination), existing != null));
+        return Packager.preview(p, new PackagePlan(n, v, en, py, deps, dependenciesConfirmed, data, selfInclusion(p, destination), existing != null, extra));
+    }
+
+    /** As duas listas declaram as mesmas dependencias (nome normalizado, extras e versao), em qualquer ordem? */
+    static boolean sameDependencies(List<String> a, List<String> b) {
+        return normalizedSet(a).equals(normalizedSet(b));
+    }
+
+    private static Set<String> normalizedSet(List<String> dependencies) {
+        Set<String> out = new HashSet<>();
+        for (String d : dependencies) {
+            String[] nv = d.split("==", 2);
+            int at = nv[0].indexOf('[');
+            String extras = "";
+            if (at >= 0) {
+                List<String> e = new ArrayList<>(List.of(nv[0].substring(at + 1, nv[0].length() - 1).toLowerCase(Locale.ROOT).split(",")));
+                e.sort(null);
+                extras = String.join(",", e);
+            }
+            out.add(ExecutionPackage.normalized(at >= 0 ? nv[0].substring(0, at) : nv[0]) + "[" + extras + "]==" + (nv.length > 1 ? nv[1] : ""));
+        }
+        return out;
     }
 
     private static boolean blank(String s) {
@@ -552,7 +851,7 @@ public final class Workshop {
         return out;
     }
 
-    private static PackageSummary summarize(Draft draft, Packager.Preview pv) {
+    private static PackageSummary summarize(Draft draft, Packager.Preview pv, DependencySource source) {
         ImportedProject p = draft.project;
         List<ExcludedFile> excluded = new ArrayList<>();
         for (Packager.Excluded x : pv.excluded()) {
@@ -563,7 +862,7 @@ public final class Workshop {
         boolean reused = p.kind() == ImportedProject.Kind.EXTERNAL_PACKAGE && pv.fingerprint().equals(p.existing().fingerprint());
         PackagePlan plan = pv.plan();
         return new PackageSummary(plan.name(), plan.version(), plan.entry(), plan.python(), plan.dependencies(), new ArrayList<>(pv.files().keySet()), excluded,
-                pv.warned(), pv.fingerprint(), pv.bytes(), reused);
+                pv.warned(), pv.fingerprint(), pv.bytes(), reused, source, plan.extraFiles().keySet().stream().sorted().findFirst().orElse(null));
     }
 
     /** O destino: um arquivo .zip (nunca pasta nem ligacao) numa pasta que existe; caminho real da pasta + nome. */

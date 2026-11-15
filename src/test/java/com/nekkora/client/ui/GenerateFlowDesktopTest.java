@@ -414,6 +414,132 @@ class GenerateFlowDesktopTest {
         assertTrue(read(() -> f.generateButton().isEnabled()), "a pessoa pode escolher outro destino");
     }
 
+    // ------------------------------------------------------------------ T04: arquivo de dependencias
+
+    @Test
+    void requirementsDaRaizApareceComoSelecionadoEAsDependenciasVaoParaOManifesto() throws Exception {
+        Path pasta = projeto("projeto-com-arquivo");
+        Files.writeString(pasta.resolve("requirements.txt"), "# robo\nrequests==2.31.0\nopenpyxl[lxml]==3.1.5\n");
+        GenerateForm f = preenchido(pasta, "com-arquivo");
+        assertFalse(read(f::advancedOpen), "arquivo sem problema: nada pede para abrir as opcoes avancadas");
+        edt(() -> f.advancedToggle().doClick(0));
+        assertEquals(pasta.resolve("requirements.txt").toString(), read(() -> f.requirementsPathField().getText()));
+        assertEquals("Informação", read(() -> f.requirementsNotice().label()));
+        assertTrue(read(() -> f.requirementsNotice().text()).startsWith("Encontrado na raiz do projeto e selecionado: requirements.txt."),
+                "a deteccao e dita na tela: " + read(() -> f.requirementsNotice().text()));
+        assertEquals("2 dependências com versão exata: requests==2.31.0, openpyxl[lxml]==3.1.5.", read(() -> f.requirementsSummaryNotice().text()));
+        assertEquals("", read(() -> f.requirementsProblemsNotice().text()));
+        assertEquals("Arquivo de dependências (2 dependências)", String.valueOf(read(() -> f.sourceBox().getSelectedItem())));
+        assertEquals("requests==2.31.0\nopenpyxl[lxml]==3.1.5", read(() -> f.dependenciesArea().getText()));
+        assertFalse(read(() -> f.dependenciesArea().isEditable()), "a lista do arquivo nao e editada aqui: uma so origem vale");
+        assertFalse(read(() -> f.copyRequirementsBox().isVisible()), "ja e um arquivo do projeto");
+        assertTrue(read(f::summaryText).contains("dependências: requests==2.31.0, openpyxl[lxml]==3.1.5 (do arquivo de dependências)"), read(f::summaryText));
+
+        Path destino = tmp.resolve("com-arquivo.zip");
+        click(read(f::generateButton));
+        confirm(destino);
+        assertTrue(Files.isRegularFile(destino), read(f::errorText));
+        String m = manifesto(destino);
+        assertTrue(m.contains("\"requests==2.31.0\"") && m.contains("\"openpyxl[lxml]==3.1.5\""), m);
+        assertFalse(m.contains(tmp.getFileName().toString()), "nenhum caminho deste computador no manifesto");
+    }
+
+    @Test
+    void arquivoEscolhidoPeloSeletorComLinhasNaoRepresentaveisAvisaPorLinhaEImpedeGerarPorEle() throws Exception {
+        Path pasta = projeto("projeto-escolhe");
+        Path fora = Files.createDirectories(tmp.resolve("fora do projeto"));
+        Path req = fora.resolve("requisitos.txt");
+        Files.writeString(req, "requests>=2.0\nopenpyxl==3.1.5\n-r base.txt\n");
+        GenerateForm f = preenchido(pasta, "escolhe");
+        edt(() -> f.advancedToggle().doClick(0));
+        assertEquals(NavText.REQUIREMENTS_NONE, read(() -> f.requirementsPathField().getText()));
+        assertEquals("Edição manual", String.valueOf(read(() -> f.sourceBox().getSelectedItem())));
+        assertEquals(NavText.DEPENDENCIES_NONE, read(() -> f.dependenciesNotice().text()),
+                "sem arquivo: 'nenhuma dependencia declarada' - que nao e 'o projeto nao usa bibliotecas'");
+        assertFalse(read(() -> f.clearRequirementsButton().isVisible()));
+
+        // desistir no seletor preserva tudo
+        click(read(f::selectRequirementsButton));
+        JFileChooser c = chooser();
+        assertEquals(JFileChooser.FILES_ONLY, read(c::getFileSelectionMode), "seleciona um ARQUIVO");
+        cancelChooser();
+        assertEquals(NavText.REQUIREMENTS_NONE, read(() -> f.requirementsPathField().getText()));
+
+        click(read(f::selectRequirementsButton));
+        confirm(req);
+        assertEquals(req.toString(), read(() -> f.requirementsPathField().getText()));
+        assertTrue(read(() -> f.requirementsNotice().text()).startsWith("Arquivo de fora da pasta do projeto."), read(() -> f.requirementsNotice().text()));
+        assertEquals("Aviso", read(() -> f.requirementsProblemsNotice().label()), "linha que o pacote nao representa: aviso, com o motivo, por linha");
+        String problemas = read(() -> f.requirementsProblemsNotice().text());
+        assertTrue(problemas.contains("Linha 1 (requests>=2.0): faixa de versões") && problemas.contains("Linha 3 (-r base.txt): inclui outro arquivo"), problemas);
+        assertTrue(read(f::requirementsDetailsText).contains("ok        linha 2: openpyxl==3.1.5"), read(f::requirementsDetailsText));
+        assertEquals("Arquivo de dependências (1 dependência)", String.valueOf(read(() -> f.sourceBox().getSelectedItem())),
+                "o arquivo passa a ser a origem (a pessoa nao tinha escolhido outra)");
+        assertTrue(read(() -> f.copyRequirementsBox().isVisible()));
+        assertEquals("Copiar este arquivo para o pacote como requirements.txt", read(() -> f.copyRequirementsBox().getText()));
+        assertFalse(read(() -> f.copyRequirementsBox().isSelected()), "copiar e uma acao explicita");
+
+        // gerar por um arquivo com problema: o seletor de destino NAO abre, e o erro fica nas dependencias
+        click(read(f::generateButton));
+        assertNull(read(GenerateFlowDesktopTest::chooserOnScreen));
+        assertTrue(read(() -> f.dependenciesNotice().isError()));
+        assertTrue(read(() -> f.dependenciesNotice().text()).contains("linha 1: requests>=2.0"), read(() -> f.dependenciesNotice().text()));
+        assertEquals("Código de suporte: AGT-PAC-047", read(() -> f.dependenciesNotice().detail()));
+
+        // a pessoa corrige o arquivo e o seleciona de novo
+        Files.writeString(req, "requests==2.31.0\nopenpyxl==3.1.5\n");
+        click(read(f::selectRequirementsButton));
+        confirm(req);
+        assertEquals("", read(() -> f.requirementsProblemsNotice().text()));
+        assertEquals("", read(f::errorText));
+        edt(() -> f.copyRequirementsBox().doClick(0));
+        answer();
+        assertTrue(read(f::summaryText).contains("o arquivo de dependências entra no pacote como requirements.txt"), read(f::summaryText));
+        Path destino = tmp.resolve("escolhe.zip");
+        click(read(f::generateButton));
+        confirm(destino);
+        assertTrue(Files.isRegularFile(destino), read(f::errorText));
+        assertTrue(manifesto(destino).contains("\"requests==2.31.0\""));
+        try (ZipFile z = new ZipFile(destino.toFile())) {
+            assertNotNull(z.getEntry("requirements.txt"), "o arquivo escolhido entrou, e so ele");
+            assertNull(z.getEntry("requisitos.txt"));
+        }
+        assertEquals(List.of("requisitos.txt"), sobras(fora), "a pasta do arquivo fica como estava");
+    }
+
+    @Test
+    void removerASelecaoEEdicaoManualSaoEscolhasExplicitas() throws Exception {
+        Path pasta = projeto("projeto-remove");
+        Files.writeString(pasta.resolve("requirements.txt"), "requests>=2.0\n");
+        GenerateForm f = preenchido(pasta, "remove");
+        assertTrue(read(f::advancedOpen), "o arquivo tem uma linha que so a pessoa resolve: a secao abre");
+        assertTrue(read(() -> f.dependenciesNotice().isError()), "com o arquivo como origem, o resumo nao pode ser feito");
+
+        // edicao manual: a pessoa digita a lista
+        edt(() -> f.chooseSource(Workshop.DependencySource.MANUAL));
+        answer();
+        assertTrue(read(() -> f.dependenciesArea().isEditable()));
+        edt(() -> f.dependenciesArea().setText("requests==2.31.0"));
+        edt(() -> window.actions().refreshSummary());
+        answer();
+        assertEquals("", read(f::errorText));
+        assertTrue(read(f::summaryText).contains("requests==2.31.0 (edição manual)"), read(f::summaryText));
+
+        // remover a selecao: o arquivo deixa de ser origem; a edicao manual da pessoa fica
+        edt(() -> f.clearRequirementsButton().doClick(0));
+        answer();
+        assertEquals(NavText.REQUIREMENTS_NONE, read(() -> f.requirementsPathField().getText()));
+        assertEquals("", read(() -> f.requirementsProblemsNotice().text()));
+        assertEquals("Edição manual", String.valueOf(read(() -> f.sourceBox().getSelectedItem())));
+        assertEquals("requests==2.31.0", read(() -> f.dependenciesArea().getText()));
+        Path destino = tmp.resolve("remove.zip");
+        click(read(f::generateButton));
+        confirm(destino);
+        assertTrue(Files.isRegularFile(destino), read(f::errorText));
+        assertTrue(manifesto(destino).contains("\"requests==2.31.0\""));
+        assertEquals("requests>=2.0\n", Files.readString(pasta.resolve("requirements.txt")), "o arquivo do projeto nao e alterado");
+    }
+
     @Test
     void enquantoGeraOBotaoNaoAceitaOutroPedido() throws Exception {
         Path pasta = projeto("projeto-duplo");

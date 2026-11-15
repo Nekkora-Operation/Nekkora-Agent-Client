@@ -318,6 +318,89 @@ public final class NavText {
         return "Código de suporte: " + code;
     }
     public static final String GENERATE_DEPENDENCIES = "Dependências, uma por linha (nome==versão)";
+    public static final String DEPENDENCIES_NONE = "Nenhuma dependência declarada. Isso não quer dizer que o projeto não usa bibliotecas: na execução, só o que "
+            + "está declarado é conferido.";
+    public static final String DEPENDENCY_SOURCE = "Origem das dependências";
+    public static final String DEPENDENCY_SOURCE_CHOOSE = "Escolha a origem";
+    public static final String DEPENDENCY_SOURCE_MANUAL = "Edição manual";
+    public static final String DEPENDENCY_SOURCES_DIFFER = "O manifesto da pasta e o arquivo de dependências declaram listas diferentes. Escolha qual delas vale; "
+            + "nenhuma foi escolhida no seu lugar.";
+    public static final String REQUIREMENTS_LABEL = "Arquivo de dependências (opcional)";
+    public static final String REQUIREMENTS_NONE = "Nenhum arquivo selecionado";
+    public static final String REQUIREMENTS_SELECT = "Selecionar requirements.txt";
+    public static final String REQUIREMENTS_SELECT_TITLE = "Selecionar o arquivo de dependências";
+    public static final String REQUIREMENTS_FILTER = "Arquivos de texto (*.txt)";
+    public static final String REQUIREMENTS_CLEAR = "Remover seleção";
+    public static final String REQUIREMENTS_DETAILS = "Linhas do arquivo de dependências";
+    public static final String REQUIREMENTS_DETAILS_SHOW = "Mostrar todas as linhas do arquivo";
+    public static final String REQUIREMENTS_DETAILS_HIDE = "Ocultar as linhas do arquivo";
+    public static final String REQUIREMENTS_FAILED = "Não foi possível ler o arquivo de dependências.";
+    public static final String REQUIREMENTS_UNRESOLVED_HINT = "O arquivo tem linhas que o pacote não representa (veja acima). Ajuste o arquivo e selecione-o de novo, "
+            + "ou use a edição manual.";
+
+    public static String dependencySourceManifest(int count) {
+        return "Manifesto da pasta (" + dependencyCount(count) + ")";
+    }
+
+    public static String dependencySourceFile(com.nekkora.client.pack.Workshop.Requirements r, int count) {
+        return "Arquivo de dependências (" + dependencyCount(count) + ")";
+    }
+
+    private static String dependencyCount(int count) {
+        return count == 0 ? "nenhuma dependência" : count == 1 ? "1 dependência" : count + " dependências";
+    }
+
+    /** De onde veio o arquivo: reconhecido sozinho na raiz, escolhido dentro do projeto ou de fora dele. */
+    public static String requirementsWhere(com.nekkora.client.pack.Workshop.Requirements r) {
+        if (r.detected()) {
+            return "Encontrado na raiz do projeto e selecionado: requirements.txt. Foi lido como texto; nada é instalado.";
+        }
+        if (r.external()) {
+            return "Arquivo de fora da pasta do projeto. Foi lido como texto; ele só entra no pacote se você mandar copiar."
+                    + (r.packagePath() == null ? " Não há nome livre na raiz do pacote para a cópia." : "");
+        }
+        return "Arquivo do projeto (" + r.packagePath() + "). Foi lido como texto; nada é instalado.";
+    }
+
+    public static String requirementsSummary(com.nekkora.client.pack.Workshop.Requirements r) {
+        if (r.lines().isEmpty()) {
+            return "O arquivo não declara nenhuma dependência (está vazio ou só tem comentários).";
+        }
+        int n = r.dependencies().size();
+        String list = n == 0 ? "Nenhuma dependência com versão exata." : (n == 1 ? "1 dependência com versão exata: " : n + " dependências com versão exata: ")
+                + String.join(", ", r.dependencies().subList(0, Math.min(n, 6))) + (n > 6 ? " e mais " + (n - 6) : "") + ".";
+        long repeated = r.lines().stream().filter(l -> l.status().startsWith("repetida")).count();
+        return list + (repeated == 0 ? "" : " " + repeated + (repeated == 1 ? " linha repetida foi usada uma vez." : " linhas repetidas foram usadas uma vez."));
+    }
+
+    /** As linhas que o pacote nao representa, uma a uma (vazio se nao ha). */
+    public static String requirementsProblems(com.nekkora.client.pack.Workshop.Requirements r) {
+        java.util.List<com.nekkora.client.pack.Workshop.RequirementLine> p = r.problems();
+        if (p.isEmpty()) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder(p.size() == 1 ? "1 linha não pode ir para o pacote como está. " : p.size() + " linhas não podem ir para o pacote como estão. ");
+        for (int i = 0; i < Math.min(p.size(), 4); i++) {
+            b.append("Linha ").append(p.get(i).number()).append(" (").append(p.get(i).text()).append("): ").append(p.get(i).status()).append(". ");
+        }
+        if (p.size() > 4) {
+            b.append("Veja as outras ").append(p.size() - 4).append(" em “").append(REQUIREMENTS_DETAILS_SHOW).append("”.");
+        }
+        return b.toString().trim();
+    }
+
+    public static String requirementsDetails(com.nekkora.client.pack.Workshop.Requirements r) {
+        StringBuilder b = new StringBuilder();
+        for (com.nekkora.client.pack.Workshop.RequirementLine l : r.lines()) {
+            b.append(l.problem() ? "PROBLEMA  " : "ok        ").append("linha ").append(l.number()).append(": ").append(l.text()).append("   — ").append(l.status())
+                    .append('\n');
+        }
+        return b.toString();
+    }
+
+    public static String requirementsCopy(String packagePath) {
+        return "Copiar este arquivo para o pacote como " + packagePath;
+    }
     public static final String GENERATE_DEPENDENCIES_CONFIRM = "Conferi as dependências acima";
     public static final String GENERATE_COMPOSITION = "Arquivos do pacote e detalhes técnicos";
     public static final String GENERATE_ADVANCED_SHOW = "Mostrar opções avançadas";
@@ -354,7 +437,13 @@ public final class NavText {
      * nome nao e conferido la.
      */
     public static String generateSummary(com.nekkora.client.pack.Workshop.PackageSummary s) {
-        String deps = s.dependencies().isEmpty() ? "nenhuma declarada" : String.join(", ", s.dependencies());
+        String origin = s.dependencySource() == null ? "" : switch (s.dependencySource()) {
+            case MANIFEST -> " (do manifesto da pasta)";
+            case FILE -> " (do arquivo de dependências)";
+            case MANUAL -> s.dependencies().isEmpty() ? "" : " (edição manual)";
+        };
+        String deps = (s.dependencies().isEmpty() ? "nenhuma declarada" : String.join(", ", s.dependencies())) + origin
+                + (s.requirementsCopiedAs() == null ? "" : " · o arquivo de dependências entra no pacote como " + s.requirementsCopiedAs());
         return "Resumo: nome " + s.name() + " · entrada " + s.entry() + " · versão declarada no pacote " + s.version()
                 + " (não reservada nem publicada na Platform) · Python: " + com.nekkora.client.pack.Workshop.pythonMeaning(s.python())
                 + " · dependências: " + deps + " · " + s.included().size() + (s.included().size() == 1 ? " arquivo incluído" : " arquivos incluídos") + ", "

@@ -159,6 +159,20 @@ public final class Packager {
         if (!outside.isEmpty()) {
             throw new ImportProblem(Code.NAME_OUTSIDE_CONTRACT, ZipNames.display(outside.get(0)) + (outside.size() > 1 ? " e mais " + (outside.size() - 1) : ""));
         }
+        // o que a pessoa mandou entrar e nao esta na pasta (o arquivo de dependencias escolhido fora dela): so esse arquivo,
+        // num nome livre e aceito pelo formato; nunca por cima de um arquivo do projeto
+        for (Map.Entry<String, byte[]> x : new TreeMap<>(plan.extraFiles()).entrySet()) {
+            String rel = x.getKey();
+            if (!ZipNames.contractSafe(rel) || rel.contains("/") || ExecutionPackage.forbidden(rel) || rel.equals(ExecutionPackage.EXTERNAL_DESCRIPTOR)
+                    || rel.equals(ExecutionPackage.STUDIO_MANIFEST) || rel.equals(ExecutionPackage.LAB_DESCRIPTOR)) {
+                throw new ImportProblem(Code.NAME_OUTSIDE_CONTRACT, ZipNames.display(rel));
+            }
+            for (ProjectFile f : p.files()) {
+                if (ZipNames.collisionKey(f.path()).equals(ZipNames.collisionKey(rel))) throw new ImportProblem(Code.REQUIREMENTS_COLLISION, ZipNames.display(rel));
+            }
+            files.put(rel, ExecutionPackage.fileHash(x.getValue()));
+            bytes += x.getValue().length;
+        }
         String entry = plan.entry();
         if (entry == null || !entry.endsWith(".py") || !p.pythonFiles().contains(entry) || !files.containsKey(entry)) {
             throw new ImportProblem(Code.ENTRY_INVALID);
@@ -311,7 +325,11 @@ public final class Packager {
      * com {@code content}, pelo conteudo (um arquivo da pasta que nao entra no pacote pode mudar a vontade).
      */
     private static boolean unchanged(ImportedProject p, Preview pv, boolean content) {
-        return p.fromFolder() ? ProjectImporter.folderUnchanged(p, pv.files().keySet(), content) : ProjectImporter.sourceUnchanged(p);
+        if (!p.fromFolder()) return ProjectImporter.sourceUnchanged(p);
+        // os arquivos de fora da pasta (extraFiles) nao sao da pasta: quem os escolheu confere se mudaram
+        Set<String> ofFolder = new HashSet<>(pv.files().keySet());
+        ofFolder.removeAll(pv.plan().extraFiles().keySet());
+        return ProjectImporter.folderUnchanged(p, ofFolder, content);
     }
 
     private static Built writeChecked(ImportedProject p, Preview pv, Path target, boolean overwrite, SafeZip.Cancel cancel) throws ImportProblem {
@@ -376,9 +394,12 @@ public final class Packager {
             put(z, ExecutionPackage.EXTERNAL_DESCRIPTOR, pv.descriptor(), fixed);
             for (Map.Entry<String, String> e : pv.files().entrySet()) {
                 if (cancel.requested()) throw new ImportProblem(cancelled(p));
-                Path f = p.root().resolve(e.getKey()).normalize();
-                if (!f.startsWith(p.root())) throw new ImportProblem(Code.VERIFY_FAILED);
-                byte[] data = Files.readAllBytes(f);
+                byte[] data = pv.plan().extraFiles().get(e.getKey());
+                if (data == null) {
+                    Path f = p.root().resolve(e.getKey()).normalize();
+                    if (!f.startsWith(p.root())) throw new ImportProblem(Code.VERIFY_FAILED);
+                    data = Files.readAllBytes(f);
+                }
                 // os bytes empacotados sao os conferidos na importacao (a pasta da operacao nao muda entre uma coisa e outra)
                 if (!e.getValue().equals(ExecutionPackage.fileHash(data))) throw new ImportProblem(Code.VERIFY_FAILED);
                 put(z, e.getKey(), data, fixed);
