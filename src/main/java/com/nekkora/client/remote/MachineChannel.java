@@ -79,6 +79,8 @@ public final class MachineChannel {
         ATTEMPT_GONE,
         /** A Platform nao aceita essa mudanca de estado a partir do estado em que a tentativa esta. */
         ATTEMPT_TRANSITION,
+        /** A Platform nao tem os bytes do pacote da tentativa, ou eles nao conferem; ou o que chegou aqui nao confere. */
+        PACKAGE_UNAVAILABLE,
         UNEXPECTED
     }
 
@@ -247,8 +249,9 @@ public final class MachineChannel {
     }
 
     /** A tentativa entregue. O token so existe nesta resposta: o servidor guarda apenas o hash. */
-    record Offer(String attemptId, String remoteExecutionId, int attemptNumber, String automationId, String automationVersionId,
-                 String packageFingerprint, String packageFingerprintRule, java.util.List<String> dependencies, String token, int epoch) {
+    record Offer(String attemptId, String remoteExecutionId, int attemptNumber, String workspaceId, String automationId, String automationVersionId,
+                 String packageFingerprint, String packageFingerprintRule, java.util.List<String> dependencies, String pythonEnvironmentId, String token,
+                 int epoch) {
 
         @Override
         public String toString() {
@@ -288,8 +291,14 @@ public final class MachineChannel {
                 }
                 deps.add(s);
             }
-            offer = new Offer(uuid(a, "attemptId"), uuid(a, "remoteExecutionId"), positive(a, "attemptNumber"), uuid(a, "automationId"),
-                    uuid(a, "automationVersionId"), fp, rule, java.util.List.copyOf(deps), token, positive(a, "epoch"));
+            // o ambiente e o Python escolhido podem faltar numa Platform anterior: a tentativa e recebida, mas nao executada
+            String python = a.get("pythonEnvironmentId") == null ? null : text(a, "pythonEnvironmentId");
+            if (python != null && !AttemptJournal.ENVIRONMENT.matcher(python).matches()) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            offer = new Offer(uuid(a, "attemptId"), uuid(a, "remoteExecutionId"), positive(a, "attemptNumber"),
+                    a.get("workspaceId") == null ? null : uuid(a, "workspaceId"), uuid(a, "automationId"), uuid(a, "automationVersionId"), fp, rule,
+                    java.util.List.copyOf(deps), python, token, positive(a, "epoch"));
         } else if (o.get("attempt") != null) {
             throw new Refused(Problem.UNEXPECTED);
         }
@@ -310,9 +319,97 @@ public final class MachineChannel {
     }
 
     /** Informa o estado da tentativa e renova o prazo da comunicacao. {@code refusalReason}: so com REFUSED. */
-    AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason) throws Refused {
+    AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason, Integer exitCode) throws Refused {
         return attempt(credential, attemptId, "/state", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"state\":" + Json.quote(state)
-                + (refusalReason == null ? "" : ",\"refusalReason\":" + Json.quote(refusalReason)) + "}");
+                + (refusalReason == null ? "" : ",\"refusalReason\":" + Json.quote(refusalReason)) + (exitCode == null ? "" : ",\"exitCode\":" + exitCode)
+                + "}");
+    }
+
+    /** Limite do pacote baixado (o mesmo da Platform para um pacote publicado). */
+    static final long MAX_PACKAGE_BYTES = 50L * 1024 * 1024;
+
+    /**
+     * Baixa o pacote da tentativa para {@code target} (arquivo novo) e devolve o SHA-256 que a Platform declarou para os bytes.
+     * O token e a epoca vao em cabecalhos, nunca na URL. O arquivo so fica se chegou inteiro, dentro do limite e com o SHA-256
+     * declarado: qualquer outra coisa apaga o que foi gravado e e {@link Problem#PACKAGE_UNAVAILABLE}. Quem chama ainda confere a
+     * impressao digital e o conteudo antes de usar.
+     */
+    String download(String credential, String attemptId, String token, int epoch, java.nio.file.Path target) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        HttpRequest.Builder b = HttpRequest.newBuilder(origin.apiPath(ATTEMPTS + attemptId + "/package")).timeout(Duration.ofMinutes(5))
+                .header("Accept", "application/zip").header("Nekkora-Agent-Contract", CONTRACT).header("Authorization", "Bearer " + credential)
+                .header("Nekkora-Attempt-Token", token).header("Nekkora-Attempt-Epoch", String.valueOf(epoch)).GET();
+        HttpResponse<java.io.InputStream> r;
+        try {
+            r = http.send(b.build(), HttpResponse.BodyHandlers.ofInputStream());
+        } catch (SSLException e) {
+            throw new Refused(Problem.TLS);
+        } catch (HttpTimeoutException e) {
+            throw new Refused(Problem.TIMEOUT);
+        } catch (IOException e) {
+            throw new Refused(Problem.NETWORK);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Refused(Problem.NETWORK);
+        }
+        try (java.io.InputStream in = r.body()) {
+            int s = r.statusCode();
+            String type = r.headers().firstValue("Content-Type").orElse("").toLowerCase(java.util.Locale.ROOT);
+            if (s != 200) {
+                String text = type.startsWith("application/json") ? new String(in.readNBytes(4096), StandardCharsets.UTF_8) : "";
+                String reason = "";
+                try {
+                    Map<String, Object> o = Json.object(text);
+                    reason = "conflict".equals(o.get("error")) && o.get("reason") instanceof String x ? x : "";
+                } catch (IllegalArgumentException e) {
+                    // corpo que nao e o do contrato
+                }
+                throw new Refused(s == 401 ? Problem.LINK_ENDED : s == 404 ? Problem.ATTEMPT_GONE : s == 429 ? Problem.RATE_LIMITED : s >= 500 ? Problem.SERVER
+                        : s != 409 ? Problem.UNEXPECTED : switch (reason) {
+                            case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                            case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                            case "remote_package_unavailable" -> Problem.PACKAGE_UNAVAILABLE;
+                            default -> Problem.UNEXPECTED;
+                        });
+            }
+            String declared = r.headers().firstValue("Nekkora-Package-Sha256").orElse("");
+            if (!type.startsWith("application/zip") || !declared.matches("^[0-9a-f]{64}$")) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            long total = 0;
+            boolean ok = false;
+            try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(target, java.nio.file.StandardOpenOption.CREATE_NEW,
+                    java.nio.file.StandardOpenOption.WRITE)) {
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    total += n;
+                    if (total > MAX_PACKAGE_BYTES) {
+                        throw new Refused(Problem.PACKAGE_UNAVAILABLE);
+                    }
+                    md.update(buf, 0, n);
+                    out.write(buf, 0, n);
+                }
+                ok = total > 0 && declared.equals(java.util.HexFormat.of().formatHex(md.digest()));
+            } finally {
+                if (!ok) {
+                    java.nio.file.Files.deleteIfExists(target);
+                }
+            }
+            if (!ok) {
+                throw new Refused(Problem.PACKAGE_UNAVAILABLE);
+            }
+            return declared;
+        } catch (java.nio.file.FileAlreadyExistsException e) {
+            throw new Refused(Problem.STORAGE);
+        } catch (IOException e) {
+            throw new Refused(Problem.NETWORK);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
     }
 
     private AttemptStatus attempt(String credential, String attemptId, String action, String body) throws Refused {

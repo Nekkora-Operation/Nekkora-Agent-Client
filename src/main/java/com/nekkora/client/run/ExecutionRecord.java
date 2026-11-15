@@ -38,7 +38,9 @@ public record ExecutionRecord(ExecutionId id, RunContext context, ExecutionState
         /** A pessoa, pela janela. */
         LOCAL_UI,
         /** O aplicativo esta sendo encerrado. */
-        APPLICATION_SHUTDOWN
+        APPLICATION_SHUTDOWN,
+        /** Quem pediu a execucao gerenciada pediu que ela pare (so vale para execucao gerenciada). */
+        MANAGED_REQUEST
     }
 
     /** Situacao do pedido de cancelamento: pedir nao e confirmar. */

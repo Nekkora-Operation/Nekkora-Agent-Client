@@ -221,6 +221,32 @@ public final class DownloadedPackages {
         }
     }
 
+    /**
+     * Confere um ZIP recebido para uma execucao GERENCIADA (a que nao nasce de uma aprovacao da pessoa aqui) e o extrai em
+     * {@code into}, uma pasta nova de quem chama. As mesmas conferencias de {@link #install}, na mesma ordem: (1) SHA-256
+     * dos bytes, antes de abrir como ZIP; (2) leitura segura e validador real; (3) impressao digital. NADA e guardado na
+     * area de pacotes nem associado a contexto algum: o pacote so existe na pasta indicada. O ZIP nao e apagado aqui.
+     *
+     * @param expectedSha256 SHA-256 do ZIP (64 hexadecimais; aceita o prefixo {@code sha256:})
+     * @param expectedFingerprint impressao digital esperada (idem)
+     */
+    public static ExecutionPackage unpackVerified(Path zip, String expectedSha256, String expectedFingerprint, Path into, SafeZip.Cancel cancel)
+            throws ImportProblem {
+        String sha = hex(expectedSha256);
+        String fingerprint = hex(expectedFingerprint);
+        if (sha == null || fingerprint == null) throw new ImportProblem(Code.DOWNLOAD_MISMATCH);
+        try {
+            if (!Files.isRegularFile(zip, LinkOption.NOFOLLOW_LINKS)) throw new ImportProblem(Code.DOWNLOAD_MISMATCH);
+            if (!sha.equals(sha256(zip, cancel))) throw new ImportProblem(Code.DOWNLOAD_MISMATCH);
+            if (Files.exists(into, LinkOption.NOFOLLOW_LINKS)) throw new ImportProblem(Code.DOWNLOAD_STORE_FAILED);
+            ExecutionPackage pkg = inspect(zip, Files.createDirectories(into), cancel);
+            if (!pkg.fingerprint().equals("sha256:" + fingerprint)) throw new ImportProblem(Code.DOWNLOAD_MISMATCH);
+            return pkg;
+        } catch (IOException e) {
+            throw new ImportProblem(Code.DOWNLOAD_STORE_FAILED);
+        }
+    }
+
     private static ExecutionPackage inspect(Path zip, Path into, SafeZip.Cancel cancel) throws ImportProblem {
         try {
             SafeZip.Content c = SafeZip.extract(zip, into, ZipLimits.DEFAULT, cancel);
