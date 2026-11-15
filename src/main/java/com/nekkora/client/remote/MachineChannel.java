@@ -41,6 +41,10 @@ public final class MachineChannel {
     static final String UNLINK = "/agent/api/v1/link/unlink";
     static final String RENEW = "/agent/api/v1/remote/credential/renew";
     static final String INVENTORY = "/agent/api/v1/remote/python-environments";
+    /** Entrega (T02): o que ha para esta maquina. */
+    static final String NEXT = "/agent/api/v1/remote/next";
+    /** Entrega (T02): confirmar o recebimento ({@code <tentativa>/ack}) e informar o estado ({@code <tentativa>/state}). */
+    static final String ATTEMPTS = "/agent/api/v1/remote/attempts/";
     /** A intencao declarada no resgate: habilitar ESTE computador para execucao remota. */
     static final String INTENT = "pair-remote";
 
@@ -69,6 +73,12 @@ public final class MachineChannel {
         ALREADY_ENABLED,
         /** A credencial ainda esta longe do vencimento: a Platform nao a renova agora. */
         RENEWAL_NOT_DUE,
+        /** O token ou a epoca desta entrega nao sao mais os vigentes: outra entrega tomou o lugar. Nada foi alterado. */
+        ATTEMPT_STALE,
+        /** A Platform nao tem essa tentativa para esta maquina. */
+        ATTEMPT_GONE,
+        /** A Platform nao aceita essa mudanca de estado a partir do estado em que a tentativa esta. */
+        ATTEMPT_TRANSITION,
         UNEXPECTED
     }
 
@@ -148,11 +158,12 @@ public final class MachineChannel {
     /**
      * Presenca. Nesta versao o aplicativo ainda nao executa solicitacoes da Platform, entao nao declara a capacidade de
      * execucao remota: a Platform mostra a maquina como incompativel, e nada lhe e entregue. Declara so que publica o
-     * inventario de Python.
+     * inventario de Python. {@code declaresRun} so e verdadeiro no ensaio de entrega do laboratorio (ver
+     * {@link RemoteMachine#setDeliveryTrial}); {@code busy}: ha uma tentativa entregue ainda nao resolvida.
      */
-    Presence heartbeat(String credential, String appVersion) throws Refused {
-        String body = "{\"agentVersion\":" + Json.quote(appVersion) + ",\"contractVersion\":\"" + CONTRACT
-                + "\",\"capabilities\":[\"PY_INVENTORY_1_0\"],\"remote\":{\"busy\":false,\"diskPressure\":false}}";
+    Presence heartbeat(String credential, String appVersion, boolean declaresRun, boolean busy) throws Refused {
+        String body = "{\"agentVersion\":" + Json.quote(appVersion) + ",\"contractVersion\":\"" + CONTRACT + "\",\"capabilities\":[\"PY_INVENTORY_1_0\""
+                + (declaresRun ? ",\"REMOTE_RUN_1_0\"" : "") + "],\"remote\":{\"busy\":" + busy + ",\"diskPressure\":false}}";
         HttpResponse<String> r = send(request(HEARTBEAT, credential).POST(HttpRequest.BodyPublishers.ofString(body)));
         Map<String, Object> o = ok(authenticated(r));
         if (!(o.get("remote") instanceof Map<?, ?> remote)) {
@@ -230,6 +241,109 @@ public final class MachineChannel {
         }
         Map<String, Object> o = ok(authenticated(r));
         if (o.get("count") instanceof Double d && d == Math.rint(d) && d >= 0 && d <= 32) {
+            return d.intValue();
+        }
+        throw new Refused(Problem.UNEXPECTED);
+    }
+
+    /** A tentativa entregue. O token so existe nesta resposta: o servidor guarda apenas o hash. */
+    record Offer(String attemptId, String remoteExecutionId, int attemptNumber, String automationId, String automationVersionId,
+                 String packageFingerprint, String packageFingerprintRule, java.util.List<String> dependencies, String token, int epoch) {
+
+        @Override
+        public String toString() {
+            return "Offer[attempt=" + attemptId + "]";
+        }
+    }
+
+    /** O que ha para esta maquina: uma tentativa a receber, ou o aviso de cancelamento de uma ja recebida, ou nada (os dois nulos). */
+    record Next(Offer offer, String cancelAttemptId) {
+    }
+
+    /** {@code proceed}: {@code false} quando a maquina NAO deve seguir (o servidor recusou o inicio ou a tentativa ja terminou). */
+    record AttemptStatus(String state, boolean proceed, boolean cancelRequested) {
+    }
+
+    /** Pergunta o que ha para esta maquina. Entregar nao prova recebimento: so {@link #ack} confirma. */
+    Next next(String credential) throws Refused {
+        HttpResponse<String> r = send(request(NEXT, credential).GET());
+        if (r.statusCode() == 409) {
+            throw new Refused("remote_execution_not_enabled".equals(reason(r)) ? Problem.NOT_ENABLED : Problem.UNEXPECTED);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        Offer offer = null;
+        if (o.get("attempt") instanceof Map<?, ?> raw) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> a = (Map<String, Object>) raw;
+            if (!(a.get("dependencies") instanceof java.util.List<?> list) || list.size() > AttemptJournal.MAX_DEPENDENCIES
+                    || !(a.get("token") instanceof String token) || !AttemptJournal.TOKEN.matcher(token).matches()
+                    || !(a.get("packageFingerprint") instanceof String fp) || !fp.matches("^[0-9a-f]{64}$")
+                    || !(a.get("packageFingerprintRule") instanceof String rule) || rule.isBlank() || rule.length() > 100) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            java.util.List<String> deps = new java.util.ArrayList<>();
+            for (Object d : list) {
+                if (!(d instanceof String s) || s.isBlank() || s.length() > 512) {
+                    throw new Refused(Problem.UNEXPECTED);
+                }
+                deps.add(s);
+            }
+            offer = new Offer(uuid(a, "attemptId"), uuid(a, "remoteExecutionId"), positive(a, "attemptNumber"), uuid(a, "automationId"),
+                    uuid(a, "automationVersionId"), fp, rule, java.util.List.copyOf(deps), token, positive(a, "epoch"));
+        } else if (o.get("attempt") != null) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        String cancel = null;
+        if (o.get("cancel") instanceof Map<?, ?> raw) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> c = (Map<String, Object>) raw;
+            cancel = uuid(c, "attemptId");
+        } else if (o.get("cancel") != null) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        return new Next(offer, cancel);
+    }
+
+    /** Confirma que a tentativa foi RECEBIDA (ja gravada no diario daqui). Repetir com o mesmo token e epoca nao muda nada. */
+    AttemptStatus ack(String credential, String attemptId, String token, int epoch) throws Refused {
+        return attempt(credential, attemptId, "/ack", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + "}");
+    }
+
+    /** Informa o estado da tentativa e renova o prazo da comunicacao. {@code refusalReason}: so com REFUSED. */
+    AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason) throws Refused {
+        return attempt(credential, attemptId, "/state", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"state\":" + Json.quote(state)
+                + (refusalReason == null ? "" : ",\"refusalReason\":" + Json.quote(refusalReason)) + "}");
+    }
+
+    private AttemptStatus attempt(String credential, String attemptId, String action, String body) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + action, credential).POST(HttpRequest.BodyPublishers.ofString(body)));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                case "remote_execution_not_enabled" -> Problem.NOT_ENABLED;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        if (!attemptId.equals(o.get("attemptId")) || !(o.get("state") instanceof String state) || !state.matches("^[A-Z_]{1,40}$")
+                || !(o.get("proceed") instanceof Boolean proceed) || !(o.get("cancelRequested") instanceof Boolean cancel)) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        return new AttemptStatus(state, proceed, cancel);
+    }
+
+    private static int positive(Map<String, Object> o, String key) throws Refused {
+        if (o.get(key) instanceof Double d && d == Math.rint(d) && d >= 1 && d <= Integer.MAX_VALUE) {
             return d.intValue();
         }
         throw new Refused(Problem.UNEXPECTED);

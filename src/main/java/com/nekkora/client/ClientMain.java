@@ -92,6 +92,9 @@ public final class ClientMain {
             // identidade local, o tipo e a versao, e manda a Platform um identificador opaco - nunca o caminho
             remote.setPythonFinder(() -> runner.installedPythons().stream()
                     .map(p -> new com.nekkora.client.remote.RemoteMachine.PythonSeen(p.id(), p.virtual(), p.version())).toList());
+            // ensaio de entrega, so para o laboratorio (desligado por padrao): a maquina declara a capacidade de execucao e
+            // RECUSA o que receber, para provar o caminho da entrega. Esta versao nao baixa nem executa nada da Platform
+            remote.setDeliveryTrial("1".equals(System.getenv("NEKKORA_CLIENT_ENSAIO_ENTREGA")));
             window.setRemote(remote);
             remote.start();
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta

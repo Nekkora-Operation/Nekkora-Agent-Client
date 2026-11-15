@@ -81,6 +81,127 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String unlinkConflict;
     public final List<String> unlinkOperations = new CopyOnWriteArrayList<>();
 
+    // ---- entrega (T02): no maximo uma tentativa, como no servidor real
+    /** A tentativa desta maquina; nula = nao ha. */
+    public volatile String attemptId;
+    /** QUEUED, OFFERED, RECEIVED, REFUSED, CANCELLED... */
+    public volatile String attemptState;
+    public volatile String attemptReason;
+    public volatile String attemptToken;
+    public volatile int attemptEpoch;
+    public volatile boolean cancelRequested;
+    /** A ultima presenca declarou a capacidade de execucao remota? Sem ela, nada e entregue. */
+    public volatile boolean declaredRun;
+    public volatile String lastHeartbeat;
+    /** Confirmacoes processadas cuja resposta se perde (o cliente do JDK repete uma vez sozinho: para perder de verdade, 2). */
+    public volatile int dropAckResponses;
+    /** Respostas 503 para as proximas confirmacoes / informacoes de estado (nada e processado). */
+    public volatile int failAcks;
+    public volatile int failStates;
+    /** A entrega devolve um token fora do formato. */
+    public volatile boolean malformedOffer;
+    public final String remoteExecutionId = UUID.randomUUID().toString();
+    public final String automationId = UUID.randomUUID().toString();
+    public final String automationVersionId = UUID.randomUUID().toString();
+
+    /** Uma solicitacao aceita para esta maquina, ainda nao entregue. */
+    public String queue() {
+        attemptId = UUID.randomUUID().toString();
+        attemptState = "QUEUED";
+        attemptReason = null;
+        attemptToken = null;
+        attemptEpoch = 0;
+        cancelRequested = false;
+        return attemptId;
+    }
+
+    private static String newToken() {
+        return (UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", "").substring(0, 43);
+    }
+
+    private void next(HttpExchange x) throws IOException {
+        if (!enabled) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_execution_not_enabled\"}");
+            return;
+        }
+        if (attemptId == null) {
+            respond(x, 200, "{}");
+            return;
+        }
+        if (attemptState.equals("QUEUED") || attemptState.equals("OFFERED")) {
+            if (cancelRequested) {
+                attemptState = "CANCELLED";
+                respond(x, 200, "{}");
+                return;
+            }
+            if (paused || !declaredRun) {
+                respond(x, 200, "{}");
+                return;
+            }
+            attemptToken = newToken();
+            attemptEpoch++;
+            attemptState = "OFFERED";
+            respond(x, 200, "{\"attempt\":{\"attemptId\":\"" + attemptId + "\",\"remoteExecutionId\":\"" + remoteExecutionId + "\",\"attemptNumber\":1,"
+                    + "\"automationId\":\"" + automationId + "\",\"automationVersionId\":\"" + automationVersionId + "\",\"packageFingerprint\":\""
+                    + "c".repeat(64) + "\",\"packageFingerprintRule\":\"nekkora-agent/package-fingerprint/1\",\"dependencies\":[\"requests==2.32.3\"],"
+                    + "\"token\":\"" + (malformedOffer ? "nao e um token" : attemptToken) + "\",\"epoch\":" + attemptEpoch + ",\"leaseSeconds\":90}}");
+            return;
+        }
+        boolean live = List.of("RECEIVED", "PREPARING", "STARTING", "RUNNING").contains(attemptState);
+        respond(x, 200, live && cancelRequested ? "{\"cancel\":{\"attemptId\":\"" + attemptId + "\"}}" : "{}");
+    }
+
+    private void attempt(HttpExchange x, String path, String text) throws IOException {
+        String[] parts = path.substring("/agent/api/v1/remote/attempts/".length()).split("/");
+        if (parts.length != 2 || !parts[0].equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        boolean ack = parts[1].equals("ack");
+        if (ack ? failAcks > 0 : failStates > 0) {
+            if (ack) {
+                failAcks--;
+            } else {
+                failStates--;
+            }
+            respond(x, 503, "{\"error\":\"unavailable\"}");
+            return;
+        }
+        java.util.regex.Matcher epoch = java.util.regex.Pattern.compile("\"epoch\":(\\d+)").matcher(text);
+        if (attemptToken == null || !attemptToken.equals(field(text, "token")) || !epoch.find() || Integer.parseInt(epoch.group(1)) != attemptEpoch) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        boolean ended = List.of("REFUSED", "CANCELLED", "EXPIRED", "SUCCEEDED", "FAILED", "TIMED_OUT", "ENDED_UNKNOWN").contains(attemptState);
+        boolean proceed;
+        if (ack) {
+            if (attemptState.equals("OFFERED")) {
+                attemptState = "RECEIVED";
+            }
+            proceed = attemptState.equals("RECEIVED");
+            if (dropAckResponses > 0) {
+                dropAckResponses--;
+                x.close();
+                return;
+            }
+        } else if (ended) {
+            proceed = false;
+        } else {
+            String wanted = field(text, "state");
+            String reason = field(text, "refusalReason");
+            if (!attemptState.equals("RECEIVED") || !wanted.equals("REFUSED") || reason.isEmpty()) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+                return;
+            }
+            attemptState = wanted;
+            attemptReason = reason;
+            proceed = false;
+        }
+        respond(x, 200, "{\"attemptId\":\"" + attemptId + "\",\"state\":\"" + attemptState + "\",\"proceed\":" + proceed
+                + (attemptReason == null ? "" : ",\"refusalReason\":\"" + attemptReason + "\"") + ",\"cancelRequested\":" + cancelRequested
+                + ",\"leaseSeconds\":90}");
+    }
+
     public FakeGateway() throws Exception {
         char[] pw = "changeit".toCharArray();
         KeyStore ks = KeyStore.getInstance("PKCS12");
@@ -163,6 +284,19 @@ public final class FakeGateway implements AutoCloseable {
             return;
         }
         boolean put = "PUT".equals(x.getRequestMethod()) && path.equals("/agent/api/v1/remote/python-environments");
+        boolean get = "GET".equals(x.getRequestMethod()) && path.equals("/agent/api/v1/remote/next");
+        if (get && "1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
+            if (authenticated(x, auth)) {
+                next(x);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                attempt(x, path, text);
+            }
+            return;
+        }
         if (!("POST".equals(x.getRequestMethod()) || put) || !"1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
             respond(x, 400, "{\"error\":\"unsupported_contract\"}");
             return;
@@ -171,6 +305,8 @@ public final class FakeGateway implements AutoCloseable {
             case "/agent/api/v1/enrollments/redeem" -> redeem(x, text);
             case "/agent/api/v1/heartbeat" -> {
                 if (authenticated(x, auth)) {
+                    declaredRun = text.contains("\"REMOTE_RUN_1_0\"");
+                    lastHeartbeat = text;
                     respond(x, 200, "{\"serverTime\":\"2026-11-15T12:00:00Z\",\"credentialExpiresAt\":\"" + credentialExpiresAt + "\",\"contractVersion\":\"1.0\""
                             + (enabled ? ",\"remote\":{\"receiving\":\"" + (paused ? "PAUSED" : "ENABLED") + "\"}" : "") + "}");
                 }

@@ -199,6 +199,11 @@ public final class MachineVault {
         return salt;
     }
 
+    /** O diario da entrega fica junto do vinculo, com a mesma protecao, e sai junto com ele. */
+    AttemptJournal journal() {
+        return new AttemptJournal(dir, keyring);
+    }
+
     void clearPending() throws IOException {
         Files.deleteIfExists(dir.resolve(PENDING + ".novo"));
         Files.deleteIfExists(dir.resolve(PENDING));
@@ -207,6 +212,7 @@ public final class MachineVault {
     /** Remove o vinculo deste computador. Depois disso a maquina nao consegue mais se autenticar. */
     public void clear() throws IOException {
         clearPending();
+        journal().clear();
         Files.deleteIfExists(dir.resolve(SALT));
         Files.deleteIfExists(dir.resolve(FILE + ".novo"));
         Files.deleteIfExists(dir.resolve(FILE));
