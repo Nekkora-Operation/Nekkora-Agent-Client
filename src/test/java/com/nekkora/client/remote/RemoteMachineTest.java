@@ -111,7 +111,8 @@ class RemoteMachineTest {
         FakeGateway.Call hb = gw.calls.get(gw.calls.size() - 1);
         assertEquals("/agent/api/v1/heartbeat", hb.path());
         assertEquals("Bearer " + gw.credential, hb.authorization());
-        assertTrue(hb.body().contains("\"capabilities\":[]"), "esta versao nao declara capacidade de execucao remota");
+        assertTrue(hb.body().contains("\"capabilities\":[\"PY_INVENTORY_1_0\"]"), "esta versao declara so o inventario: nenhuma capacidade de execucao remota");
+        assertFalse(hb.body().contains("REMOTE_RUN"));
         // ja habilitado: outro codigo nao troca o vinculo
         assertEquals(Problem.ALREADY_ENABLED, refused(() -> again.enable(gw.code("remote"))));
     }

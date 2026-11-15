@@ -66,6 +66,7 @@ class RemoteDesktopTest {
         background = new FakeDirectory.Manual();
         vaultFile = tmp.resolve("remota").resolve("maquina.json");
         machine = new RemoteMachine(new MachineVault(tmp.resolve("remota"), new WindowsKeyring()), gw.channel(), Optional.of("0.1.0"));
+        machine.setPythonFinder(() -> java.util.List.of(new RemoteMachine.PythonSeen("computador:c:\\python312\\python.exe", false, "3.12.4")));
         SwingUtilities.invokeAndWait(() -> {
             Themes.apply(ClientTheme.SAKURA_DARK);
             flow = new SignInFlow(fake, r -> {
@@ -211,6 +212,15 @@ class RemoteDesktopTest {
         // T01b: a tela diz ate quando a credencial vale e que a renovacao e automatica
         assertTrue(read(p::validityText).matches("A credencial deste computador vale até [0-9]{2}/02/2027 e é renovada automaticamente.*"), read(p::validityText));
 
+        // T01c: a tela diz o que e informado sobre o Python (so a versao) e deixa atualizar
+        assertTrue(read(p::reportsPythonText).contains("nenhum caminho, nome de pasta ou lista de pacotes"));
+        assertEquals("", read(p::pythonReportedText), "nada foi informado ainda");
+        click(p.refreshPythonButton());
+        answer();
+        assertEquals(RemoteText.PYTHON_REFRESHED, read(() -> p.resultNotice().text()));
+        assertEquals("1 instalação de Python informada à Platform (só a versão).", read(p::pythonReportedText));
+        assertFalse(gw.inventory.toLowerCase().contains("python312") || gw.inventory.contains("c:"), "o caminho nao sai deste computador");
+
         // pausar e retomar
         assertEquals(RemoteText.PAUSE, read(() -> p.toggleButton().getText()));
         click(p.toggleButton());
@@ -246,6 +256,8 @@ class RemoteDesktopTest {
         assertEquals(RemoteText.DISABLED_NOW, read(() -> p.resultNotice().text()));
         assertTrue(read(() -> p.enableButton().isShowing()), "volta a oferecer a habilitacao");
         assertEquals("", read(p::validityText));
+        assertEquals("", read(p::pythonReportedText));
+        assertFalse(read(() -> p.refreshPythonButton().isShowing()));
 
         // fechar pelo botao
         click(p.closeButton());

@@ -64,6 +64,8 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String contentType = "application/json";
     /** O resgate e processado, mas a conexao cai antes da resposta (uma vez). */
     public volatile boolean dropRedeemResponse;
+    /** O ultimo inventario de Python recebido (corpo do pedido). */
+    public volatile String inventory;
     /** Renovacao: a credencial esta na janela do servidor? */
     public volatile boolean renewalDue = true;
     /**
@@ -160,7 +162,8 @@ public final class FakeGateway implements AutoCloseable {
             respond(x, status, body == null ? "{}" : body);
             return;
         }
-        if (!"POST".equals(x.getRequestMethod()) || !"1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
+        boolean put = "PUT".equals(x.getRequestMethod()) && path.equals("/agent/api/v1/remote/python-environments");
+        if (!("POST".equals(x.getRequestMethod()) || put) || !"1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
             respond(x, 400, "{\"error\":\"unsupported_contract\"}");
             return;
         }
@@ -185,6 +188,17 @@ public final class FakeGateway implements AutoCloseable {
                 }
             }
             case "/agent/api/v1/remote/credential/renew" -> renew(x, text, auth);
+            case "/agent/api/v1/remote/python-environments" -> {
+                if (authenticated(x, auth)) {
+                    if (!enabled) {
+                        respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_execution_not_enabled\"}");
+                    } else {
+                        inventory = text;
+                        int count = text.split("\"environmentId\"", -1).length - 1;
+                        respond(x, 200, "{\"count\":" + count + ",\"reportedAt\":\"2026-11-15T12:00:00Z\"}");
+                    }
+                }
+            }
             case "/agent/api/v1/link/unlink" -> {
                 String op = field(text, "operationId");
                 unlinkOperations.add(op);

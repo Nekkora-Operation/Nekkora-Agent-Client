@@ -41,6 +41,9 @@ Execucao remota (menu da conta)
   nada. Voce pode pausar, retomar e desabilitar.
   NESTA VERSAO o aplicativo ainda nao executa o que a Platform solicitar: ele
   so mantem o vinculo e a presenca enquanto estiver aberto.
+  Com o computador habilitado, o aplicativo informa a Platform quais versoes
+  de Python encontrou aqui. Vai so a versao de cada instalacao: nenhum caminho,
+  nome de pasta ou lista de pacotes.
 
 Versao, commit e bibliotecas: VERSOES.txt
 Licencas: pasta legal\

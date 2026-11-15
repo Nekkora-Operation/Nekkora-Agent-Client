@@ -26,7 +26,8 @@ import com.nekkora.client.auth.PlatformOrigin;
  * <li>{@link #heartbeat}: presenca; devolve o recebimento, cuja referencia e o servidor;</li>
  * <li>{@link #receiving}: pausar ou retomar o recebimento;</li>
  * <li>{@link #unlink}: encerrar o vinculo deste computador;</li>
- * <li>{@link #renew}: trocar a propria credencial perto do vencimento, sem pessoa e sem codigo.</li>
+ * <li>{@link #renew}: trocar a propria credencial perto do vencimento, sem pessoa e sem codigo;</li>
+ * <li>{@link #publishInventory}: dizer quais versoes de Python este computador tem, sem caminhos.</li>
  * </ul>
  * Uma resposta so e aceita com a forma do contrato; qualquer outra coisa e {@link Problem#UNEXPECTED}, nunca sucesso.
  * Nenhuma excecao carrega codigo, segredo ou credencial.
@@ -39,6 +40,7 @@ public final class MachineChannel {
     static final String RECEIVING = "/agent/api/v1/remote/receiving";
     static final String UNLINK = "/agent/api/v1/link/unlink";
     static final String RENEW = "/agent/api/v1/remote/credential/renew";
+    static final String INVENTORY = "/agent/api/v1/remote/python-environments";
     /** A intencao declarada no resgate: habilitar ESTE computador para execucao remota. */
     static final String INTENT = "pair-remote";
 
@@ -144,12 +146,13 @@ public final class MachineChannel {
     }
 
     /**
-     * Presenca. Nesta versao o aplicativo ainda nao executa solicitacoes da Platform, entao nao declara nenhuma capacidade
-     * de execucao remota: a Platform mostra a maquina como incompativel, e nada lhe e entregue.
+     * Presenca. Nesta versao o aplicativo ainda nao executa solicitacoes da Platform, entao nao declara a capacidade de
+     * execucao remota: a Platform mostra a maquina como incompativel, e nada lhe e entregue. Declara so que publica o
+     * inventario de Python.
      */
     Presence heartbeat(String credential, String appVersion) throws Refused {
         String body = "{\"agentVersion\":" + Json.quote(appVersion) + ",\"contractVersion\":\"" + CONTRACT
-                + "\",\"capabilities\":[],\"remote\":{\"busy\":false,\"diskPressure\":false}}";
+                + "\",\"capabilities\":[\"PY_INVENTORY_1_0\"],\"remote\":{\"busy\":false,\"diskPressure\":false}}";
         HttpResponse<String> r = send(request(HEARTBEAT, credential).POST(HttpRequest.BodyPublishers.ofString(body)));
         Map<String, Object> o = ok(authenticated(r));
         if (!(o.get("remote") instanceof Map<?, ?> remote)) {
@@ -203,6 +206,33 @@ public final class MachineChannel {
         }
         Map<String, Object> o = ok(authenticated(r));
         return new Redeemed(identity.organizationId(), identity.agentId(), identity.workerId(), uuid(o, "credentialId"), text(o, "credentialExpiresAt"));
+    }
+
+    /** Um ambiente do inventario como vai para a Platform: identificador opaco, versao, tipo e instante. Nunca um caminho. */
+    record Published(String environmentId, String pythonVersion, boolean virtual, String observedAt) {
+    }
+
+    /** Publica o retrato do Python deste computador (substitui o anterior). Devolve quantos ambientes a Platform gravou. */
+    int publishInventory(String credential, java.util.List<Published> environments) throws Refused {
+        StringBuilder b = new StringBuilder("{\"environments\":[");
+        for (int k = 0; k < environments.size(); k++) {
+            Published e = environments.get(k);
+            b.append(k == 0 ? "" : ",").append("{\"environmentId\":").append(Json.quote(e.environmentId())).append(",\"pythonVersion\":")
+                    .append(Json.quote(e.pythonVersion())).append(",\"kind\":\"").append(e.virtual() ? "VIRTUAL_ENVIRONMENT" : "INSTALLATION")
+                    .append("\",\"observedAt\":").append(Json.quote(e.observedAt())).append('}');
+        }
+        HttpResponse<String> r = send(request(INVENTORY, credential).PUT(HttpRequest.BodyPublishers.ofString(b.append("]}").toString())));
+        if (r.statusCode() == 409) {
+            throw new Refused("remote_execution_not_enabled".equals(reason(r)) ? Problem.NOT_ENABLED : Problem.UNEXPECTED);
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        if (o.get("count") instanceof Double d && d == Math.rint(d) && d >= 0 && d <= 32) {
+            return d.intValue();
+        }
+        throw new Refused(Problem.UNEXPECTED);
     }
 
     private HttpRequest.Builder request(String path, String credential) {
