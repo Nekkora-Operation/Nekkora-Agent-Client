@@ -205,9 +205,6 @@ class GenerateDesktopTest {
         if (read(() -> f.pythonField().getText()).isBlank()) {
             edt(() -> f.pythonField().setText(">=3.10,<3.14"));
         }
-        if (read(() -> f.confirmedBox().isVisible())) {
-            edt(() -> f.confirmedBox().setSelected(true));
-        }
         edt(() -> window.actions().refreshSummary());
         answer();
     }
@@ -284,7 +281,7 @@ class GenerateDesktopTest {
         assertFalse(read(() -> f.generateButton().isEnabled()), "gerando: nao aceita outro pedido");
         answer();
         assertTrue(Files.isRegularFile(destino));
-        assertEquals("Pacote gerado. Envie este arquivo pela Platform para cadastrar ou publicar a automação. " + destino.toRealPath(),
+        assertEquals("Pacote gerado " + destino.toRealPath(),
                 read(f::successText).replace(destino.toString(), destino.toRealPath().toString()));
         assertTrue(read(() -> f.revealButton().isVisible()));
         assertEquals("Fechar", read(() -> f.cancelButton().getText()));
@@ -345,7 +342,8 @@ class GenerateDesktopTest {
         answer();
         assertEquals(1, substituir.size(), "perguntou antes de substituir");
         assertEquals("arquivo da pessoa", Files.readString(destino), "sem o sim, o arquivo fica como estava");
-        assertEquals("O arquivo que já existia não foi alterado. Escolha outro nome ou confirme a substituição.", read(f::errorText));
+        assertEquals("O arquivo que já existia não foi alterado. Escolha outro nome ou confirme a substituição.", read(f::infoText));
+        assertEquals("", read(f::errorText), "a pessoa nao quis substituir: e uma informacao, nao um erro");
         assertEquals("", read(f::successText));
         respostaSubstituir = true;
         edt(() -> window.actions().generateTo(destino.toString()));

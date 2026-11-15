@@ -204,7 +204,7 @@ class PackagerTest {
             throw new java.nio.file.AccessDeniedException(f.toString());
         };
         PackagePlan plan = new PackagePlan("minimo", "1.0.0", "main.py", ">=3.10,<3.14", List.of(), true, Set.of(), Set.of(), false);
-        assertEquals(Code.WRITE_FAILED, assertThrows(ImportProblem.class, () -> Packager.build(p, plan, out, false, SafeZip.Cancel.NEVER)).code());
+        assertEquals(Code.WRITE_DENIED, assertThrows(ImportProblem.class, () -> Packager.build(p, plan, out, false, SafeZip.Cancel.NEVER)).code());
         assertEquals(List.of(), leftovers(out));
     }
 

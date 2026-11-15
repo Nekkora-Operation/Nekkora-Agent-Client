@@ -108,7 +108,8 @@ public final class Packager {
         }
         if (plan.name() == null || !NAME.matcher(plan.name()).matches()) throw new ImportProblem(Code.NAME_INVALID);
         if (plan.version() == null || !SEMVER.matcher(plan.version()).matches()) throw new ImportProblem(Code.VERSION_INVALID);
-        if (!ExecutionPackage.validPythonRequirement(plan.python())) throw new ImportProblem(Code.PYTHON_INVALID);
+        // sem requisito (nulo) e permitido: o pacote sai sem restricao de Python declarada (descritor 1.1)
+        if (plan.python() != null && !ExecutionPackage.validPythonRequirement(plan.python())) throw new ImportProblem(Code.PYTHON_INVALID);
         Set<String> seen = new HashSet<>();
         for (String d : plan.dependencies()) {
             if (!ExecutionPackage.validDependency(d) || !seen.add(ExecutionPackage.normalized(d.replaceAll("\\[.*", "").split("==", 2)[0]))) {
@@ -179,7 +180,7 @@ public final class Packager {
     /** O plano pede exatamente o pacote que o descritor existente declara (metadados e arquivos)? */
     private static boolean sameAsExisting(ExecutionPackage existing, PackagePlan plan, Map<String, String> files) {
         return existing.name().equals(plan.name()) && existing.packageVersion().equals(plan.version()) && existing.entry().equals(plan.entry())
-                && existing.pythonRequirement().equals(plan.python()) && existing.dependencies().equals(plan.dependencies())
+                && java.util.Objects.equals(existing.pythonRequirement(), plan.python()) && existing.dependencies().equals(plan.dependencies())
                 && existing.files().equals(files);
     }
 
@@ -195,7 +196,7 @@ public final class Packager {
      */
     public static String contentIdentity(String entry, String python, List<String> dependencies, Map<String, String> files) {
         StringBuilder b = new StringBuilder(CONTENT_RULE).append('\n');
-        b.append("entry\t").append(entry).append('\n').append("python\t").append(python).append('\n');
+        b.append("entry\t").append(entry).append('\n').append("python\t").append(python == null ? "" : python).append('\n');
         List<String> deps = new ArrayList<>();
         for (String d : dependencies) {
             String[] nv = d.split("==", 2);
@@ -211,11 +212,12 @@ public final class Packager {
     static byte[] descriptor(PackagePlan plan, Map<String, String> files, String generator) {
         StringBuilder b = new StringBuilder("{\n");
         field(b, "schema", ExecutionPackage.EXTERNAL_SCHEMA);
-        field(b, "version", "1.0.0");
+        // 1.0.0 como sempre; 1.1.0 so quando o pacote nao declara Python ou pede uma versao exata (so existem na 1.1)
+        field(b, "version", ExecutionPackage.descriptorVersionFor(plan.python()));
         field(b, "name", plan.name());
         field(b, "packageVersion", plan.version());
         field(b, "entry", plan.entry());
-        field(b, "python", plan.python());
+        if (plan.python() != null) field(b, "python", plan.python());
         if (plan.dependencies().isEmpty()) {
             b.append("  \"dependencies\": [],\n");
         } else {

@@ -189,6 +189,21 @@ public enum ClientTheme {
         return Rgb.hex(dark ? "#ff7d95" : "#c0264a");
     }
 
+    /** {@code --nk-color-warning-text}: texto de aviso (nao impede nada). */
+    public Rgb warningText() {
+        return Rgb.hex(dark ? "#f5a86a" : "#9a4708");
+    }
+
+    /** {@code --nk-color-success-text}: texto de conclusao. */
+    public Rgb successText() {
+        return Rgb.hex(dark ? "#4ade80" : "#126f35");
+    }
+
+    /** {@code --nk-color-info-text}: rotulo de informacao. */
+    public Rgb infoText() {
+        return Rgb.hex(dark ? "#a9aaff" : "#4b4bc4");
+    }
+
     // ------------------------------------------------------------------ fundacao (foundation.css), em px logicos
 
     public static final int FONT_SIZE_XS = 12;

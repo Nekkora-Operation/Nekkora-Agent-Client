@@ -17,7 +17,13 @@ final class Io {
 
     /** Falha na pasta escolhida pela pessoa. */
     static ImportProblem target(IOException e, Path dir) {
-        return noSpace(e, dir) ? new ImportProblem(Code.NO_SPACE) : new ImportProblem(Code.WRITE_FAILED);
+        if (noSpace(e, dir)) return new ImportProblem(Code.NO_SPACE);
+        String m = (e.getMessage() + " " + (e instanceof java.nio.file.FileSystemException f ? f.getReason() : "")).toLowerCase(Locale.ROOT);
+        if (m.contains("another process") || m.contains("outro processo") || m.contains("being used") || m.contains("locked")) return new ImportProblem(Code.TARGET_LOCKED);
+        if (e instanceof java.nio.file.AccessDeniedException || m.contains("access is denied") || m.contains("acesso negado") || m.contains("permission")) {
+            return new ImportProblem(Code.WRITE_DENIED);
+        }
+        return new ImportProblem(Code.WRITE_FAILED);
     }
 
     static boolean noSpace(IOException e, Path dir) {

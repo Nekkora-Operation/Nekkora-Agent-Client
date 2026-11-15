@@ -120,6 +120,9 @@ class ThemeTokensTest {
             assertEquals(resolved(modo, paleta, "--nk-color-surface-hover", t), t.surfaceHover().toHex(), t + " surface-hover");
             assertEquals(resolved(modo, paleta, "--nk-color-accent-soft", t), t.accentSoft().toHex(), t + " accent-soft");
             assertEquals(resolved(modo, paleta, "--nk-color-danger-text", t), t.dangerText().toHex(), t + " danger-text");
+            assertEquals(status(css, modo, paleta, "warning"), t.warningText().toHex(), t + " warning-text");
+            assertEquals(status(css, modo, paleta, "success"), t.successText().toHex(), t + " success-text");
+            assertEquals(status(css, modo, paleta, "info"), t.infoText().toHex(), t + " info-text");
             // botao secundario: superficie, hover e rotulo; o contorno e transparente a N%, pintado sobre a superficie do botao
             assertEquals(resolved(modo, paleta, "--nk-button-secondary-bg", t), t.buttonSecondaryBg().toHex(), t + " button-secondary-bg");
             assertEquals(resolved(modo, paleta, "--nk-button-secondary-bg-hover", t), t.buttonSecondaryBgHover().toHex(), t + " button-secondary-bg-hover");
@@ -148,6 +151,28 @@ class ThemeTokensTest {
             }
         }
         throw new AssertionError("bloco de modo de " + id);
+    }
+
+    /**
+     * {@code --nk-color-<nome>-text}: o do tema, senao o do modo, senao o da raiz; {@code var(--x)} aponta para a cor-base, que
+     * num tema escuro vem da raiz do arquivo.
+     */
+    static String status(String css, Map<String, String> modo, Map<String, String> paleta, String name) {
+        String token = "--nk-color-" + name + "-text";
+        String v = paleta.getOrDefault(token, modo.getOrDefault(token, root(css, token)));
+        assertFalse(v == null, token);
+        Matcher var = Pattern.compile("^var\\((--nk-[a-z0-9-]+)\\)$").matcher(v.trim());
+        if (var.matches()) {
+            v = paleta.getOrDefault(var.group(1), root(css, var.group(1)));
+            assertFalse(v == null, var.group(1));
+        }
+        return v.trim().toLowerCase();
+    }
+
+    /** A primeira declaracao do token no arquivo (o bloco da raiz). */
+    private static String root(String css, String token) {
+        Matcher m = Pattern.compile(Pattern.quote(token) + ":\\s*([^;]+);").matcher(css);
+        return m.find() ? m.group(1) : null;
     }
 
     /** O valor do tema (paleta) prevalece sobre o do modo, como na cascata do CSS (a paleta vem depois no arquivo). */
@@ -213,6 +238,9 @@ class ThemeTokensTest {
             assertTrue(Rgb.contrast(t.text(), t.bg()) >= 7.0, t + " texto sobre o fundo");
             assertTrue(Rgb.contrast(t.textSecondary(), t.bg()) >= 4.5, t + " texto secundario (aguardando, cancelar)");
             assertTrue(Rgb.contrast(t.dangerText(), t.bg()) >= 4.5, t + " mensagem de erro");
+            assertTrue(Rgb.contrast(t.warningText(), t.bg()) >= 4.5, t + " mensagem de aviso");
+            assertTrue(Rgb.contrast(t.successText(), t.bg()) >= 4.5, t + " mensagem de conclusao");
+            assertTrue(Rgb.contrast(t.infoText(), t.bg()) >= 4.5, t + " rotulo de informacao");
             assertTrue(Rgb.contrast(t.textInverse(), t.accent()) >= 4.5, t + " rotulo do Entrar");
             assertTrue(Rgb.contrast(t.textInverse(), t.accentHover()) >= 4.5, t + " rotulo do Entrar (hover)");
             assertTrue(Rgb.contrast(t.textInverse(), t.accentActive()) >= 4.5, t + " rotulo do Entrar (pressionado)");

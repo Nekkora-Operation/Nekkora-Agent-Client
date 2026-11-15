@@ -101,7 +101,9 @@ public final class NavText {
 
     /** A faixa de Python e as dependencias que o pacote DECLARA (o requisito real, como esta no pacote). */
     public static String pythonRequirement(String requirement, java.util.List<String> dependencies) {
-        return "Python " + requirement + (dependencies.isEmpty() ? "" : " com " + String.join(", ", dependencies));
+        // sem requisito: o autor nao declarou restricao de Python (nao e promessa de que qualquer Python serve)
+        String python = requirement == null || requirement.isBlank() ? "um Python (o pacote não declara restrição de versão)" : "Python " + requirement;
+        return python + (dependencies.isEmpty() ? "" : " com " + String.join(", ", dependencies));
     }
 
     public static String pythonNoneCompatible(String requirement, java.util.List<String> dependencies) {
@@ -289,8 +291,32 @@ public final class NavText {
     public static final String GENERATE_BROWSE_TITLE = "Escolher a pasta do projeto";
     public static final String GENERATE_ENTRY = "Arquivo de entrada";
     public static final String GENERATE_NAME = "Nome da automação";
-    public static final String GENERATE_VERSION = "Versão declarada no pacote (x.y.z)";
-    public static final String GENERATE_PYTHON = "Python exigido (por exemplo >=3.10,<3.14)";
+    public static final String GENERATE_VERSION = "Versão declarada do pacote (x.y.z)";
+    public static final String GENERATE_PYTHON = "Requisito de Python (opcional)";
+    public static final String GENERATE_PYTHON_NONE = "Sem restrição de Python declarada. O ambiente ainda será conferido na execução.";
+    public static final String GENERATE_PYTHON_EXAMPLES = "Exemplos: 3.12 (qualquer 3.12.x), 3.12.0 (só essa versão) ou >=3.10,<3.14. Em branco: sem restrição.";
+    public static final String GENERATE_PYTHON_INVALID = "Requisito não entendido. Use, por exemplo, 3.12 (qualquer 3.12.x), 3.12.0 (só essa versão) ou "
+            + ">=3.10,<3.14 — ou apague o campo para não declarar restrição.";
+    public static final String GENERATE_PYTHON_FROM_MANIFEST = "Requisito lido do manifesto da pasta (nekkora-external.json). Você pode revisar ou apagar.";
+
+    public static String generatePythonFrom(String source) {
+        return "Requisito lido de " + source + ". Você pode revisar ou apagar.";
+    }
+
+    public static String generatePythonUnsupported(String declared) {
+        return "O projeto declara um requisito de Python que o pacote não consegue representar (" + declared + "). O campo ficou em branco: informe um "
+                + "requisito equivalente ou gere sem restrição declarada.";
+    }
+
+    /** A interpretacao do que foi digitado, antes de gerar. */
+    public static String generatePythonReading(com.nekkora.client.pack.Workshop.PythonReading r) {
+        return "Interpretação: " + r.meaning() + ". No manifesto: " + r.text();
+    }
+
+    /** O codigo de suporte, numa linha a parte da frase. */
+    public static String supportCode(String code) {
+        return "Código de suporte: " + code;
+    }
     public static final String GENERATE_DEPENDENCIES = "Dependências, uma por linha (nome==versão)";
     public static final String GENERATE_DEPENDENCIES_CONFIRM = "Conferi as dependências acima";
     public static final String GENERATE_COMPOSITION = "Arquivos do pacote e detalhes técnicos";
@@ -305,7 +331,11 @@ public final class NavText {
     public static final String GENERATE_SAVE_TITLE = "Salvar o pacote como";
     public static final String GENERATE_REPLACE = "Substituir";
     public static final String GENERATE_NOT_REPLACED = "O arquivo que já existia não foi alterado. Escolha outro nome ou confirme a substituição.";
-    public static final String GENERATED = "Pacote gerado. Envie este arquivo pela Platform para cadastrar ou publicar a automação.";
+    public static final String GENERATED = "Pacote gerado";
+    public static final String GENERATED_PATH = "Arquivo do pacote gerado";
+    public static final String GENERATED_NEXT = "Para cadastrar ou publicar a automação, envie este arquivo pela Platform. Nada foi enviado.";
+    public static final String GENERATING = "Gerando pacote…";
+    public static final String GENERATE_CHECKING = "Conferindo os campos…";
     public static final String GENERATE_REVEAL = "Abrir pasta do arquivo";
 
     public static String generateReplace(String path) {
@@ -326,7 +356,7 @@ public final class NavText {
     public static String generateSummary(com.nekkora.client.pack.Workshop.PackageSummary s) {
         String deps = s.dependencies().isEmpty() ? "nenhuma declarada" : String.join(", ", s.dependencies());
         return "Resumo: nome " + s.name() + " · entrada " + s.entry() + " · versão declarada no pacote " + s.version()
-                + " (não reservada nem publicada na Platform) · Python " + (s.python() == null || s.python().isBlank() ? "não informado" : s.python())
+                + " (não reservada nem publicada na Platform) · Python: " + com.nekkora.client.pack.Workshop.pythonMeaning(s.python())
                 + " · dependências: " + deps + " · " + s.included().size() + (s.included().size() == 1 ? " arquivo incluído" : " arquivos incluídos") + ", "
                 + s.excluded().size() + " fora (veja em opções avançadas).";
     }

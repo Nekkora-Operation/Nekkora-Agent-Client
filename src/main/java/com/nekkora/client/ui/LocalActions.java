@@ -587,11 +587,7 @@ final class LocalActions implements ContextView.Actions {
 
             @Override
             public void generate() {
-                String suggested = generateForm == null ? "pacote.zip" : NavText.generateFileName(generateForm.values().name(), generateForm.values().version());
-                String destination = chooseSave(suggested);
-                if (destination != null) {
-                    generateTo(destination);
-                }
+                requestGenerate();
             }
 
             @Override
@@ -702,6 +698,64 @@ final class LocalActions implements ContextView.Actions {
         });
     }
 
+    /**
+     * "Gerar pacote": confere TODOS os campos antes de abrir o "Salvar como". Com um campo a corrigir, o seletor de destino
+     * nem abre: a frase aparece junto do campo, e os campos ficam como estao. Desistir no seletor nao mostra sucesso nem
+     * erro: o formulario continua como estava.
+     */
+    void requestGenerate() {
+        GenerateForm f = generateForm;
+        Workshop.Draft draft = generateDraft;
+        if (f == null || draft == null || !f.usable() || f.done() || f.busy()) {
+            return;
+        }
+        f.commit();
+        GenerateForm.Values v = f.values();
+        if (v.entry().isEmpty() || v.name().isEmpty()) {
+            f.setError(NavText.GENERATE_NEEDS);
+            return;
+        }
+        if (f.pythonInvalid()) {
+            return; // o campo ja diz o que corrigir
+        }
+        generateTurn++; // um resumo pedido antes nao mexe mais na tela
+        f.setBusy(true, NavText.GENERATE_CHECKING);
+        background.execute(() -> {
+            Workshop.Refused refused = null;
+            String failed = null;
+            try {
+                workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
+            } catch (Workshop.Refused r) {
+                refused = r;
+            } catch (RuntimeException | LinkageError e) {
+                failed = NavText.GENERATE_FAILED;
+            }
+            Workshop.Refused why = refused;
+            String broke = failed;
+            SwingUtilities.invokeLater(() -> {
+                if (generateForm != f) {
+                    return; // o formulario fechou
+                }
+                f.setBusy(false, null);
+                if (generateDraft != draft) {
+                    return;
+                }
+                if (why != null) {
+                    f.showProblem(why);
+                    return;
+                }
+                if (broke != null) {
+                    f.setError(broke);
+                    return;
+                }
+                String destination = chooseSave(NavText.generateFileName(v.name(), v.version()));
+                if (destination != null) {
+                    generateTo(destination);
+                }
+            });
+        });
+    }
+
     /** Refaz o resumo com as escolhas atuais. So leitura do retrato: nada e gravado. */
     void refreshSummary() {
         GenerateForm f = generateForm;
@@ -717,24 +771,23 @@ final class LocalActions implements ContextView.Actions {
         long mine = ++generateTurn;
         background.execute(() -> {
             Workshop.PackageSummary summary = null;
-            String refused = null;
+            Workshop.Refused refused = null;
             try {
                 summary = workshop.summary(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed());
             } catch (Workshop.Refused r) {
-                refused = r.getMessage();
+                refused = r;
             } catch (RuntimeException | LinkageError e) {
-                refused = NavText.GENERATE_FAILED;
+                refused = new Workshop.Refused(NavText.GENERATE_FAILED);
             }
             Workshop.PackageSummary done = summary;
-            String why = refused;
+            Workshop.Refused why = refused;
             SwingUtilities.invokeLater(() -> {
-                if (generateForm != f || generateTurn != mine || generateDraft != draft) {
+                if (generateForm != f || generateTurn != mine || generateDraft != draft || f.busy()) {
                     return;
                 }
                 if (done == null) {
                     f.clearSummary();
-                    f.setError(why);
-                    f.setAdvancedOpen(true); // o que falta informar fica na secao avancada
+                    f.showProblem(why); // junto do campo a corrigir (a secao avancada abre se o campo e dela)
                 } else {
                     f.showSummary(done);
                 }
@@ -749,8 +802,8 @@ final class LocalActions implements ContextView.Actions {
     void generateTo(String destination) {
         GenerateForm f = generateForm;
         Workshop.Draft draft = generateDraft;
-        if (f == null || draft == null || !f.usable() || f.done()) {
-            return;
+        if (f == null || draft == null || !f.usable() || f.done() || f.busy()) {
+            return; // inclusive um segundo pedido enquanto o primeiro corre: so uma geracao por vez
         }
         GenerateForm.Values v = f.values();
         if (v.entry().isEmpty()) {
@@ -760,35 +813,36 @@ final class LocalActions implements ContextView.Actions {
         boolean overwrite = false;
         if (workshop.exists(destination)) {
             if (!confirmOverwrite.test(destination)) {
-                f.setError(NavText.GENERATE_NOT_REPLACED);
+                f.setInfo(NavText.GENERATE_NOT_REPLACED); // decisao da pessoa, nao uma falha
                 return;
             }
             overwrite = true;
         }
         boolean replace = overwrite;
-        long mine = ++generateTurn;
+        generateTurn++; // um resumo pedido antes nao mexe mais na tela
         generateCancelled.set(false);
-        f.setBusy(true);
+        f.setBusy(true, NavText.GENERATING);
         background.execute(() -> {
             Workshop.Generated generated = null;
-            String refused = null;
+            Workshop.Refused refused = null;
             try {
                 generated = workshop.generate(draft, v.name(), v.version(), v.entry(), v.python(), v.dependencies(), v.dependenciesConfirmed(), destination,
                         replace, generateCancelled::get);
             } catch (Workshop.Refused r) {
-                refused = r.getMessage();
+                refused = r;
             } catch (RuntimeException | LinkageError e) {
-                refused = NavText.GENERATE_FAILED;
+                refused = new Workshop.Refused(NavText.GENERATE_FAILED);
             }
             Workshop.Generated done = generated;
-            String why = refused;
+            Workshop.Refused why = refused;
             SwingUtilities.invokeLater(() -> {
-                if (generateForm != f || generateTurn != mine) {
+                if (generateForm != f) {
                     return; // formulario fechado no meio: o nucleo ja apagou o temporario
                 }
+                // toda geracao termina num estado visivel: o andamento acaba em "Pacote gerado" ou no motivo da falha
                 if (done == null) {
-                    f.setBusy(false);
-                    f.setError(why);
+                    f.setBusy(false, null);
+                    f.showProblem(why);
                     return;
                 }
                 generatedPath = done.path();
@@ -937,24 +991,7 @@ final class LocalActions implements ContextView.Actions {
         JDialog d = new JDialog(host.frame(), NavText.RUN_TITLE, false);
         d.setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
         // em tela pequena ou escala alta (150%, 200%) a preparacao e mais alta que a area util: ela rola, em vez de sair da tela
-        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(f, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
-                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setBorder(null);
-        scroll.getVerticalScrollBar().setUnitIncrement(24);
-        d.setContentPane(scroll);
-        // quem navega pelo teclado ve o que tem o foco: a rolagem acompanha
-        java.beans.PropertyChangeListener follow = e -> {
-            if (e.getNewValue() instanceof javax.swing.JComponent c && SwingUtilities.isDescendingFrom(c, f)) {
-                c.scrollRectToVisible(new java.awt.Rectangle(0, 0, c.getWidth(), c.getHeight()));
-            }
-        };
-        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner", follow);
-        d.addWindowListener(new java.awt.event.WindowAdapter() {
-            @Override
-            public void windowClosed(java.awt.event.WindowEvent e) {
-                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", follow);
-            }
-        });
+        d.setContentPane(scrollable(d, f));
         d.pack();
         d.setLocationRelativeTo(host.frame());
         runDialog = d;
@@ -1349,7 +1386,14 @@ final class LocalActions implements ContextView.Actions {
      * fora dela: se o conteudo nao couber, a janela fica com a altura da tela e o conteudo rola.
      */
     private void fitRunDialog() {
-        JDialog d = runDialog;
+        fit(runDialog);
+    }
+
+    /**
+     * Qualquer janela de formulario no tamanho do conteudo, mas nunca maior que a area util da tela nem fora dela: se o
+     * conteudo nao couber (tela pequena, escala de 150% ou 200%), a janela fica com a altura da tela e o conteudo rola.
+     */
+    private void fit(JDialog d) {
         if (d == null) {
             return;
         }
@@ -1409,23 +1453,55 @@ final class LocalActions implements ContextView.Actions {
         close();
         JDialog d = new JDialog(host.frame(), title, modal);
         d.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
-        d.setContentPane(content);
+        // Editar, Gerar pacote novo e Renomear tambem cabem na tela em escala alta: o conteudo rola, em vez de sair da tela
+        d.setContentPane(scrollable(d, content));
         d.pack();
         d.setLocationRelativeTo(host.frame());
-        if (onDispose != null) {
-            d.addWindowListener(new java.awt.event.WindowAdapter() {
-                @Override
-                public void windowClosed(java.awt.event.WindowEvent e) {
+        fit(d);
+        // o formulario avisa quando muda de altura (secao aberta, mensagem nova): a janela acompanha, dentro da tela
+        content.addPropertyChangeListener("conteudo", e -> SwingUtilities.invokeLater(() -> {
+            if (dialog == d && d.isDisplayable()) {
+                fit(d);
+            }
+        }));
+        d.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                if (onDispose != null) {
                     onDispose.run();
                 }
-            });
-        }
+            }
+        });
         dialog = d;
         form = content;
         if (ready != null) {
             ready.run();
         }
         d.setVisible(true);
+    }
+
+    /**
+     * O conteudo de uma janela de formulario dentro de uma rolagem vertical (nunca horizontal), com a rolagem acompanhando o
+     * foco do teclado: quem navega por Tab ve o campo e o botao em que esta.
+     */
+    private static javax.swing.JScrollPane scrollable(JDialog d, JPanel content) {
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(content, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        java.beans.PropertyChangeListener follow = e -> {
+            if (e.getNewValue() instanceof javax.swing.JComponent c && SwingUtilities.isDescendingFrom(c, content)) {
+                c.scrollRectToVisible(new java.awt.Rectangle(0, 0, c.getWidth(), c.getHeight()));
+            }
+        };
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner", follow);
+        d.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removePropertyChangeListener("focusOwner", follow);
+            }
+        });
+        return scroll;
     }
 
     /**
