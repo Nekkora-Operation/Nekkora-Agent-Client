@@ -136,10 +136,92 @@ class RemoteWorkTest {
         assertTrue(runner.current().isEmpty(), "a tela da execucao local nao ve a execucao gerenciada");
         assertTrue(Files.isDirectory(data.resolve("remota").resolve("execucoes").resolve(run)));
         // fim: o codigo da tentativa e apagado; a saida fica
-        work.discard(job.attemptId());
+        work.discard(job.attemptId(), run);
         assertFalse(Files.exists(Path.of(job.zip())));
         assertFalse(Files.exists(Path.of(job.dir()).resolve("pacote")));
         assertTrue(Files.exists(out));
+    }
+
+    @Test
+    void aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro() throws Exception {
+        RemoteMachine.Job job = job(SLOW, List.of());
+        String run = work.start(job);
+        assertEquals("RUNNING", work.progress(run).orElseThrow().state());
+        // o aplicativo "cai" (o primeiro motor nao e encerrado) e abre de novo: outro motor sobre a MESMA pasta de dados
+        Workshop workshop = new Workshop(data);
+        SessionProbe session = () -> new SessionProbe.Session(true, 1, false, null);
+        RunController reopened = new RunController(new RunStore(RunStore.defaultRoot(data), AtomicWriter.DEFAULT),
+                new ApprovalLedger(ApprovalLedger.defaultFile(data), AtomicWriter.DEFAULT), session, Clock.systemUTC(), data);
+        Runner second = new Runner(workshop.packages(), reopened);
+        second.enableManaged(data.resolve("remota"));
+        second.reconcile();
+        RemoteWork again = new RemoteWork(second);
+        try {
+            // a execucao que estava rodando e reconhecida e ocupa a vaga: nada e lancado de novo
+            assertEquals("RUNNING", again.progress(run).orElseThrow().state());
+            assertTrue(again.busy());
+            assertEquals("BUSY", assertThrows(RemoteMachine.WorkRefused.class, () -> again.start(job(OK, List.of()))).reason());
+            try (java.util.stream.Stream<Path> s = Files.list(data.resolve("remota").resolve("execucoes"))) {
+                assertEquals(1, s.count(), "uma execucao so: a interrompida nao foi duplicada");
+            }
+            // a varredura de sobras nao mexe em nada com uma execucao em andamento
+            assertEquals(0, again.sweep(null));
+            assertTrue(Files.exists(Path.of(job.zip())));
+            // quem pediu manda parar: o processo adotado e encerrado e o fim e informado
+            again.cancel(run);
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(60).toNanos();
+            while ("RUNNING".equals(again.progress(run).orElseThrow().state()) && System.nanoTime() < deadline) {
+                Thread.sleep(100);
+            }
+            // o processo parou. Neste teste o primeiro motor continua vivo (numa queda de verdade ele nao existiria) e pode gravar
+            // o fim antes do segundo, como "falhou" (processo encerrado); o que importa aqui: terminou, e nao como sucesso
+            String end = again.progress(run).orElseThrow().state();
+            assertTrue(List.of("CANCELLED", "FAILED", "UNKNOWN").contains(end), end);
+            assertFalse(again.busy());
+        } finally {
+            second.close();
+        }
+    }
+
+    @Test
+    void limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado() throws Exception {
+        RemoteMachine.Job job = job(OK, List.of());
+        String run = work.start(job);
+        assertEquals("SUCCEEDED", waitEnd(run).state());
+        Path dir = Path.of(job.dir());
+        Path copy = data.resolve("remota").resolve("execucoes").resolve(run).resolve("pacote");
+        Path out = dir.resolve("saida").resolve(run).resolve("resultado.txt");
+        assertTrue(Files.isDirectory(copy), "a copia que foi executada");
+        // fim da tentativa: o ZIP, a copia extraida e a copia executada saem; o registro da execucao e a saida ficam
+        work.discard(job.attemptId(), run);
+        assertFalse(Files.exists(Path.of(job.zip())));
+        assertFalse(Files.exists(dir.resolve("pacote")));
+        assertFalse(Files.exists(copy));
+        assertTrue(Files.exists(copy.resolveSibling("estado.json")));
+        assertTrue(Files.exists(out), "a saida nao e apagada pela limpeza do codigo");
+        assertEquals("SUCCEEDED", work.progress(run).orElseThrow().state());
+        // a saida so sai quando quem conduz a tentativa pede (com o recebimento confirmado); a pasta vazia some junto
+        work.discardOutputs(job.attemptId());
+        assertFalse(Files.exists(dir));
+
+        // sobra de uma queda entre o desfecho e a limpeza: a varredura tira o codigo e deixa os resultados; a pendente fica intacta
+        RemoteMachine.Job leftover = job(OK, List.of());
+        Path old = Path.of(leftover.dir());
+        Files.createDirectories(old.resolve("pacote"));
+        Files.writeString(old.resolve("pacote").resolve("main.py"), "print(1)");
+        Files.createDirectories(old.resolve("saida").resolve("ex-" + "2".repeat(32)));
+        Files.writeString(old.resolve("saida").resolve("ex-" + "2".repeat(32)).resolve("nao-confirmado.txt"), "x");
+        RemoteMachine.Job pending = job(OK, List.of());
+        assertEquals(1, work.sweep(pending.attemptId()));
+        assertFalse(Files.exists(Path.of(leftover.zip())));
+        assertFalse(Files.exists(old.resolve("pacote")));
+        assertTrue(Files.exists(old.resolve("saida").resolve("ex-" + "2".repeat(32)).resolve("nao-confirmado.txt")), "resultado sem confirmacao fica");
+        assertTrue(Files.exists(Path.of(pending.zip())), "a tentativa pendente nao e tocada");
+        // pasta que nao e de tentativa (nome fora do formato) nao e tocada
+        Path foreign = Files.createDirectories(data.resolve("remota").resolve("tentativas").resolve("outra-coisa"));
+        Files.writeString(foreign.resolve("pacote.zip"), "x");
+        assertEquals(0, work.sweep(pending.attemptId()));
+        assertTrue(Files.exists(foreign.resolve("pacote.zip")));
     }
 
     @Test
