@@ -109,6 +109,11 @@ public final class RunController implements AutoCloseable {
     static final Duration SUSPENSION_GAP = Duration.ofSeconds(20);
 
     private final RunStore store;
+    /** O armazem e a raiz das execucoes gerenciadas (nulos = este controlador so executa o que a pessoa aprova aqui). */
+    private volatile RunStore managedStore;
+    private volatile Path managedRoot;
+    /** As execucoes gerenciadas iniciadas nesta abertura (antes de a pasta delas existir no armazem). */
+    private final java.util.Set<ExecutionId> managedIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final ApprovalLedger approvals;
     private final SessionProbe session;
     private final Clock clock;
@@ -191,6 +196,44 @@ public final class RunController implements AutoCloseable {
         return store;
     }
 
+    /**
+     * Liga as execucoes GERENCIADAS: as que nao nascem de uma aprovacao da pessoa neste aplicativo. Quem as pede responde pela
+     * autorizacao e entrega o pacote ja conferido e a pasta de saida, as duas dentro de {@code root}. Elas usam o MESMO
+     * controlador (uma execucao por vez no computador, qualquer que seja o tipo) e um armazem PROPRIO: nunca entram no
+     * historico das execucoes locais, e as aprovacoes locais nao valem para elas nem sao consultadas.
+     *
+     * @param managed armazem criado por {@link RunStore#managed}
+     * @param root a pasta, dentro da pasta de dados, onde ficam o pacote e a saida dessas execucoes
+     */
+    public void enableManaged(RunStore managed, Path root) {
+        if (!ExecutionRecord.MANAGED_ORIGIN.equals(managed.origin())) throw new IllegalArgumentException("armazem de outra origem");
+        this.managedRoot = root.toAbsolutePath().normalize();
+        this.managedStore = managed;
+    }
+
+    /** {@code true} se a execucao e gerenciada (esta no armazem proprio, ou foi iniciada assim nesta abertura). */
+    public boolean managed(ExecutionId id) {
+        RunStore m = managedStore;
+        return m != null && (managedIds.contains(id) || Files.isDirectory(m.dir(id), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+    }
+
+    private RunStore storeOf(ExecutionId id) {
+        return managed(id) ? managedStore : store;
+    }
+
+    private List<ExecutionRecord> allRecords() {
+        List<ExecutionRecord> all = new java.util.ArrayList<>(store.all());
+        RunStore m = managedStore;
+        if (m != null) all.addAll(m.all());
+        return all;
+    }
+
+    private void pruneAll() {
+        store.prune();
+        RunStore m = managedStore;
+        if (m != null) m.prune();
+    }
+
     /** A pasta em que a sonda do Python e gravada (para conferir o Python antes do inicio, com {@link PythonRuntime#probe}). */
     public Path probeDir() {
         return dataDir.resolve("sonda");
@@ -218,7 +261,7 @@ public final class RunController implements AutoCloseable {
      */
     public Optional<Path> runCopy(ExecutionId id) {
         try {
-            Path copy = store.dir(id).resolve("pacote");
+            Path copy = storeOf(id).dir(id).resolve("pacote");
             return Files.isDirectory(copy) ? Optional.of(copy) : Optional.empty();
         } catch (RuntimeException e) {
             return Optional.empty();
@@ -245,10 +288,28 @@ public final class RunController implements AutoCloseable {
      * {@code BLOCKED}, exceto quando outra execucao ja esta ativa: ai nenhum registro novo e criado).
      */
     public Snapshot start(Request req) throws ExecRefused {
+        return launch(req, false);
+    }
+
+    /**
+     * Confere tudo e lanca uma execucao GERENCIADA (ver {@link #enableManaged}). Difere de {@link #start} em tres pontos, e so
+     * neles: (1) a aprovacao local NAO e consultada - quem pede responde pela autorizacao; (2) a pasta de saida TEM de estar
+     * dentro da raiz gerenciada (e fora do pacote); (3) o registro vai para o armazem proprio. Todo o resto e igual: pacote
+     * reconferido, impressao igual a pedida, sessao utilizavel, Python compativel com as dependencias do pacote, copia
+     * executada, posse do processo, prazo, cancelamento e reconciliacao. Com outra execucao ativa (de qualquer tipo): recusa,
+     * sem registro.
+     */
+    public Snapshot startManaged(Request req) throws ExecRefused {
+        if (managedStore == null) throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
+        return launch(req, true);
+    }
+
+    private Snapshot launch(Request req, boolean managed) throws ExecRefused {
         synchronized (lock) {
             if (active != null) throw new ExecRefused(ErrorCode.EXEC_ALREADY_RUNNING);
             flushUnsaved();
             ExecutionId id = ExecutionId.random();
+            if (managed) managedIds.add(id);
             // o contexto entra no registro AGORA e nao muda mais
             ExecutionRecord r = ExecutionRecord.ready(id, req.context(), clock.instant());
             ExecutionPackage pkg;
@@ -259,7 +320,8 @@ public final class RunController implements AutoCloseable {
             }
             // a impressao digital conferida AGORA precisa ser a que a pessoa escolheu e aprovou
             if (!pkg.fingerprint().equals(req.context().fingerprint())) throw blocked(r, ErrorCode.EXEC_PACKAGE_CHANGED);
-            if (!approvals.approved(pkg)) throw blocked(r, ErrorCode.EXEC_NOT_APPROVED);
+            // a aprovacao local so vale (e so e consultada) para a execucao que a pessoa inicia aqui
+            if (!managed && !approvals.approved(pkg)) throw blocked(r, ErrorCode.EXEC_NOT_APPROVED);
             SessionProbe.Session s = session.probe();
             if (!s.usable()) throw blocked(r, s.problem());
             PythonRuntime.Probe probe;
@@ -271,20 +333,23 @@ public final class RunController implements AutoCloseable {
                 throw blocked(r, e.code());
             }
             Path outRoot = req.outputRoot().toAbsolutePath().normalize();
-            if (!Files.isDirectory(outRoot) || inside(outRoot, pkg.dir()) || inside(outRoot, dataDir) || inside(dataDir, outRoot)) {
+            boolean outputOk = managed
+                    ? Files.isDirectory(outRoot) && !inside(outRoot, pkg.dir()) && !outRoot.equals(managedRoot) && inside(outRoot, managedRoot)
+                    : Files.isDirectory(outRoot) && !inside(outRoot, pkg.dir()) && !inside(outRoot, dataDir) && !inside(dataDir, outRoot);
+            if (!outputOk) {
                 throw blocked(r, ErrorCode.EXEC_OUTPUT_INVALID);
             }
             // a partir daqui: STARTING (registro gravado antes de lancar: uma queda deixa rastro)
             r = r.moveTo(ExecutionState.STARTING, null, clock.instant());
-            store.save(r);
-            store.event(id, clock.instant(), "STARTING", Map.of("kind", pkg.kind().name(), "session", s.id()));
+            storeOf(r.id()).save(r);
+            storeOf(id).event(id, clock.instant(), "STARTING", Map.of("kind", pkg.kind().name(), "session", s.id()));
             Path copy;
             Path output = outRoot.resolve(id.value());
             try {
-                copy = Launch.snapshot(pkg, store.dir(id));
+                copy = Launch.snapshot(pkg, storeOf(id).dir(id));
                 Files.createDirectories(output);
                 // so para reconciliar depois de um reinicio; nunca vai ao registro
-                Files.writeString(store.dir(id).resolve(OUTPUT_REF), output.toString(), java.nio.charset.StandardCharsets.UTF_8);
+                Files.writeString(storeOf(id).dir(id).resolve(OUTPUT_REF), output.toString(), java.nio.charset.StandardCharsets.UTF_8);
             } catch (ExecRefused e) {
                 throw finish(r, ExecutionState.BLOCKED, e.code());
             } catch (IOException e) {
@@ -308,7 +373,7 @@ public final class RunController implements AutoCloseable {
             writeProcessRef(id, owner);
             r = r.withOwner(owner).moveTo(ExecutionState.RUNNING, null, clock.instant());
             Active a = new Active(r, p, output, req.timeout());
-            store.event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
+            storeOf(id).event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
             persist(a);
             drain(a, p.getInputStream(), "saida");
             drain(a, p.getErrorStream(), "erros");
@@ -365,7 +430,7 @@ public final class RunController implements AutoCloseable {
                 return CancelResult.REQUESTED;
             }
         }
-        Optional<ExecutionRecord> r = store.record(id);
+        Optional<ExecutionRecord> r = storeOf(id).record(id);
         if (r.isEmpty()) return CancelResult.UNKNOWN_EXECUTION;
         return r.get().state().terminal() ? CancelResult.ALREADY_ENDED : CancelResult.NOT_ACTIVE;
     }
@@ -373,8 +438,8 @@ public final class RunController implements AutoCloseable {
     private ExecRefused blocked(ExecutionRecord r, ErrorCode why) {
         ExecutionRecord b = r.moveTo(ExecutionState.BLOCKED, why, clock.instant());
         try {
-            store.save(b);
-            store.event(b.id(), clock.instant(), "BLOCKED", Map.of("code", why.code()));
+            storeOf(b.id()).save(b);
+            storeOf(b.id()).event(b.id(), clock.instant(), "BLOCKED", Map.of("code", why.code()));
         } catch (ExecRefused ignored) {
             // a recusa vale mesmo sem registro em disco
         }
@@ -386,8 +451,8 @@ public final class RunController implements AutoCloseable {
     private ExecRefused finish(ExecutionRecord r, ExecutionState to, ErrorCode why) {
         ExecutionRecord f = r.moveTo(to, why, clock.instant());
         try {
-            store.save(f);
-            store.event(f.id(), clock.instant(), to.name(), Map.of("code", why.code()));
+            storeOf(f.id()).save(f);
+            storeOf(f.id()).event(f.id(), clock.instant(), to.name(), Map.of("code", why.code()));
         } catch (ExecRefused ignored) {
             // idem
         }
@@ -424,7 +489,7 @@ public final class RunController implements AutoCloseable {
             long wall = clock.millis();
             if (wall - lastWall > SUSPENSION_GAP.toMillis() + tick.toMillis()) {
                 a.record = a.record.withSuspension();
-                store.event(a.record.id(), clock.instant(), "SUSPENSION_DETECTED", Map.of("gap_ms", wall - lastWall));
+                storeOf(a.record.id()).event(a.record.id(), clock.instant(), "SUSPENSION_DETECTED", Map.of("gap_ms", wall - lastWall));
                 persist(a);
             }
             lastWall = wall;
@@ -436,7 +501,7 @@ public final class RunController implements AutoCloseable {
                 if (now != locked) {
                     locked = now;
                     if (now) a.record = a.record.withLock();
-                    store.event(a.record.id(), clock.instant(), now ? "SESSION_LOCKED" : "SESSION_UNLOCKED", Map.of());
+                    storeOf(a.record.id()).event(a.record.id(), clock.instant(), now ? "SESSION_LOCKED" : "SESSION_UNLOCKED", Map.of());
                     persist(a);
                 }
             }
@@ -457,7 +522,7 @@ public final class RunController implements AutoCloseable {
         if (forced != null) {
             int killed = a.record.owner() == null ? 0 : a.record.owner().terminate(Duration.ofSeconds(10));
             if (a.process != null) a.process.destroyForcibly();
-            store.event(a.record.id(), clock.instant(), "TERMINATED", Map.of("processes", killed));
+            storeOf(a.record.id()).event(a.record.id(), clock.instant(), "TERMINATED", Map.of("processes", killed));
         }
         for (Thread t : a.drains) {
             try {
@@ -499,7 +564,7 @@ public final class RunController implements AutoCloseable {
             ExecutionRecord.CancelOutcome o = state == ExecutionState.CANCELLED ? ExecutionRecord.CancelOutcome.CONFIRMED
                     : ExecutionRecord.CancelOutcome.NOT_EFFECTIVE;
             end = end.withCancellation(end.cancellation().resolved(o));
-            store.event(end.id(), clock.instant(), "CANCEL_" + o.name(), Map.of("source", end.cancellation().source().name()));
+            storeOf(end.id()).event(end.id(), clock.instant(), "CANCEL_" + o.name(), Map.of("source", end.cancellation().source().name()));
         }
         a.record = end;
         persist(a);
@@ -510,12 +575,12 @@ public final class RunController implements AutoCloseable {
         f.put("signal", signal.name());
         f.put("output_bytes", a.bytes.get());
         if (code != null) f.put("code", code.code());
-        store.event(end.id(), clock.instant(), state.name(), f);
+        storeOf(end.id()).event(end.id(), clock.instant(), state.name(), f);
         synchronized (lock) {
             active = null;
             last = end;
         }
-        store.prune();
+        pruneAll();
         notifyListeners(endSnapshot(end));
         if (!saved) insistOnFinal(end);
     }
@@ -533,7 +598,7 @@ public final class RunController implements AutoCloseable {
             if (saveUnsaved(end.id())) return;
         }
         if (!unsaved.containsKey(end.id())) return;
-        store.event(end.id(), clock.instant(), "RECORD_SAVE_FAILED", Map.of("state", end.state().name(), "code", ErrorCode.EXEC_STORAGE_FAILED.code()));
+        storeOf(end.id()).event(end.id(), clock.instant(), "RECORD_SAVE_FAILED", Map.of("state", end.state().name(), "code", ErrorCode.EXEC_STORAGE_FAILED.code()));
         notifyListeners(endSnapshot(end));
     }
 
@@ -545,26 +610,26 @@ public final class RunController implements AutoCloseable {
     private void persist(Active a) {
         ExecutionRecord r = a.record;
         try {
-            store.save(r);
+            storeOf(r.id()).save(r);
         } catch (ExecRefused e) {
             if (a.saveFailures++ == 0) {
-                store.event(r.id(), clock.instant(), "RECORD_SAVE_DELAYED", Map.of("state", r.state().name(), "code", e.code().code()));
+                storeOf(r.id()).event(r.id(), clock.instant(), "RECORD_SAVE_DELAYED", Map.of("state", r.state().name(), "code", e.code().code()));
             }
             return;
         }
         if (a.saveFailures > 0) {
             a.saveFailures = 0;
-            store.event(r.id(), clock.instant(), "RECORD_SAVE_RECOVERED", Map.of("state", r.state().name()));
+            storeOf(r.id()).event(r.id(), clock.instant(), "RECORD_SAVE_RECOVERED", Map.of("state", r.state().name()));
         }
     }
 
     /** Grava um estado de execucao que nao esta ativa (reconciliacao); na falha, guarda para nova tentativa. */
     private void saveOrKeep(ExecutionRecord r) {
         try {
-            store.save(r);
+            storeOf(r.id()).save(r);
         } catch (ExecRefused e) {
             unsaved.put(r.id(), r);
-            store.event(r.id(), clock.instant(), "RECORD_SAVE_DELAYED", Map.of("state", r.state().name(), "code", e.code().code()));
+            storeOf(r.id()).event(r.id(), clock.instant(), "RECORD_SAVE_DELAYED", Map.of("state", r.state().name(), "code", e.code().code()));
         }
     }
 
@@ -573,12 +638,12 @@ public final class RunController implements AutoCloseable {
         ExecutionRecord r = unsaved.get(id);
         if (r == null) return true;
         try {
-            store.save(r);
+            storeOf(r.id()).save(r);
         } catch (ExecRefused e) {
             return false;
         }
         if (unsaved.remove(id, r)) {
-            store.event(id, clock.instant(), "RECORD_SAVE_RECOVERED", Map.of("state", r.state().name()));
+            storeOf(id).event(id, clock.instant(), "RECORD_SAVE_RECOVERED", Map.of("state", r.state().name()));
             ExecutionRecord l = last;
             if (l != null && l.id().equals(id)) notifyListeners(endSnapshot(l));
         }
@@ -592,7 +657,7 @@ public final class RunController implements AutoCloseable {
     /** Posse do processo num arquivo novo, sincronizado no disco; falha aqui so reduz o rastro (o evento RUNNING tem o PID). */
     private void writeProcessRef(ExecutionId id, ProcessOwner o) {
         String json = "{\"pid\": " + o.pid() + ", \"start\": " + o.startMillis() + ", \"executableDigest\": " + StrictJson.quote(o.executableDigest()) + "}\n";
-        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(store.dir(id).resolve(PROCESS_REF), java.nio.file.StandardOpenOption.CREATE_NEW,
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(storeOf(id).dir(id).resolve(PROCESS_REF), java.nio.file.StandardOpenOption.CREATE_NEW,
                 java.nio.file.StandardOpenOption.WRITE)) {
             java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             while (buf.hasRemaining()) ch.write(buf);
@@ -605,7 +670,7 @@ public final class RunController implements AutoCloseable {
     /** A posse gravada no lancamento, so se o arquivo for pequeno, completo e com os tres campos validos. */
     private Optional<ProcessOwner> processRef(ExecutionId id) {
         try {
-            Path f = store.dir(id).resolve(PROCESS_REF);
+            Path f = storeOf(id).dir(id).resolve(PROCESS_REF);
             if (!Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.size(f) > 1024) return Optional.empty();
             Map<String, Object> m = JsonReader.object(Files.readString(f, java.nio.charset.StandardCharsets.UTF_8));
             if (m.size() == 3 && m.get("pid") instanceof Long pid && pid > 0 && m.get("start") instanceof Long start && start >= 0
@@ -670,10 +735,10 @@ public final class RunController implements AutoCloseable {
     public int reconcile() {
         flushUnsaved();
         int n = 0;
-        for (ExecutionRecord r : store.all()) {
+        for (ExecutionRecord r : allRecords()) {
             if (r.state().terminal() || unsaved.containsKey(r.id()) || isActive(r.id())) continue;
             n++;
-            store.event(r.id(), clock.instant(), "RECONCILE", Map.of("state", r.state().name()));
+            storeOf(r.id()).event(r.id(), clock.instant(), "RECONCILE", Map.of("state", r.state().name()));
             if (r.state() == ExecutionState.STARTING) {
                 Optional<ProcessOwner> launched = processRef(r.id());
                 if (launched.isPresent()) {
@@ -691,7 +756,7 @@ public final class RunController implements AutoCloseable {
                         Thread t = new Thread(() -> watch(a), "nekkora-client-execucao");
                         t.setDaemon(true);
                         t.start();
-                        store.event(r.id(), clock.instant(), "ADOPTED", Map.of("pid", r.owner().pid()));
+                        storeOf(r.id()).event(r.id(), clock.instant(), "ADOPTED", Map.of("pid", r.owner().pid()));
                         continue;
                     }
                 }
@@ -699,7 +764,7 @@ public final class RunController implements AutoCloseable {
             ExecutionState to = r.state() == ExecutionState.READY ? ExecutionState.BLOCKED : ExecutionState.OUTCOME_UNKNOWN;
             ExecutionRecord closed = r.moveTo(to, ErrorCode.EXEC_AGENT_RESTARTED, clock.instant());
             saveOrKeep(closed);
-            store.event(r.id(), clock.instant(), to.name(), Map.of("code", ErrorCode.EXEC_AGENT_RESTARTED.code()));
+            storeOf(r.id()).event(r.id(), clock.instant(), to.name(), Map.of("code", ErrorCode.EXEC_AGENT_RESTARTED.code()));
             last = closed;
         }
         return n;
@@ -713,7 +778,7 @@ public final class RunController implements AutoCloseable {
 
     /** A pasta de saida anotada no inicio. */
     private Path outputOf(ExecutionRecord r) {
-        return store.output(r.id()).orElseGet(() -> store.dir(r.id()).resolve("sem-saida"));
+        return storeOf(r.id()).output(r.id()).orElseGet(() -> storeOf(r.id()).dir(r.id()).resolve("sem-saida"));
     }
 
     /** Grava o pedido de cancelamento como PENDING (uma vez). */
@@ -721,7 +786,7 @@ public final class RunController implements AutoCloseable {
         ExecutionRecord.Cancellation c = a.cancelRequest;
         if (c == null || a.record.cancellation() != null) return;
         a.record = a.record.withCancellation(c);
-        store.event(a.record.id(), clock.instant(), "CANCEL_REQUESTED", Map.of("source", c.source().name()));
+        storeOf(a.record.id()).event(a.record.id(), clock.instant(), "CANCEL_REQUESTED", Map.of("source", c.source().name()));
         persist(a);
         notifyListeners(new Snapshot(a.record, elapsed(a), true, a.saveFailures == 0));
     }
