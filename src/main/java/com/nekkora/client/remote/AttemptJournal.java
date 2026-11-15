@@ -49,7 +49,9 @@ final class AttemptJournal {
          */
         STARTING,
         /** Em execucao, com o identificador da execucao gravado. */
-        RUNNING
+        RUNNING,
+        /** O desfecho ja foi aceito pela Platform; falta enviar os arquivos de resultado e fechar o envio. */
+        RESULTS
     }
 
     /**
@@ -73,7 +75,7 @@ final class AttemptJournal {
                     || !HEX.matcher(packageFingerprint).matches() || packageFingerprintRule.isBlank() || packageFingerprintRule.length() > 100
                     || !TOKEN.matcher(token).matches() || dependencies.size() > MAX_DEPENDENCIES
                     || dependencies.stream().anyMatch(d -> d.isBlank() || d.length() > 512) || phase == null
-                    || (run != null && !RUN.matcher(run).matches()) || (phase == Phase.RUNNING) != (run != null)
+                    || (run != null && !RUN.matcher(run).matches()) || (phase == Phase.RUNNING || phase == Phase.RESULTS) != (run != null)
                     || (report != null && !WORD.matcher(report).matches()) || (reason != null && !WORD.matcher(reason).matches())
                     || (reason != null && report == null) || (exitCode != null && report == null)) {
                 throw new IllegalArgumentException("tentativa");
@@ -102,6 +104,11 @@ final class AttemptJournal {
 
         Entry running(String runId) {
             return with(acked, Phase.RUNNING, runId, report, reason, exitCode);
+        }
+
+        /** O desfecho foi aceito pela Platform: daqui em diante so falta o envio dos resultados. */
+        Entry results() {
+            return with(acked, Phase.RESULTS, run, report, reason, exitCode);
         }
 
         /** O desfecho a informar. {@code why}: so numa recusa. {@code exit}: so quando o processo terminou com um codigo. */
