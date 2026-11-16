@@ -1316,6 +1316,8 @@ public final class RemoteMachine implements AutoCloseable {
                     ledger.drop(a.attemptId());
                 } else {
                     ledger.said(a.attemptId(), now);
+                    // o que a tela diz deste computador mudou (de finalizando para ocupacao incerta, ou o contrario)
+                    changed();
                 }
                 if (ABSENT.equals(now)) {
                     // a limpeza que esperava os processos: o codigo sai; a pasta de saida so se nada dela esta pendente de envio
