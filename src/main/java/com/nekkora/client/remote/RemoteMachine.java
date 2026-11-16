@@ -752,7 +752,7 @@ public final class RemoteMachine implements AutoCloseable {
     private String sendResults(String credential, LossLedger.Entry e, Work w, long until) throws Refused {
         java.util.Map<String, String> confirmed = new java.util.LinkedHashMap<>();
         java.util.Map<String, String> done = heldResultsDone.computeIfAbsent(e.attemptId(), k -> new java.util.HashMap<>());
-        boolean uploaded = false;
+        boolean sentOne = false;
         List<ResultFile> files;
         try {
             files = w == null ? List.of() : w.results(e.attemptId(), e.run());
@@ -778,13 +778,13 @@ public final class RemoteMachine implements AutoCloseable {
                 total += f.size();
                 continue;
             }
-            if (uploaded && clock.millis() >= until) {
+            if (sentOne && clock.millis() >= until) {
                 // pelo menos um arquivo por consulta; passou da fatia, devolve a vez
                 return IN_PROGRESS;
             }
             try {
                 String sha = channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file()));
-                uploaded = true;
+                sentOne = true;
                 confirmed.put(f.file(), sha);
                 done.put(f.file(), sha);
                 sent++;
