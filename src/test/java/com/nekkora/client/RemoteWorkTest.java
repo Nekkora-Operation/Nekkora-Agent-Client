@@ -270,9 +270,15 @@ class RemoteWorkTest {
         assertEquals(now.get(), held.get(0).sinceEpochSecond());
         assertEquals(now.get() + Runner.MANAGED_OUTPUT_RETENTION.toSeconds(), held.get(0).removeAtEpochSecond());
         assertEquals(java.time.Duration.ofDays(7), Runner.MANAGED_OUTPUT_RETENTION);
-        // marcar de novo nao renova o prazo
+        // marcar de novo nao renova o prazo: so o MOTIVO muda (a pasta que estava sendo enviada passa a ter um impedimento,
+        // por exemplo); a data continua a da primeira marca
         now.addAndGet(3600);
         work.holdOutputs(job.attemptId(), "NOT_CONFIRMED");
+        assertEquals(now.get() - 3600, work.held(null).get(0).sinceEpochSecond());
+        assertEquals("NOT_CONFIRMED", work.held(null).get(0).reason());
+        work.holdOutputs(job.attemptId(), "motivo fora do formato");
+        assertEquals("NOT_CONFIRMED", work.held(null).get(0).reason());
+        work.holdOutputs(job.attemptId(), "OUT_OF_LIMIT");
         assertEquals(now.get() - 3600, work.held(null).get(0).sinceEpochSecond());
         assertEquals("OUT_OF_LIMIT", work.held(null).get(0).reason());
 

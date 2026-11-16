@@ -382,7 +382,8 @@ public final class Runner implements AutoCloseable {
 
     /**
      * Marca a pasta de saida de {@code key} como pendente, com o motivo: ela fica neste computador ate o prazo de guarda vencer.
-     * A marca e gravada uma vez (o prazo conta da primeira). Pasta de saida sem arquivo nenhum nao e pendencia: sai.
+     * O prazo conta da PRIMEIRA marca: marcar de novo so troca o motivo (a pasta que estava sendo enviada passa a ter um
+     * impedimento, por exemplo), nunca a data. Pasta de saida sem arquivo nenhum nao e pendencia: sai.
      */
     public void holdManagedOutputs(String key, String reason) {
         managedDir(key).ifPresent(dir -> {
@@ -390,7 +391,14 @@ public final class Runner implements AutoCloseable {
                 discardManagedOutputs(key);
                 return;
             }
-            mark(dir, reason);
+            String[] m = mark(dir, reason);
+            if (reason != null && reason.matches("[A-Z_]{1,40}") && !reason.equals(m[1])) {
+                try {
+                    Files.writeString(dir.resolve(HELD_MARK), m[0] + "\n" + reason + "\n", java.nio.charset.StandardCharsets.UTF_8);
+                } catch (java.io.IOException | RuntimeException e) {
+                    // fica o motivo anterior; a data nao muda
+                }
+            }
         });
     }
 

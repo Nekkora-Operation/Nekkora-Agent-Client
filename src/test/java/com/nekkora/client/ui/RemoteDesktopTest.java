@@ -421,8 +421,10 @@ class RemoteDesktopTest {
         Files.writeString(tmp.resolve("remota").resolve(MachineVault.RETENTION_FILE), "3");
         RemotePanel logs = openDialog();
         String pendingLogs = read(() -> logs.heldLogsNotice().text());
-        assertTrue(pendingLogs.startsWith("Registros pendentes neste computador: a Platform não confirmou o recebimento de toda a saída do processo de 1 execução remota."),
+        assertTrue(pendingLogs.startsWith("Registros pendentes neste computador: a Platform ainda não confirmou o recebimento de toda a saída do processo de 1 execução remota."),
                 pendingLogs);
+        // uma fila sem registro do motivo (sobra): nao ha novo envio, e isso e dito
+        assertTrue(pendingLogs.contains("A Platform não confirmou o recebimento, e não há novo envio."), pendingLogs);
         assertTrue(pendingLogs.contains("É removido deste computador a partir de 13/11/2026: é quando vence o prazo de guarda de 3 dias sem confirmação de recebimento."),
                 pendingLogs);
         assertFalse(pendingLogs.contains("conteudo protegido"), "a tela nao mostra conteudo de registro remoto");
@@ -439,8 +441,48 @@ class RemoteDesktopTest {
                 removeAt - 7 * 24 * 3600, removeAt));
         RemotePanel r = openDialog();
         String both = read(() -> r.heldNotice().text());
-        assertTrue(both.startsWith("Resultados pendentes neste computador: 3 arquivos (2 KB) de 2 execuções remotas. A Platform não confirmou o recebimento."), both);
+        assertTrue(both.startsWith("Resultados pendentes neste computador: 3 arquivos (2 KB) de 2 execuções remotas. A Platform não confirmou o recebimento, "
+                + "e não há novo envio."), both);
         assertTrue(both.contains("guardados em " + tmp.resolve("remota").resolve("tentativas") + " e são removidos deste computador a partir de 22/11/2026"), both);
+        assertEquals(RemoteText.DISABLE_WARNING, read(() -> r.disableWarningNotice().text()), "sem envio em andamento, o aviso de desabilitar e o de sempre");
+        edt(() -> window.closeRemote());
+
+        // uma pasta ainda sendo enviada e outra impedida pelo fim do vinculo: cada motivo e dito, e desabilitar avisa ANTES que o envio para
+        held.clear();
+        held.add(new RemoteMachine.Held("11111111-1111-4111-8111-111111111111", "SENDING", attempt + java.io.File.separator + "saida", 1, 2048,
+                removeAt - 7 * 24 * 3600, removeAt));
+        held.add(new RemoteMachine.Held("22222222-2222-4222-8222-222222222222", "LINK_ENDED",
+                tmp.resolve("remota").resolve("tentativas").resolve("22222222-2222-4222-8222-222222222222").resolve("saida").toString(), 1, 10, removeAt, removeAt + 86400));
+        RemotePanel t = openDialog();
+        String mixed = read(() -> t.heldNotice().text());
+        assertTrue(mixed.contains("O envio à Platform continua sendo tentado; o que ela confirmar sai deste computador."), mixed);
+        assertTrue(mixed.contains("Não podem mais ser enviados: o vínculo deste computador com a Platform foi encerrado, e nada é enviado sem ele."), mixed);
+        assertFalse(mixed.contains("não há novo envio"), mixed);
+        String warning = read(() -> t.disableWarningNotice().text());
+        assertEquals(RemoteText.DISABLE_WARNING_SENDING, warning);
+        assertTrue(warning.contains("depois de desabilitar eles NÃO poderão mais ser enviados"), warning);
+    }
+
+    /** Cada fim da entrega tem o seu texto; a recusa de desabilitar com execucao ativa diz o que fazer e o que nao muda. */
+    @Test
+    void osMotivosDaPendenciaEARecusaDeDesabilitarComExecucaoAtivaSaoDitosSemRodeio() {
+        assertEquals("O envio à Platform continua sendo tentado; o que ela confirmar sai deste computador. ", RemoteText.why(java.util.Set.of("SENDING")));
+        assertEquals("A Platform não recebeu todos: há arquivo acima do limite de envio, que só existe aqui. ", RemoteText.why(java.util.Set.of("OUT_OF_LIMIT")));
+        assertTrue(RemoteText.why(java.util.Set.of("NOT_AUTHORIZED")).startsWith("Não podem mais ser enviados: a Platform não reconhece mais a atribuição"));
+        for (String r : java.util.List.of("NOT_CONFIRMED", "CHANGED_AFTER_SEND")) {
+            assertEquals("A Platform não confirmou o recebimento, e não há novo envio. ", RemoteText.why(java.util.Set.of(r)));
+        }
+        String logs = RemoteText.heldLogs(2, java.util.Set.of("SENDING", "LINK_ENDED"), "23/11/2026", 7);
+        assertTrue(logs.contains("continua sendo tentado") && logs.contains("o vínculo deste computador com a Platform foi encerrado"), logs);
+        // nenhum texto de pendencia diz que algo foi entregue
+        for (String r : java.util.List.of("SENDING", "OUT_OF_LIMIT", "LINK_ENDED", "NOT_AUTHORIZED", "NOT_CONFIRMED")) {
+            String text = RemoteText.why(java.util.Set.of(r)).toLowerCase();
+            assertFalse(text.contains("entregue") || text.contains("recebido pela platform"), text);
+        }
+        String active = RemoteText.problem(com.nekkora.client.remote.MachineChannel.Problem.ATTEMPT_ACTIVE);
+        assertTrue(active.contains("Desabilitar agora a deixaria sem desfecho"), active);
+        assertTrue(active.contains("peça o cancelamento na Platform") && active.contains("\"Pausar recebimento\""), active);
+        assertTrue(active.endsWith("Nada foi alterado."), active);
     }
 
     /** O que ja foi removido pelo prazo nunca e dito como entregue: o texto diz o que saiu, quando, e o que a Platform sabe. */
@@ -455,7 +497,8 @@ class RemoteDesktopTest {
         assertTrue(pending.endsWith("A Platform ainda não foi avisada de tudo: o aviso é tentado de novo a cada hora, com este computador habilitado."), pending);
         String impossible = RemoteText.lost(2, 1, 0, 0, "23/11/2026", 2);
         assertTrue(impossible.contains("pela Platform: 1 arquivo de resultado de 2 execuções remotas. Última remoção"), impossible);
-        assertTrue(impossible.endsWith("Não foi possível avisar a Platform de tudo: ela não reconhece mais a atribuição dessas execuções."), impossible);
+        assertTrue(impossible.endsWith("Não foi possível avisar a Platform de tudo: o vínculo deste computador foi encerrado, ou ela não reconhece mais a "
+                + "atribuição dessas execuções."), impossible);
         for (String t : java.util.List.of(sent, pending, impossible)) {
             assertFalse(t.toLowerCase().contains("entregue à platform") || t.toLowerCase().contains("recebido pela platform"), t);
         }

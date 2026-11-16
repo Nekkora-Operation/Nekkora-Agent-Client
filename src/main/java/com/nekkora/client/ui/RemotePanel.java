@@ -292,7 +292,8 @@ final class RemotePanel extends JPanel {
         } else {
             long first = pending.stream().mapToLong(RemoteMachine.Held::removeAtEpochSecond).min().orElse(0);
             held.show(Notice.Kind.WARNING, RemoteText.held(pending.size(), pending.stream().mapToInt(RemoteMachine.Held::files).sum(),
-                    pending.stream().mapToLong(RemoteMachine.Held::bytes).sum(), pending.stream().anyMatch(h -> "OUT_OF_LIMIT".equals(h.reason())), day(first),
+                    pending.stream().mapToLong(RemoteMachine.Held::bytes).sum(),
+                    pending.stream().map(RemoteMachine.Held::reason).collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new)), day(first),
                     RemoteMachine.heldFolder(pending), keepDays));
         }
         java.util.List<RemoteMachine.HeldLogs> queues = machine.heldLogs();
@@ -300,6 +301,7 @@ final class RemotePanel extends JPanel {
             heldLogs.clear();
         } else {
             heldLogs.show(Notice.Kind.WARNING, RemoteText.heldLogs(queues.size(),
+                    queues.stream().map(RemoteMachine.HeldLogs::reason).collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new)),
                     day(queues.stream().mapToLong(RemoteMachine.HeldLogs::removeAtEpochSecond).min().orElse(0)), keepDays));
         }
         // o que ja foi removido pelo prazo nunca aparece como entregue: fica dito aqui, com o que a Platform sabe disso
@@ -323,7 +325,9 @@ final class RemotePanel extends JPanel {
         toggle.getAccessibleContext().setAccessibleName(toggle.getText());
         disable.setText(s == Status.ENDED ? RemoteText.REMOVE : RemoteText.DISABLE);
         disable.getAccessibleContext().setAccessibleName(disable.getText());
-        disableWarning.show(Notice.Kind.WARNING, RemoteText.DISABLE_WARNING);
+        // desabilitar impede de vez o envio do que ainda nao foi confirmado: dito ANTES de a pessoa confirmar
+        boolean sending = pending.stream().anyMatch(h -> "SENDING".equals(h.reason())) || queues.stream().anyMatch(q -> "SENDING".equals(q.reason()));
+        disableWarning.show(Notice.Kind.WARNING, sending ? RemoteText.DISABLE_WARNING_SENDING : RemoteText.DISABLE_WARNING);
         for (JComponent c : new JComponent[] {code, confirm, enable, toggle, disable, disableConfirm, keep, refreshPython}) {
             c.setEnabled(!busy);
         }
@@ -448,6 +452,10 @@ final class RemotePanel extends JPanel {
 
     Notice heldLogsNotice() {
         return heldLogs;
+    }
+
+    Notice disableWarningNotice() {
+        return disableWarning;
     }
 
     Notice lostNotice() {
