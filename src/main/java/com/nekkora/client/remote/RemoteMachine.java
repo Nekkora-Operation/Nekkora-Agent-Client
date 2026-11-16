@@ -1049,6 +1049,11 @@ public final class RemoteMachine implements AutoCloseable {
             ledger.logsSettled(e.attemptId());
             return;
         }
+        // quantas linhas a fila tem fica dito JA: se o prazo de guarda vencer com o envio ainda sendo tentado, a perda e
+        // registrada (e avisada a Platform) com a quantidade verdadeira, nao com zero
+        if (q.lines() != e.logLines()) {
+            ledger.logsHeld(e.attemptId(), e.token(), e.epoch(), at, q.lines(), LossLedger.Block.NONE);
+        }
         // o prazo de guarda conta do desfecho, nao da ultima tentativa de envio: a data do arquivo e preservada
         java.nio.file.attribute.FileTime since = vault.logQueueTime(e.attemptId());
         try {
