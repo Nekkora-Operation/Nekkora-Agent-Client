@@ -107,6 +107,25 @@ possa escolher onde executar. A tela diz isso antes de habilitar.
 
 Publicar o inventário não escolhe ambiente nem verifica dependências; isso vem nas próximas partes.
 
+## Conferência de dependências sob demanda (plano 5.9)
+
+A Platform pode pedir a este computador que **confira** — sem instalar, sem criar ambiente, sem executar — se as dependências
+declaradas de uma automação estão no Python escolhido para ela aqui.
+
+| Ponto | Como é |
+|---|---|
+| Como o pedido chega | junto com a consulta de trabalho; com uma tentativa em andamento, por uma consulta própria a cada ciclo. Conferir não é executar: não ocupa a vaga de execução nem mexe na execução em andamento, e chega com o recebimento pausado |
+| O que é conferido | **só** as dependências do pedido (`nome==versao`), **só** no Python do identificador opaco indicado — o mesmo que este computador publicou no inventário |
+| Como | a mesma conferência feita antes de iniciar uma tentativa (`Runner.verifyManaged`): a sondagem pergunta ao Python as versões instaladas daqueles nomes. Versão exata |
+| O que é respondido | `SATISFIED`; `MISSING` com os itens **pedidos** que faltam ou estão em outra versão; `ENVIRONMENT_GONE` se aquele Python não está mais aqui (nenhum outro é usado); `NOT_VERIFIED` se a conferência falhou |
+| O que nunca vai | caminho, nome de pasta, lista do que está instalado |
+| Sem resposta | se a resposta não chega (rede, servidor), nada é repetido aqui: a Platform fica sem resposta e mostra "não foi possível verificar" |
+
+É informação para quem vai solicitar. A conferência que vale continua sendo a de antes de iniciar a tentativa.
+
+Testes: `RemoteWorkTest.aConferenciaSobDemandaDizSoOQueFaltaDoQueFoiPerguntadoENaoInstalaNemExecutaNada` (Python real) e
+`RemoteDeliveryTest.aPlatformPedeAConferenciaDasDependenciasEAMaquinaRespondeSoOQueFaltaSemCaminhoNemExecucao`.
+
 ## Entrega e execução de uma tentativa (T02 e T03)
 
 A máquina **puxa**: pergunta à Platform o que há para ela (`remote/next`), a cada 15 s (ponto de partida de laboratório).

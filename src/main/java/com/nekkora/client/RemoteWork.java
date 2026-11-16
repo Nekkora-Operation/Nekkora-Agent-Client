@@ -94,6 +94,12 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
+    public RemoteMachine.Verified verify(String pythonLocalId, java.util.List<String> dependencies) {
+        Runner.ManagedCheck c = runner.verifyManaged(pythonLocalId, dependencies);
+        return new RemoteMachine.Verified(c.outcome().name(), c.missing());
+    }
+
+    @Override
     public void holdOutputs(String attemptId, String reason) {
         runner.holdManagedOutputs(attemptId, reason);
     }

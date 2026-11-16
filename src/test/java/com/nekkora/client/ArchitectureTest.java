@@ -141,6 +141,8 @@ class ArchitectureTest {
         }
         assertEquals(new TreeSet<>(Set.of("/agent/api/v1/enrollments/redeem", "/agent/api/v1/heartbeat", "/agent/api/v1/remote/receiving",
                 "/agent/api/v1/link/unlink", "/agent/api/v1/remote/credential/renew", "/agent/api/v1/remote/python-environments",
+                // verificacao de dependencias sob demanda (plano 5.9): o pedido pendente e a resposta
+                "/agent/api/v1/remote/dependency-checks/",
                 // T02, entrega: perguntar o que ha, confirmar o recebimento e informar o estado. Nenhuma de download, registro ou resultado
                 "/agent/api/v1/remote/next", "/agent/api/v1/remote/attempts/")), rotas);
     }
