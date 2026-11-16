@@ -127,6 +127,62 @@ public final class FakeGateway implements AutoCloseable {
         }
     }
 
+    /** Resultados recebidos: numero -> "nome|sha256|tamanho". */
+    public final Map<Integer, String> results = new ConcurrentHashMap<>();
+    /** O fechamento recebido: "enviados|foraDoLimite"; nulo = o envio nao foi fechado. */
+    public volatile String resultsClosure;
+    /** Respostas 503 para os proximos envios de resultado (nada e processado). */
+    public volatile int failResults;
+    /** Um nome que o "servidor" recusa por limite (409 remote_result_limit). */
+    public volatile String resultOverLimit;
+
+    private void result(HttpExchange x, String path, String text, byte[] raw) throws IOException {
+        String[] parts = path.substring("/agent/api/v1/remote/attempts/".length()).split("/");
+        if (!parts[0].equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        if (failResults > 0) {
+            failResults--;
+            respond(x, 503, "{\"error\":\"unavailable\"}");
+            return;
+        }
+        boolean complete = parts[2].equals("complete");
+        String token = complete ? field(text, "token") : x.getRequestHeaders().getFirst("Nekkora-Attempt-Token");
+        String epoch = complete ? text.replaceAll(".*\"epoch\":(\\d+).*", "$1") : x.getRequestHeaders().getFirst("Nekkora-Attempt-Epoch");
+        if (attemptToken == null || !attemptToken.equals(token) || !String.valueOf(attemptEpoch).equals(epoch)) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        boolean ended = List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ENDED_UNKNOWN").contains(attemptState);
+        if (complete) {
+            String sent = text.replaceAll(".*\"sent\":(\\d+).*", "$1");
+            String skipped = text.replaceAll(".*\"skippedByLimit\":(\\d+).*", "$1");
+            if (!ended) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            } else if ((resultsClosure != null && !resultsClosure.equals(sent + "|" + skipped)) || Integer.parseInt(sent) != results.size()) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_result_conflict\"}");
+            } else {
+                resultsClosure = sent + "|" + skipped;
+                respond(x, 200, "{\"sent\":" + sent + ",\"skippedByLimit\":" + skipped + "}");
+            }
+            return;
+        }
+        int number = Integer.parseInt(parts[2]);
+        String name = java.net.URLDecoder.decode(x.getRequestHeaders().getFirst("Nekkora-Result-Name"), StandardCharsets.UTF_8);
+        String sha = x.getRequestHeaders().getFirst("Nekkora-Result-Sha256");
+        if (!sha256(raw).equals(sha) || name.contains("..") || name.contains("\\") || name.startsWith("/")) {
+            respond(x, 400, "{\"error\":\"invalid_request\"}");
+        } else if (name.equals(resultOverLimit)) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_result_limit\"}");
+        } else if (resultsClosure != null || (results.containsKey(number) && !results.get(number).equals(name + "|" + sha + "|" + raw.length))) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_result_conflict\"}");
+        } else {
+            boolean created = results.put(number, name + "|" + sha + "|" + raw.length) == null;
+            respond(x, 200, "{\"number\":" + number + ",\"fileName\":\"x\",\"sizeBytes\":" + raw.length + ",\"sha256\":\"" + sha + "\",\"created\":" + created + "}");
+        }
+    }
+
     private void pack(HttpExchange x, String path) throws IOException {
         String id = path.substring("/agent/api/v1/remote/attempts/".length()).split("/")[0];
         if (!id.equals(attemptId)) {
@@ -164,6 +220,8 @@ public final class FakeGateway implements AutoCloseable {
         attemptToken = null;
         attemptEpoch = 0;
         cancelRequested = false;
+        results.clear();
+        resultsClosure = null;
         return attemptId;
     }
 
@@ -353,7 +411,8 @@ public final class FakeGateway implements AutoCloseable {
 
     private void handle(HttpExchange x) throws IOException {
         String path = x.getRequestURI().getPath();
-        String text = new String(x.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        byte[] raw = x.getRequestBody().readAllBytes();
+        String text = new String(raw, StandardCharsets.UTF_8);
         String auth = x.getRequestHeaders().getFirst("Authorization");
         calls.add(new Call(path, x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"), x.getRequestHeaders().getFirst("Nekkora-Agent-Intent"), auth, text));
         if (status != null) {
@@ -371,6 +430,13 @@ public final class FakeGateway implements AutoCloseable {
         if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/package") && "GET".equals(x.getRequestMethod())) {
             if (authenticated(x, auth)) {
                 pack(x, path);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && path.contains("/results/")
+                && ("PUT".equals(x.getRequestMethod()) || "POST".equals(x.getRequestMethod()))) {
+            if (authenticated(x, auth)) {
+                result(x, path, text, raw);
             }
             return;
         }

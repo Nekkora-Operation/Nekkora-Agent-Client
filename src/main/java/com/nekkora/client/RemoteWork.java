@@ -68,6 +68,11 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
+    public java.util.List<RemoteMachine.ResultFile> results(String attemptId, String run) {
+        return runner.managedOutputs(attemptId, run).stream().map(o -> new RemoteMachine.ResultFile(o.name(), o.file(), o.size())).toList();
+    }
+
+    @Override
     public void discard(String attemptId) {
         runner.discardManaged(attemptId);
     }
