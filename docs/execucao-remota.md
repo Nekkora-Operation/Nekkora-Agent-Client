@@ -119,8 +119,25 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
    não é enviado e é contado**: o fechamento diz quantos foram e quantos ficaram de fora. **Os arquivos não mudam o
    desfecho.** Só arquivos comuns dentro da pasta: ligações não são seguidas e nada fora dela é alcançado; o arquivo de
    sinal do aplicativo não é enviado;
-9. só depois do fechamento o diário é apagado e o **código da tentativa** (o ZIP e a cópia extraída) é removido. O que a
-   automação gravou na pasta de saída **fica neste computador**.
+9. só depois do fechamento o diário é apagado e a limpeza acontece (abaixo).
+
+### Limpeza e recuperação (T04)
+
+| O quê | Quando sai deste computador |
+|---|---|
+| **Código da tentativa**: o ZIP baixado, a cópia extraída e a cópia que foi executada | sempre, quando a tentativa está resolvida com a Platform (qualquer desfecho). O registro da execução fica |
+| **Pasta de saída** (o que a automação gravou) | **só** depois que a Platform confirmou o recebimento de **todos** os arquivos (envio fechado, nenhum de fora) |
+| Pasta de saída com arquivo fora do limite, envio não confirmado, ou fechado por outra entrega | **não é apagada**: o arquivo pode existir só aqui |
+| Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo, a varredura tira o **código** das tentativas que não são a pendente. **Nunca apaga pasta de saída** |
+
+- **Execução interrompida não é duplicada.** Se o aplicativo fecha com a execução em andamento, ao reabrir o motor
+  reconhece o processo pelo registro (identificador, início e executável), o **adota** e ocupa a vaga; o canal continua a
+  acompanhar a mesma execução. Nada é lançado de novo, em nenhum caso: nem quando o processo sumiu (termina "sem prova do
+  resultado"), nem quando o aplicativo fechou entre pedir o início e gravar a execução.
+- **O Python e as dependências são conferidos de novo nesta máquina a cada tentativa**, imediatamente antes de iniciar: o
+  Python escolhido é localizado de novo, as dependências indicadas pela Platform e as do pacote são conferidas nele, na
+  versão exata. O que valia quando a escolha foi feita na Platform não é presumido.
+- Repetir em outra máquina é decidido na Platform; esta máquina não transfere nada.
 
 | Situação | O que acontece |
 |---|---|
@@ -160,8 +177,9 @@ temporária.
 | Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
 | Inventário: nada de caminho no pedido, identificador estável e por máquina, filtros, falhas | `PythonInventoryTest` |
 | Descoberta sem pacote | `PythonEnvironmentsTest.instalacoesSemPacoteMesmaDescobertaSoComAVersao` (exige `NEKKORA_TEST_PYTHON`) |
-| Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (19; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
+| Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (20; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
 | Resultados: ordem, nome relativo, limites contados, retomada sem duplicar, fechamento, nada para o que não executou | `RemoteDeliveryTest` (3 dos 19) |
+| Limpeza e recuperação: resultado pendente não é apagado antes da confirmação; varredura preserva a pendente e os resultados; processo adotado ao reabrir, nada relançado; código sai, saída só quando pedida | `RemoteDeliveryTest.resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento`, `RemoteWorkTest.aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro`, `RemoteWorkTest.limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado` |
 | A ponte com o motor: ZIP real, conferência, execução gerenciada por Python real, código de saída, cancelamento, uma por vez, cada recusa | `RemoteWorkTest` (exige `NEKKORA_TEST_PYTHON`) |
 | O motor: execução gerenciada | `ManagedRunTest` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
@@ -172,9 +190,10 @@ temporária.
 - **Tela bloqueada ou sem sessão interativa: a execução não inicia** (`SESSION_UNAVAILABLE`), como na execução local.
 - **A saída do processo (stdout/stderr) não é capturada nem enviada.** A Platform vê o estado, o código de saída e os
   arquivos de resultado. Os registros de texto vêm na próxima tarefa.
-- Os arquivos de resultado **não são apagados deste computador** depois do envio.
-- A cópia do pacote que o motor executa (`remota/execucoes/<id>/pacote`) não é apagada no fim da tentativa: sai com a
-  limpeza das execucoes antigas (as 50 mais recentes ficam). A limpeza completa é da próxima tarefa.
+- Pasta de saída que não pôde ser confirmada **fica no computador sem prazo**: não há limpeza por idade nem aviso de espaço.
+- A limpeza não é informada à Platform (a rota de "limpeza confirmada ou pendente" do plano não existe).
+- Desligamento real da máquina durante a execução **não foi testado**; a adoção após reabrir foi provada com o processo
+  Python real e um segundo motor sobre a mesma pasta de dados.
 - Localizar o Python escolhido refaz a descoberta das instalações (alguns segundos); enquanto isso, pausar e desabilitar
   esperam.
 - Não há verificação sob demanda das dependências: a falta só aparece como recusa de uma solicitação.

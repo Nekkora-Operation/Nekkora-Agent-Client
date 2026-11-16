@@ -314,6 +314,11 @@ public final class Runner implements AutoCloseable {
 
     /** Apaga o CODIGO de uma execucao gerenciada (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
     public void discardManaged(String key) {
+        discardManaged(key, null);
+    }
+
+    /** O mesmo, e tambem a copia que foi EXECUTADA ({@code id}: a execucao, terminada). O registro da execucao fica. */
+    public void discardManaged(String key, String id) {
         managedDir(key).ifPresent(dir -> {
             try {
                 Files.deleteIfExists(dir.resolve("pacote.zip"));
@@ -321,7 +326,53 @@ public final class Runner implements AutoCloseable {
                 // tentado de novo na proxima vez
             }
             RunStore.deleteTree(dir.resolve("pacote"));
+            removeIfEmpty(dir);
         });
+        if (id != null && ExecutionId.valid(id)) controller.discardManagedCopy(new ExecutionId(id));
+    }
+
+    /** Apaga o que a execucao gerenciada gravou na pasta de saida (quem chama ja tem a confirmacao de que tudo foi recebido). */
+    public void discardManagedOutputs(String key) {
+        managedDir(key).ifPresent(dir -> {
+            RunStore.deleteTree(dir.resolve("saida"));
+            removeIfEmpty(dir);
+        });
+    }
+
+    /**
+     * Apaga o CODIGO (ZIP e copia extraida) das pastas de execucoes gerenciadas que nao sao a de {@code keepKey} - sobra de uma
+     * queda entre o desfecho e a limpeza. Com uma execucao em andamento, nao faz nada. Nunca apaga pasta de saida. Devolve
+     * quantas pastas foram limpas.
+     */
+    public int sweepManaged(String keepKey) {
+        Path root = managedRoot;
+        if (root == null || controller.isRunning() || !Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return 0;
+        int n = 0;
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+            for (Path dir : ds) {
+                String key = String.valueOf(dir.getFileName());
+                if (key.equals(keepKey) || managedDir(key).isEmpty() || !Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
+                boolean code = Files.exists(dir.resolve("pacote.zip"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        || Files.exists(dir.resolve("pacote"), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                if (code) {
+                    discardManaged(key, null);
+                    n++;
+                } else {
+                    removeIfEmpty(dir);
+                }
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // fica para a proxima abertura
+        }
+        return n;
+    }
+
+    private static void removeIfEmpty(Path dir) {
+        try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+            if (s.findAny().isEmpty()) Files.deleteIfExists(dir);
+        } catch (java.io.IOException | RuntimeException e) {
+            // pasta com conteudo, ou ja removida
+        }
     }
 
     /** O executavel de uma instalacao de {@link #installedPythons}, pelo identificador dela, se ainda existe. */

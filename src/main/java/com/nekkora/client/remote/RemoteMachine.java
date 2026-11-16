@@ -155,8 +155,24 @@ public final class RemoteMachine implements AutoCloseable {
         /** Pede que a execucao pare. */
         void cancel(String run);
 
-        /** Apaga o codigo da tentativa (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
-        void discard(String attemptId);
+        /**
+         * Apaga o CODIGO da tentativa: o ZIP, a copia extraida e a copia que foi executada ({@code run}: a execucao, ou nulo se
+         * nada iniciou). O que a automacao gravou na saida fica.
+         */
+        void discard(String attemptId, String run);
+
+        /**
+         * Apaga o que a automacao gravou na pasta de saida da tentativa. So e chamado depois que a Platform CONFIRMOU o
+         * recebimento de todos os arquivos (envio fechado, nenhum de fora).
+         */
+        void discardOutputs(String attemptId);
+
+        /**
+         * Ao abrir o aplicativo: apaga o CODIGO deixado por tentativas que nao sao a pendente ({@code keepAttemptId}, ou nulo) -
+         * sobra de uma queda entre o desfecho e a limpeza. Nunca apaga pasta de saida: resultado sem confirmacao de recebimento
+         * fica no computador. Devolve quantas pastas de tentativa foram limpas.
+         */
+        int sweep(String keepAttemptId);
 
         /** Os arquivos que a execucao gravou na pasta de saida dela, em ordem estavel (a mesma a cada chamada). */
         List<ResultFile> results(String attemptId, String run);
@@ -308,8 +324,16 @@ public final class RemoteMachine implements AutoCloseable {
                 e = e.results();
                 keep(e);
             }
-            sendResults(credential, e, w);
+            // a pasta de saida so e apagada com o recebimento de TUDO confirmado pela Platform; senao, fica neste computador
+            boolean confirmed = sendResults(credential, e, w);
             forget(e, w);
+            if (confirmed && w != null) {
+                try {
+                    w.discardOutputs(e.attemptId());
+                } catch (RuntimeException x) {
+                    // os arquivos ja estao na Platform; a pasta fica para a proxima limpeza
+                }
+            }
         } catch (Refused x) {
             if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
                 // esta entrega nao vale mais: o que ela iniciou aqui para, e nada e alterado na Platform
@@ -351,7 +375,7 @@ public final class RemoteMachine implements AutoCloseable {
         Path zip = dir.resolve("pacote.zip");
         String sha;
         try {
-            w.discard(e.attemptId());
+            w.discard(e.attemptId(), null);
             java.nio.file.Files.createDirectories(dir);
             sha = channel.download(credential, e.attemptId(), e.token(), e.epoch(), zip);
         } catch (IOException x) {
@@ -405,7 +429,7 @@ public final class RemoteMachine implements AutoCloseable {
      * quantos ficaram de fora. Falha de rede: o envio e retomado na proxima consulta (repetir um arquivo ja enviado nao muda
      * nada). Se a Platform disser que o envio ja foi fechado, ou que esta entrega nao vale mais, para aqui.
      */
-    private void sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
+    private boolean sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
         List<ResultFile> files;
         try {
             files = w == null ? List.of() : w.results(e.attemptId(), e.run());
@@ -431,8 +455,9 @@ public final class RemoteMachine implements AutoCloseable {
                     // a Platform nao aceitou este arquivo (limite ou nome), ou ele nao pode ser lido aqui: fica de fora, contado
                     skipped++;
                 } else if (x.problem() == Problem.RESULT_CONFLICT) {
-                    // o envio desta tentativa ja foi fechado (ou este numero ja tem outro arquivo): nao ha mais o que enviar
-                    return;
+                    // o envio desta tentativa ja foi fechado (ou este numero ja tem outro arquivo): nao ha mais o que enviar,
+                    // e nao ha confirmacao de que TUDO chegou
+                    return false;
                 } else {
                     throw x;
                 }
@@ -442,10 +467,13 @@ public final class RemoteMachine implements AutoCloseable {
         }
         try {
             channel.completeResults(credential, e.attemptId(), e.token(), e.epoch(), sent, skipped);
+            // confirmado: a Platform aceitou o fechamento com a contagem que ela mesma recebeu. Com arquivo de fora, nada e apagado
+            return skipped == 0;
         } catch (Refused x) {
             if (x.problem() != Problem.RESULT_CONFLICT) {
                 throw x;
             }
+            return false;
         }
     }
 
@@ -493,7 +521,7 @@ public final class RemoteMachine implements AutoCloseable {
         }
         if (w != null) {
             try {
-                w.discard(e.attemptId());
+                w.discard(e.attemptId(), e.run());
             } catch (RuntimeException x) {
                 // a limpeza do codigo e tentada de novo na proxima tentativa nesta pasta
             }
@@ -875,6 +903,26 @@ public final class RemoteMachine implements AutoCloseable {
                 // a consulta de entrega nunca derruba o aplicativo
             }
         }, 5, PULL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Uma vez, ao abrir: limpa o codigo deixado por tentativas que nao sao a pendente. Nunca lanca; sem quem execute, nao faz
+     * nada. Devolve quantas pastas foram limpas.
+     */
+    public int sweep() {
+        Work w = work;
+        if (w == null) {
+            return 0;
+        }
+        synchronized (operation) {
+            MachineVault.Link current = usable();
+            String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
+            try {
+                return w.sweep(keep);
+            } catch (RuntimeException x) {
+                return 0;
+            }
+        }
     }
 
     /** Fechar o aplicativo NAO desabilita a maquina: so a presenca para, e a Platform a vera sem contato. */
