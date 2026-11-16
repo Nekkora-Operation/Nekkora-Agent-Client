@@ -24,18 +24,33 @@ Só o lado **local**:
 
 - `Runner` e `RunController` não recebem origem de quem chama, não conhecem sessão nem Platform e não falam com a rede
   (`ArchitectureTest`, `ExecutionOriginTest`).
-- Cada registro (`execucoes/<id>/estado.json`) grava `"origin": "LOCAL_AGENT"`. É a única origem que o aplicativo produz.
-  Um arquivo com outra origem não foi escrito por ele e é recusado na leitura. Registro antigo, sem o campo, continua local.
+- Cada registro local (`execucoes/<id>/estado.json`) grava `"origin": "LOCAL_AGENT"`. Nessa pasta, um arquivo com outra
+  origem é recusado na leitura. Registro antigo, sem o campo, continua local.
 - Não existe fila, pasta ou arquivo de envio. O teste com execução real confere o disco e as chamadas, com um estado de
   pareamento e autorização em fixture.
 - As rotas que o aplicativo conhece são as de `/api/v1/desktop/`; nenhuma é de execução, evento ou máquina.
 
-## O que não é entregue aqui
+## Execução pedida pela Platform: a entrada no motor (PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T03)
 
-**Execução solicitada pela Platform não existe neste aplicativo.** Ele não tem credencial de máquina, pareamento, Worker
-nem canal de pedidos. Quando existir, entra por um caminho próprio (credencial de máquina, pedido verificável), com o
-acompanhamento apresentado separado do histórico local. Passar uma marca "platform" por este aplicativo não cria
-execução remota: não há onde passá-la.
+O motor ganhou uma segunda entrada, a execução **gerenciada**: a que não nasce de uma aprovação da pessoa neste
+aplicativo. Quem a pede responde pela autorização e entrega o pacote já conferido e a pasta de saída.
+
+| | Execução local | Execução gerenciada |
+|---|---|---|
+| Entrada | `RunController.start` | `RunController.startManaged` |
+| Aprovação local (`aprovacoes.json`) | exigida | **não consultada nem criada** |
+| Registro | `execucoes/<id>/`, origem `LOCAL_AGENT` | `remota/execucoes/<id>/`, origem `PLATFORM` |
+| Pasta de saída | escolhida pela pessoa, fora da pasta de dados | só dentro da raiz gerenciada (`remota/tentativas/`) |
+| Vaga | a mesma: **uma execução por vez no computador**, de qualquer tipo |
+| Pacote reconferido, impressão igual à pedida, sessão utilizável, Python e dependências do pacote, cópia executada, posse do processo, prazo, cancelamento, reconciliação | iguais | iguais |
+
+- Um armazém **não lê** registro do outro: um arquivo "da Platform" copiado para `execucoes/` não vira execução local, e um
+  registro local (ou sem origem) em `remota/execucoes/` não vira gerenciada. O histórico local não mostra execução gerenciada.
+- A execução local continua sem poder gravar dentro da pasta de dados, inclusive na raiz gerenciada.
+- **Sessão bloqueada**: a execução gerenciada é recusada com a tela do Windows bloqueada, como a local.
+
+**Nesta etapa só o motor muda.** Nada no aplicativo chama a entrada nova ainda: o canal da máquina continua recusando o que
+recebe (`docs/execucao-remota.md`). Baixar, conferir e iniciar pela Platform vem na etapa seguinte.
 
 ## O comportamento anterior continua em outros componentes
 
