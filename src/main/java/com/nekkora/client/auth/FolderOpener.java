@@ -13,6 +13,23 @@ public final class FolderOpener {
     private FolderOpener() {
     }
 
+    /**
+     * Pede ao sistema que abra um arquivo de TEXTO no programa padrao de texto. Quem chama ja conferiu QUAL arquivo e (o motor
+     * de execucao so entrega a saida de texto de uma execucao local). So {@code .txt}: abrir outro tipo poderia executa-lo.
+     */
+    public static boolean openText(String path) {
+        if (path == null || !path.toLowerCase(java.util.Locale.ROOT).endsWith(".txt") || !Desktop.isDesktopSupported()
+                || !Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
+            return false;
+        }
+        try {
+            Desktop.getDesktop().open(new java.io.File(path));
+            return true;
+        } catch (java.io.IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     /** {@code true} se o pedido foi feito. Sem gerenciador de arquivos, ou endereco que nao e de pasta local: {@code false}. */
     public static boolean open(URI folder) {
         if (folder == null || !"file".equalsIgnoreCase(folder.getScheme()) || !Desktop.isDesktopSupported()
