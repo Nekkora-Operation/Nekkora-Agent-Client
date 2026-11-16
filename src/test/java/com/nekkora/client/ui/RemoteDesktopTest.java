@@ -499,7 +499,7 @@ class RemoteDesktopTest {
         }
         String active = RemoteText.problem(com.nekkora.client.remote.MachineChannel.Problem.ATTEMPT_ACTIVE);
         assertTrue(active.contains("Desabilitar agora a deixaria sem desfecho"), active);
-        assertTrue(active.contains("peça o cancelamento na Platform") && active.contains("\"Pausar recebimento\""), active);
+        assertTrue(active.contains("peça o cancelamento na Platform") && active.contains("\"Pausar novos trabalhos\""), active);
         assertTrue(active.endsWith("Nada foi alterado."), active);
     }
 
