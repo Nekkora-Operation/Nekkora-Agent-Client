@@ -35,6 +35,8 @@ final class AvatarButton extends JButton {
     private final Runnable onExit;
     private Profile profile;
     private JPopupMenu open;
+    /** "Execucao remota": so aparece quando quem monta o aplicativo entrega a acao. */
+    private Runnable onRemote;
 
     AvatarButton(Runnable onSignOut, Runnable onExit) {
         this.onSignOut = onSignOut;
@@ -47,6 +49,10 @@ final class AvatarButton extends JButton {
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         addActionListener(e -> showMenu());
         setProfile(null);
+    }
+
+    void setOnRemote(Runnable onRemote) {
+        this.onRemote = onRemote;
     }
 
     /** {@code null}: perfil ainda nao carregado ou indisponivel (avatar neutro). */
@@ -75,6 +81,11 @@ final class AvatarButton extends JButton {
         m.addSeparator();
         m.add(unavailable(NavText.MENU_SETTINGS));
         m.add(unavailable(NavText.MENU_HELP));
+        if (onRemote != null) {
+            JMenuItem remote = new JMenuItem(RemoteText.MENU);
+            remote.addActionListener(e -> onRemote.run());
+            m.add(remote);
+        }
         m.addSeparator();
         JMenuItem signOut = new JMenuItem(NavText.MENU_SIGN_OUT);
         signOut.addActionListener(e -> onSignOut.run());

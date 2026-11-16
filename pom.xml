@@ -18,17 +18,24 @@
         <maven.build.timestamp.format>yyyy</maven.build.timestamp.format>
         <build.year>${maven.build.timestamp}</build.year>
         <flatlaf.version>3.7.2</flatlaf.version>
+        <jna.version>5.17.0</jna.version>
         <junit.version>5.11.4</junit.version>
         <!-- testes que abrem janela ficam fora do padrao; -Pdesktop os inclui -->
         <excluded.groups>desktop</excluded.groups>
     </properties>
 
     <dependencies>
-        <!-- UNICA dependencia de execucao. Inventario e licencas: THIRD-PARTY-NOTICES.md -->
+        <!-- Dependencias de execucao: FlatLaf (tela) e JNA (abaixo). Inventario e licencas: THIRD-PARTY-NOTICES.md -->
         <dependency>
             <groupId>com.formdev</groupId>
             <artifactId>flatlaf</artifactId>
             <version>${flatlaf.version}</version>
+        </dependency>
+        <!-- DPAPI do Windows, para proteger a credencial DA MAQUINA (so o pacote remote a usa). THIRD-PARTY-NOTICES.md -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
+            <version>${jna.version}</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

@@ -79,6 +79,11 @@ public final class ClientWindow extends JFrame {
         }
     };
     private final transient LocalActions actions;
+    private transient com.nekkora.client.remote.RemoteMachine remote;
+    private transient javax.swing.JDialog remoteDialog;
+    private transient RemotePanel remotePanel;
+    /** Os testes de tela abrem a janela sem bloquear a fila de eventos. */
+    boolean remoteModal = true;
     private transient Navigation navigation;
     /** Endereco da Platform desta instalacao (entregue por quem monta o aplicativo): separa os pacotes baixados no disco. */
     private String platformOrigin = "platform-nao-informada";
@@ -387,6 +392,84 @@ public final class ClientWindow extends JFrame {
                 }
             });
         });
+    }
+
+    /**
+     * A habilitacao deste computador para execucao remota (entregue por quem monta o aplicativo). Fica no menu da pessoa
+     * que entrou, mas e um ato da maquina: entrar ou sair nao habilita nem desabilita nada.
+     */
+    public void setRemote(com.nekkora.client.remote.RemoteMachine remote) {
+        this.remote = remote;
+        avatar.setOnRemote(remote == null ? null : this::openRemote);
+    }
+
+    void openRemote() {
+        if (remote == null) {
+            return;
+        }
+        closeRemote();
+        javax.swing.JDialog d = new javax.swing.JDialog(this, RemoteText.TITLE, remoteModal);
+        d.setDefaultCloseOperation(javax.swing.JDialog.DISPOSE_ON_CLOSE);
+        RemotePanel panel = new RemotePanel(remote, background, d::dispose);
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(panel, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        d.setContentPane(scroll);
+        Runnable fit = () -> {
+            if (!d.isDisplayable()) {
+                return;
+            }
+            d.pack();
+            java.awt.GraphicsConfiguration gc = d.getGraphicsConfiguration();
+            if (gc != null) {
+                java.awt.Rectangle area = gc.getBounds();
+                java.awt.Insets in = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
+                java.awt.Dimension size = d.getSize();
+                int height = area.height - in.top - in.bottom;
+                if (size.height > height) {
+                    size.height = height;
+                    size.width += javax.swing.UIManager.getInt("ScrollBar.width") + 4;
+                }
+                size.width = Math.min(size.width, area.width - in.left - in.right);
+                d.setSize(size);
+            }
+        };
+        // o painel avisa quando muda de altura (estado novo, mensagem nova, troca de tema): a janela acompanha
+        panel.addPropertyChangeListener("conteudo", e -> SwingUtilities.invokeLater(fit));
+        d.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosed(WindowEvent e) {
+                panel.dispose();
+                if (remoteDialog == d) {
+                    remoteDialog = null;
+                    remotePanel = null;
+                }
+            }
+        });
+        d.pack();
+        fit.run();
+        d.setLocationRelativeTo(this);
+        remoteDialog = d;
+        remotePanel = panel;
+        d.setVisible(true);
+    }
+
+    void closeRemote() {
+        javax.swing.JDialog d = remoteDialog;
+        remoteDialog = null;
+        remotePanel = null;
+        if (d != null) {
+            d.dispose();
+        }
+    }
+
+    RemotePanel remotePanel() {
+        return remotePanel;
+    }
+
+    javax.swing.JDialog remoteDialog() {
+        return remoteDialog;
     }
 
     public void setPlatformOrigin(String origin) {

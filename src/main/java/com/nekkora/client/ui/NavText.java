@@ -59,9 +59,9 @@ public final class NavText {
     public static final String IMPORT_FILTER = "Arquivo ZIP (*.zip)";
     public static final String WORKING = "Trabalhando...";
 
-    public static final String INTEGRATION_LOCAL_ONLY = "Somente local — integração com a Platform não configurada";
-    public static final String INTEGRATION_LOCAL_ONLY_HINT = "Este aplicativo não está vinculado a uma máquina na Platform. As execuções daqui são só deste computador: "
-            + "sem gatilhos da Platform e sem envio de registros de monitoramento.";
+    public static final String INTEGRATION_LOCAL_ONLY = "Executar aqui é somente local";
+    public static final String INTEGRATION_LOCAL_ONLY_HINT = "O que você executa por este aplicativo roda só neste computador: nenhum registro ou resultado "
+            + "é enviado à Platform, com o computador habilitado para execução remota ou não.";
     public static final String RUN_DENIED = "Você não tem permissão para executar automações neste ambiente.";
     public static final String RUN_NO_PACKAGE = "O pacote desta automação não está neste computador. Abra Editar e, em Pacote nesta máquina, escolha um "
             + "pacote local ou baixe uma versão publicada da Platform. Nada é baixado sozinho.";

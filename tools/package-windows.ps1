@@ -33,10 +33,13 @@ $MainClass = 'com.nekkora.client.ClientMain'
 #  - jdk.httpserver: retorno local do login, so em 127.0.0.1 (so o pacote auth)
 #  - jdk.crypto.ec: curvas elipticas do TLS no JDK 21 (provedor)
 #  - jdk.accessibility: Java Access Bridge (leitores de tela no Windows)
-#  - jdk.unsupported, java.logging, java.prefs: FlatLaf
+#  - jdk.unsupported, java.logging, java.prefs: FlatLaf (java.logging tambem pelo JNA)
 $Modules = @('java.base', 'java.desktop', 'java.logging', 'java.prefs', 'java.net.http', 'jdk.httpserver', 'jdk.crypto.ec',
     'jdk.accessibility', 'jdk.unsupported')
-$JvmOptions = @('-Dflatlaf.nativeLibraryPath=$APPDIR\lib', '-XX:+UseSerialGC', '-Xms16m', '-Xmx192m', '-XX:TieredStopAtLevel=1')
+# JNA (protecao da credencial da maquina): a biblioteca nativa vem da pasta do aplicativo; nada e descompactado em pasta
+# temporaria nem procurado no sistema
+$JvmOptions = @('-Dflatlaf.nativeLibraryPath=$APPDIR\lib', '-Djna.boot.library.path=$APPDIR\lib', '-Djna.nounpack=true', '-Djna.nosys=true',
+    '-XX:+UseSerialGC', '-Xms16m', '-Xmx192m', '-XX:TieredStopAtLevel=1')
 
 function Invoke-Checked([string]$what, [scriptblock]$block) {
     & $block
@@ -81,6 +84,10 @@ function Export-Entry([string]$jar, [string]$entry, [string]$target) {
 $flat = Get-ChildItem (Join-Path $pkg 'input\lib\flatlaf-*.jar') | Select-Object -First 1
 $flatVersion = $flat.BaseName.Substring('flatlaf-'.Length)
 Export-Entry $flat.FullName 'com/formdev/flatlaf/natives/flatlaf-windows-x86_64.dll' (Join-Path $pkg "input\lib\flatlaf-$flatVersion-windows-x86_64.dll")
+# biblioteca nativa do JNA: idem
+$jna = Get-ChildItem (Join-Path $pkg 'input\lib\jna-*.jar') | Where-Object { $_.Name -notlike 'jna-platform-*' } | Select-Object -First 1
+$jnaVersion = $jna.BaseName.Substring('jna-'.Length)
+Export-Entry $jna.FullName 'com/sun/jna/win32-x86-64/jnidispatch.dll' (Join-Path $pkg 'input\lib\jnidispatch.dll')
 
 Write-Host '[2/8] Icone (PNGs oficiais)'
 $ico = Join-Path $pkg 'nekkora-agent-client.ico'
@@ -115,6 +122,7 @@ New-Item -ItemType Directory -Force $legal | Out-Null
 Copy-Item 'THIRD-PARTY-NOTICES.md' $legal
 Copy-Item 'tools\distribution\LEIA-ME.txt' $app
 Export-Entry $flat.FullName 'META-INF/LICENSE' (Join-Path $legal 'FlatLaf-LICENSE-Apache-2.0.txt')
+Export-Entry $jna.FullName 'META-INF/AL2.0' (Join-Path $legal 'JNA-LICENSE-Apache-2.0.txt')
 $release = Get-Content (Join-Path $runtime 'release') | Where-Object { $_ -match '^(JAVA_VERSION|IMPLEMENTOR|OS_ARCH|MODULES)=' }
 $lines = @("Nekkora Agent (Client) $version - pacote de TESTE (Windows x64, sem assinatura digital)",
     "commit: $commit$(if ($dirty) { ' (com alteracoes locais)' })",
@@ -138,11 +146,13 @@ $lines += 'Tokens e logos: Nekkora-lib 0.2.0, commit 0a29d95fbadb19da74cfa90a555
 Write-Host '[7/8] Conferencia do pacote'
 # so as bibliotecas esperadas
 $libs = @(Get-ChildItem (Join-Path $app 'app') -Recurse -File -Include '*.jar', '*.dll' | ForEach-Object { $_.Name } | Sort-Object)
-$expected = @("flatlaf-$flatVersion-windows-x86_64.dll", "flatlaf-$flatVersion.jar", 'nekkora-agent-client.jar') | Sort-Object
+$expected = @("flatlaf-$flatVersion-windows-x86_64.dll", "flatlaf-$flatVersion.jar", "jna-$jnaVersion.jar", "jna-platform-$jnaVersion.jar",
+    'jnidispatch.dll', 'nekkora-agent-client.jar') | Sort-Object
 if (Compare-Object $libs $expected) { throw "bibliotecas inesperadas no pacote: $($libs -join ', ')" }
 # nada administrativo, de teste ou de laboratorio dentro do JAR do aplicativo. O nucleo local (pacotes e execucao local,
-# com.nekkora.client.pack e .run) faz parte do Client; o que continua de fora e o codigo do Nekkora Agent administrativo e
-# a integracao da maquina com a Platform (catalogo remoto, pareamento, Worker, supervisao remota, credencial da maquina)
+# com.nekkora.client.pack e .run) e o vinculo deste computador para execucao remota (com.nekkora.client.remote, escrito
+# para o Client) fazem parte dele; o que continua de fora e o codigo do Nekkora Agent administrativo (catalogo remoto,
+# Worker, supervisao remota e as classes de credencial e pareamento DELE)
 $z = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $app 'app\nekkora-agent-client.jar'))
 try {
     $names = @($z.Entries | ForEach-Object { $_.FullName })

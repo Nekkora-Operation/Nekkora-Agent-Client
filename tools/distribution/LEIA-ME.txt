@@ -25,12 +25,22 @@ O que o aplicativo guarda (em %LOCALAPPDATA%\Nekkora\AgentClient)
     ambiente (pasta pacotes);
   - as aprovacoes de pacote e o registro local das execucoes (pastas execucao
     e execucoes).
+  - se voce habilitar este computador para execucao remota: o vinculo da
+    maquina (pasta remota), com o segredo protegido pelo Windows para o seu
+    usuario. Desabilitar remove.
   O login NAO e guardado.
 
 O que ele nao faz
-  Nao le nem altera o Nekkora Agent ja instalado, nao pareia a maquina com a
-  Platform, nao recebe gatilhos remotos e nao envia registros de monitoramento.
-  Nao instala Python nem dependencias.
+  Nao le nem altera o Nekkora Agent ja instalado. Nao envia a Platform nada do
+  que voce executa aqui. Nao instala Python nem dependencias.
+
+Execucao remota (menu da conta)
+  Habilita ESTE computador a receber execucoes solicitadas pela Platform. So
+  com um codigo de habilitacao criado na Platform por quem administra as
+  maquinas, e com a sua confirmacao aqui. Entrar com a sua conta nao habilita
+  nada. Voce pode pausar, retomar e desabilitar.
+  NESTA VERSAO o aplicativo ainda nao executa o que a Platform solicitar: ele
+  so mantem o vinculo e a presenca enquanto estiver aberto.
 
 Versao, commit e bibliotecas: VERSOES.txt
 Licencas: pasta legal\

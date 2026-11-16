@@ -21,8 +21,10 @@ import com.nekkora.client.ui.SignInText;
 import com.nekkora.client.ui.Themes;
 
 /**
- * Entrada do Nekkora Agent (Client). Abre uma janela, com a tela de entrada. Nao inicia tarefas, automacoes, pareamento
- * nem o Nekkora Agent; nao le o perfil dele. Do disco, so a propria pasta de dados, e nela so a preferencia de tema.
+ * Entrada do Nekkora Agent (Client). Abre uma janela, com a tela de entrada. Nao inicia tarefas, automacoes nem o
+ * Nekkora Agent; nao le o perfil dele. Do disco, so a propria pasta de dados. Se ESTE computador ja foi habilitado para
+ * execucao remota (ato explicito, com codigo da Platform e confirmacao aqui), a presenca da maquina e enviada enquanto o
+ * aplicativo estiver aberto; sem essa habilitacao, nada e enviado antes de a pessoa entrar.
  */
 public final class ClientMain {
 
@@ -69,16 +71,25 @@ public final class ClientMain {
                 t.setDaemon(true);
                 return t;
             });
+            // execucao remota: o vinculo DA MAQUINA com a Platform, separado da entrada da pessoa. Sem um vinculo guardado,
+            // nada e enviado; habilitar exige um codigo criado na Platform e a confirmacao neste computador
+            com.nekkora.client.remote.RemoteMachine remote = new com.nekkora.client.remote.RemoteMachine(
+                    new com.nekkora.client.remote.MachineVault(data.remoteDir(), new com.nekkora.client.remote.WindowsKeyring()),
+                    new com.nekkora.client.remote.MachineChannel(origin), BuildInfo.load().version());
             ClientWindow window = new ClientWindow(flow, preferences::saveTheme, () -> {
                 // fechar: a execucao local em andamento (a pessoa ja confirmou) e encerrada e registrada como cancelada;
                 // a tentativa em curso e cancelada e a sessao encerrada na Platform; nada fica para a proxima abertura
                 runner.close();
+                // fechar o aplicativo NAO desabilita a maquina: so a presenca para
+                remote.close();
                 flow.close();
                 signIn.close();
                 held.get().close();
                 System.exit(0);
             }, BuildInfo.load(), background, workshop, runner);
             window.setPlatformOrigin(String.valueOf(origin.api()));
+            window.setRemote(remote);
+            remote.start();
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta
             window.setReveal(path -> workshop.folderUri(path).ifPresent(uri -> com.nekkora.client.auth.FolderOpener.open(java.net.URI.create(uri))));
             // "Abrir pasta" na preparacao da execucao (pacote de origem, copia executada, saida): idem; nada da pasta e executado
