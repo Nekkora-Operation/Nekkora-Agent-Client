@@ -283,6 +283,43 @@ class RemoteDesktopTest {
         assertTrue(read(() -> p.enableButton().isShowing()));
     }
 
+    /** T06 - o estado operacional: para qual organizacao, o que roda agora e de quem e, onde ver o conteudo, e o codigo de cada Python. */
+    @Test
+    void aTelaMostraOEstadoOperacionalEOCodigoDeCadaAmbienteSemMostrarConteudoDeExecucao() throws Exception {
+        edt(() -> window.setRemote(machine));
+        // nao habilitado e sem execucao: nada de organizacao, de atividade nem de ambientes
+        RemotePanel before = openDialog();
+        assertEquals("", read(before::organizationText));
+        assertEquals("", read(() -> before.activityNotice().text()));
+        assertEquals("", read(before::seeOnPlatformText));
+        assertEquals("", read(before::pythonHereText));
+        edt(() -> window.closeRemote());
+
+        machine.enable(gw.code("remote"));
+        machine.beat();
+        RemotePanel p = openDialog();
+        // a organizacao do vinculo nao esta na lista de quem entrou neste teste: a tela diz isso, sem mostrar identificador
+        assertEquals(RemoteText.organization(""), read(p::organizationText));
+        assertFalse(read(p::organizationText).contains(gw.organizationId));
+        assertEquals("Habilitado para a organização Fábrica Norte.", RemoteText.organization("Fábrica Norte"));
+        assertEquals(RemoteText.activity(RemoteMachine.Activity.IDLE), read(() -> p.activityNotice().text()));
+        assertEquals(RemoteText.SEE_ON_PLATFORM, read(p::seeOnPlatformText));
+        // o ambiente Python: o codigo que a Platform mostra, a versao, o tipo e a pasta - a pasta so aqui
+        String code = machine.pythonHere().get(0).code();
+        assertEquals(6, code.length());
+        assertTrue(gw.inventory.contains("\"environmentId\":\"" + code), "o codigo e o comeco do identificador publicado");
+        assertEquals(RemoteText.PYTHON_HERE_TITLE + "\ncódigo " + code + " · Python 3.12.4 · instalação · c:\\python312\\python.exe", read(p::pythonHereText));
+        assertFalse(gw.inventory.contains("python312"));
+        // os textos de cada atividade dizem a ORIGEM; a local diz que nada vai a Platform
+        assertTrue(RemoteText.activity(RemoteMachine.Activity.LOCAL_RUNNING).contains("iniciada neste computador"));
+        assertTrue(RemoteText.activity(RemoteMachine.Activity.LOCAL_RUNNING).contains("nada dela é enviado à Platform"));
+        for (RemoteMachine.Activity a : new RemoteMachine.Activity[] {RemoteMachine.Activity.REMOTE_PREPARING, RemoteMachine.Activity.REMOTE_RUNNING,
+                RemoteMachine.Activity.REMOTE_SENDING}) {
+            assertTrue(RemoteText.activity(a).contains("solicitada pela Platform"), a.name());
+        }
+        assertTrue(RemoteText.SEE_ON_PLATFORM.contains("Este aplicativo não mostra esse conteúdo."));
+    }
+
     @Test
     void semContatoATelaDizQueOEstadoEOUltimoConhecido() throws Exception {
         machine.enable(gw.code("remote"));

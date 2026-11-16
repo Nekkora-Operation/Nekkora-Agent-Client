@@ -403,6 +403,23 @@ public final class ClientWindow extends JFrame {
         avatar.setOnRemote(remote == null ? null : this::openRemote);
     }
 
+    /** O nome da organizacao pelo identificador, na lista de quem entrou; vazio se nao ha lista ou ela nao esta nela. */
+    private String organizationName(String id) {
+        try {
+            Navigation nav = navigation;
+            if (nav == null) {
+                return "";
+            }
+            var list = nav.state().organizations();
+            if (!list.isReady()) {
+                return "";
+            }
+            return list.value().stream().filter(o -> String.valueOf(o.id()).equals(id)).map(o -> String.valueOf(o.name())).findFirst().orElse("");
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
     void openRemote() {
         if (remote == null) {
             return;
@@ -410,7 +427,7 @@ public final class ClientWindow extends JFrame {
         closeRemote();
         javax.swing.JDialog d = new javax.swing.JDialog(this, RemoteText.TITLE, remoteModal);
         d.setDefaultCloseOperation(javax.swing.JDialog.DISPOSE_ON_CLOSE);
-        RemotePanel panel = new RemotePanel(remote, background, d::dispose);
+        RemotePanel panel = new RemotePanel(remote, background, d::dispose, this::organizationName);
         javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(panel, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
                 javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(null);

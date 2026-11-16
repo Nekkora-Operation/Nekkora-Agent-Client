@@ -240,6 +240,51 @@ class RemoteDeliveryTest {
     }
 
     @Test
+    void aTelaSabeOQueEstaRodandoAgoraEDeQuemEEOCodigoDoAmbienteEOMesmoQueVaiAPlatform() throws Exception {
+        RemoteMachine fresh = machine(true);
+        assertEquals(RemoteMachine.Activity.IDLE, fresh.activity());
+        assertTrue(fresh.organizationId().isEmpty(), "sem vinculo, nao ha organizacao a dizer");
+        assertTrue(fresh.pythonHere().isEmpty());
+        // execucao local com o computador ainda nao habilitado: e local, e a tela sabe dizer isso
+        work.busy = true;
+        assertEquals(RemoteMachine.Activity.LOCAL_RUNNING, fresh.activity());
+        work.busy = false;
+
+        RemoteMachine m = enabled(true);
+        assertEquals(gw.organizationId, m.organizationId().orElseThrow());
+        // o codigo mostrado aqui sao os 6 primeiros caracteres do identificador opaco PUBLICADO; a pasta fica so neste computador
+        List<RemoteMachine.PythonHere> here = m.pythonHere();
+        assertEquals(1, here.size());
+        assertEquals(gw.offerPython.substring(0, 6), here.get(0).code());
+        assertEquals("3.12.10", here.get(0).version());
+        assertFalse(here.get(0).virtual());
+        assertEquals("c:\\python312\\python.exe", here.get(0).where());
+        assertFalse(gw.inventory.contains("python312"), "onde o ambiente esta nunca vai a Platform");
+        assertEquals(RemoteMachine.Activity.IDLE, m.activity());
+        // execucao local com o computador habilitado: continua sendo dita como local
+        work.busy = true;
+        assertEquals(RemoteMachine.Activity.LOCAL_RUNNING, m.activity());
+        work.busy = false;
+        // solicitacao da Platform: em execucao; depois do termino, enviando; resolvida, nada em andamento
+        gw.queue();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals(RemoteMachine.Activity.REMOTE_RUNNING, m.activity());
+        work.ends("SUCCEEDED", 0);
+        gw.status = 503;
+        m.pull();
+        assertEquals(RemoteMachine.Activity.REMOTE_SENDING, m.activity(), "terminou aqui, mas a Platform ainda nao recebeu o desfecho");
+        gw.status = null;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(RemoteMachine.Activity.IDLE, m.activity());
+        // desabilitado: nada de organizacao nem de ambientes
+        m.disable();
+        assertTrue(m.organizationId().isEmpty());
+        assertTrue(m.pythonHere().isEmpty());
+    }
+
+    @Test
     void semQuemExecuteAMaquinaNaoDeclaraExecucaoNemPerguntaPelaEntrega() throws Exception {
         RemoteMachine m = enabled(false);
         gw.queue();
