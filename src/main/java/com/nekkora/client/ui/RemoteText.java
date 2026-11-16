@@ -83,7 +83,8 @@ final class RemoteText {
             case STORAGE -> "Este computador não conseguiu guardar a credencial da máquina com proteção. Nada ficou habilitado.";
             case RENEWAL_NOT_DUE -> "A credencial deste computador ainda não precisa ser renovada.";
             case ALREADY_ENABLED -> "Este computador já tem um vínculo. Desabilite ou remova o vínculo atual antes de habilitar de novo.";
-            case UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
+            // da entrega de uma tentativa: nunca chegam a uma acao da pessoa nesta tela
+            case ATTEMPT_STALE, ATTEMPT_GONE, ATTEMPT_TRANSITION, UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
         };
     }
 }

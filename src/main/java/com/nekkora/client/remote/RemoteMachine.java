@@ -25,7 +25,8 @@ import com.nekkora.client.remote.MachineChannel.Refused;
  * <li>{@link #disable}: encerra o vinculo na Platform e remove a credencial deste computador;</li>
  * <li>{@link #beat}: a presenca, enquanto o aplicativo esta aberto.</li>
  * </ul>
- * Nesta versao o aplicativo ainda NAO executa o que a Platform solicitar: ele so mantem o vinculo e a presenca.
+ * Nesta versao o aplicativo ainda NAO executa o que a Platform solicitar: ele mantem o vinculo e a presenca, e tem o
+ * caminho da entrega ({@link #pull}), que so pergunta a Platform no ensaio do laboratorio ({@link #setDeliveryTrial}).
  * A execucao feita aqui pela pessoa continua local e nao passa por esta classe.
  */
 public final class RemoteMachine implements AutoCloseable {
@@ -64,6 +65,8 @@ public final class RemoteMachine implements AutoCloseable {
 
     static final Pattern CODE = Pattern.compile("^nkp1\\.[0-9a-f-]{36}\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{43}$");
     static final long BEAT_SECONDS = 60;
+    /** De quanto em quanto tempo a maquina pergunta a Platform o que ha para ela (ponto de partida de laboratorio). */
+    static final long PULL_SECONDS = 15;
     /** A credencial e renovada quando faltarem ate estes dias para o vencimento (a mesma janela padrao do servidor). */
     static final long RENEW_WITHIN_DAYS = 30;
     /** Depois de uma falha passageira da renovacao: espera crescente, limitada. A credencial atual continua valendo. */
@@ -95,6 +98,10 @@ public final class RemoteMachine implements AutoCloseable {
     /** Renovacao: quando tentar de novo depois de uma falha passageira, e a espera da proxima. So em memoria. */
     private java.time.Instant renewNotBefore = java.time.Instant.MIN;
     private long renewWaitSeconds = RENEW_RETRY_FIRST_SECONDS;
+    /** O diario da entrega: a tentativa recebida e ainda nao resolvida com a Platform. */
+    private final AttemptJournal journal;
+    /** Ensaio de entrega do laboratorio (desligado por padrao): ver {@link #setDeliveryTrial}. */
+    private volatile boolean deliveryTrial;
 
     /** {@code appVersion}: a versao do build, ou vazio na execucao de desenvolvimento. */
     public RemoteMachine(MachineVault vault, MachineChannel channel, Optional<String> appVersion) {
@@ -105,6 +112,7 @@ public final class RemoteMachine implements AutoCloseable {
     RemoteMachine(MachineVault vault, MachineChannel channel, Optional<String> appVersion, java.time.Clock clock) {
         this.clock = clock;
         this.vault = vault;
+        this.journal = vault.journal();
         this.channel = channel;
         this.appVersion = appVersion.map(v -> v + "+client").orElse("0.0.0+client.dev");
         Optional<MachineVault.Link> stored = vault.load();
@@ -121,6 +129,108 @@ public final class RemoteMachine implements AutoCloseable {
             return new View(vault.available() ? Status.NOT_ENABLED : Status.UNAVAILABLE, false, Optional.empty(), Optional.empty());
         }
         return new View(link.paused() ? Status.PAUSED : Status.RECEIVING, inContact, Optional.of(link.credentialExpiresAt()), Optional.ofNullable(published));
+    }
+
+    /**
+     * ENSAIO DE ENTREGA, so para o laboratorio (desligado por padrao). Esta versao ainda nao executa o que a Platform
+     * solicitar; sem o ensaio, ela nao declara a capacidade de execucao, a Platform a mostra como incompativel e nada lhe e
+     * entregue. Com o ensaio ligado, a maquina declara a capacidade e pergunta pela entrega, para provar o caminho
+     * (receber, gravar, confirmar, informar): toda tentativa recebida e RECUSADA com o motivo CLIENT_INCOMPATIBLE. Nada e
+     * baixado nem executado. Sai quando a execucao de verdade entrar.
+     */
+    public void setDeliveryTrial(boolean on) {
+        this.deliveryTrial = on;
+    }
+
+    /**
+     * Uma consulta de entrega. Nunca lanca. Com uma tentativa no diario, resolve-a com a Platform (mesmo com o ensaio
+     * desligado ou o recebimento pausado); sem tentativa no diario, so pergunta se o ensaio estiver ligado.
+     * <ol>
+     * <li>a tentativa entregue e GRAVADA no diario (token protegido) antes de qualquer confirmacao; se nao der para gravar,
+     * nada e confirmado e a Platform a entrega de novo, com token e epoca novos;</li>
+     * <li>o recebimento e confirmado com o token e a epoca da entrega; repetir (resposta perdida, aplicativo fechado) nao
+     * muda nada;</li>
+     * <li>o desfecho e informado; so depois de a Platform aceitar, o diario e apagado.</li>
+     * </ol>
+     * Token ou epoca que nao valem mais, tentativa que a Platform ja encerrou ou nao tem: o diario e apagado e nada e alterado
+     * la. Falha de rede: fica tudo como esta, para a proxima consulta.
+     */
+    public void pull() {
+        synchronized (operation) {
+            MachineVault.Link current = usable();
+            if (current == null) {
+                return;
+            }
+            AttemptJournal.Entry pending = journal.load(current.agentId()).orElse(null);
+            if (pending == null && !deliveryTrial) {
+                return;
+            }
+            try {
+                deliver(current, pending);
+            } catch (Refused e) {
+                if (e.problem() == Problem.LINK_ENDED || e.problem() == Problem.NOT_ENABLED) {
+                    failed(e.problem());
+                }
+            }
+        }
+    }
+
+    private void deliver(MachineVault.Link current, AttemptJournal.Entry e) throws Refused {
+        String credential = current.credential();
+        if (e == null) {
+            MachineChannel.Offer o = channel.next(credential).offer();
+            if (o == null) {
+                return;
+            }
+            try {
+                e = new AttemptJournal.Entry(current.agentId(), o.attemptId(), o.remoteExecutionId(), o.attemptNumber(), o.automationId(),
+                        o.automationVersionId(), o.packageFingerprint(), o.packageFingerprintRule(), o.dependencies(), o.token(), o.epoch(), false, null, null);
+                journal.save(e);
+            } catch (IOException | IllegalArgumentException x) {
+                // nao gravou: nao confirma. A tentativa continua oferecida no servidor
+                return;
+            }
+        }
+        try {
+            if (!e.acked()) {
+                if (!channel.ack(credential, e.attemptId(), e.token(), e.epoch()).proceed()) {
+                    // a Platform ja a encerrou (cancelada ou recusada antes de chegar aqui)
+                    forget();
+                    return;
+                }
+                e = e.withAck();
+                keep(e);
+            }
+            if (e.report() == null) {
+                // esta versao nao executa: o desfecho e a recusa, com o motivo
+                e = e.reporting("REFUSED", "CLIENT_INCOMPATIBLE");
+                keep(e);
+            }
+            channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason());
+            forget();
+        } catch (Refused x) {
+            if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
+                forget();
+                return;
+            }
+            throw x;
+        }
+    }
+
+    private void keep(AttemptJournal.Entry e) {
+        try {
+            journal.save(e);
+        } catch (IOException x) {
+            // o que ja estava gravado continua valendo: a etapa e repetida (sem efeito no servidor) na proxima abertura
+        }
+    }
+
+    private void forget() {
+        try {
+            journal.clear();
+        } catch (IOException x) {
+            // fica para a proxima consulta: a Platform respondera que a tentativa ja terminou
+        }
     }
 
     /** Liga a publicacao do inventario de Python (quem monta o aplicativo entrega a descoberta). */
@@ -346,7 +456,7 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
-                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion);
+                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, deliveryTrial, journal.load(current.agentId()).isPresent());
                 MachineVault.Link next = current.withPaused(p.paused());
                 try {
                     next = next.withExpiry(p.credentialExpiresAt());
@@ -491,6 +601,13 @@ public final class RemoteMachine implements AutoCloseable {
                 // a presenca nunca derruba o aplicativo
             }
         }, 0, BEAT_SECONDS, TimeUnit.SECONDS);
+        beats.scheduleWithFixedDelay(() -> {
+            try {
+                pull();
+            } catch (RuntimeException | LinkageError e) {
+                // a consulta de entrega nunca derruba o aplicativo
+            }
+        }, 5, PULL_SECONDS, TimeUnit.SECONDS);
     }
 
     /** Fechar o aplicativo NAO desabilita a maquina: so a presenca para, e a Platform a vera sem contato. */
