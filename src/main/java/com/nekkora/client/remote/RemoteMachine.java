@@ -489,7 +489,7 @@ public final class RemoteMachine implements AutoCloseable {
                     verify(current, channel.pendingCheck(current.credential()), work);
                 }
                 // o que tentativas ja terminadas deixaram aqui sem confirmacao continua sendo enviado, a parte do diario
-                deliverHeld(current, work, false);
+                deliverHeld(current, work, false, journal.load(current.agentId()).isPresent());
             } catch (Refused e) {
                 if (e.problem() == Problem.LINK_ENDED || e.problem() == Problem.NOT_ENABLED) {
                     failed(e.problem());
@@ -641,7 +641,7 @@ public final class RemoteMachine implements AutoCloseable {
             String attempt = e.attemptId();
             forget(e, w);
             changed();
-            deliverHeld(current, w, true);
+            deliverHeld(current, w, true, false);
             if (attempt.equals(queueAttempt)) {
                 dropQueue(false);
             }
@@ -749,8 +749,10 @@ public final class RemoteMachine implements AutoCloseable {
      * SHA-256 e tamanho, o fechamento desta tentativa foi aceito com as mesmas contagens, nenhum arquivo ficou de fora, e o que
      * esta na pasta agora e exatamente o que foi confirmado. Senao, o motivo da pendencia.
      */
-    private String sendResults(String credential, LossLedger.Entry e, Work w) throws Refused {
+    private String sendResults(String credential, LossLedger.Entry e, Work w, long until) throws Refused {
         java.util.Map<String, String> confirmed = new java.util.LinkedHashMap<>();
+        java.util.Map<String, String> done = heldResultsDone.computeIfAbsent(e.attemptId(), k -> new java.util.HashMap<>());
+        boolean uploaded = false;
         List<ResultFile> files;
         try {
             files = w == null ? List.of() : w.results(e.attemptId(), e.run());
@@ -767,8 +769,24 @@ public final class RemoteMachine implements AutoCloseable {
                 skipped++;
                 continue;
             }
+            String already = done.get(f.file());
+            if (already != null) {
+                // a Platform ja confirmou este arquivo numa consulta anterior deste processo: os bytes nao vao de novo. Se o
+                // arquivo mudou desde entao, a ultima conferencia (antes de apagar a pasta) acusa
+                confirmed.put(f.file(), already);
+                sent++;
+                total += f.size();
+                continue;
+            }
+            if (uploaded && clock.millis() >= until) {
+                // pelo menos um arquivo por consulta; passou da fatia, devolve a vez
+                return IN_PROGRESS;
+            }
             try {
-                confirmed.put(f.file(), channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file())));
+                String sha = channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file()));
+                uploaded = true;
+                confirmed.put(f.file(), sha);
+                done.put(f.file(), sha);
                 sent++;
                 total += f.size();
             } catch (Refused x) {
@@ -935,11 +953,33 @@ public final class RemoteMachine implements AutoCloseable {
     static final long HELD_RETRY_FIRST_SECONDS = 30;
     static final long HELD_RETRY_MAX_SECONDS = 900;
     /**
-     * Por quanto tempo, no maximo, uma consulta fica enviando registros guardados antes de devolver a vez (milissegundos). Uma
-     * fila grande (dezenas de milhares de linhas) leva minutos para chegar a Platform: enviada de uma vez, seguraria a maquina -
-     * a presenca e a consulta de trabalho - por todo esse tempo. O que falta segue na consulta seguinte, sem espera.
+     * A FATIA de uma consulta (milissegundos): por quanto tempo, no maximo, UMA consulta - a maquina consulta a Platform a cada
+     * {@link #PULL_SECONDS} s - fica enviando o que tentativas JA TERMINADAS deixaram guardado, somando todas elas, antes de
+     * devolver a vez. Nao e prazo de entrega nem tempo limite de um envio: e o tamanho da vez. O que falta segue na consulta
+     * seguinte, sem espera, de onde a Platform confirmou.
+     *
+     * <p>Por que existe: a presenca, a renovacao do prazo da tentativa em execucao, o pedido de cancelamento e a consulta de
+     * trabalho novo passam pela mesma vez. Uma fila grande (dezenas de milhares de linhas) leva minutos para chegar a Platform;
+     * enviada de uma so vez, seguraria tudo isso.
+     *
+     * <p>Dentro da fatia, a unidade e o LOTE: no maximo {@link LogQueue#BATCH_LINES} linhas e {@link LogQueue#BATCH_BYTES} bytes
+     * por lote de registros; um arquivo de resultado por vez (ate {@link MachineChannel#MAX_RESULT_BYTES} bytes). Cada lote so
+     * conta como entregue com a CONFIRMACAO da Platform (ela responde ate qual linha tem; o arquivo, com o SHA-256 que recebeu). A
+     * fatia so e conferida ENTRE lotes: pelo menos um lote por consulta, e um lote em andamento nunca e cortado.
+     *
+     * <p>Com uma tentativa ATIVA neste computador (recebida, em preparo ou em execucao), o que ficou de tentativas anteriores
+     * cede a vez: um lote de registros por consulta e nenhum arquivo de resultado - o estado da tentativa ativa e o pedido de
+     * cancelamento sao tratados ANTES, em toda consulta, e esperam no maximo um lote.
      */
     long heldSendBudgetMillis = 10_000;
+    /**
+     * Arquivos de resultado de tentativas terminadas que a Platform ja confirmou NESTE processo (arquivo -> SHA-256 confirmado),
+     * para a retomada entre consultas nao enviar os mesmos bytes de novo. Com o aplicativo reaberto o envio recomeca uma vez (a
+     * Platform reconhece o arquivo que ja tem).
+     */
+    private final java.util.Map<String, java.util.Map<String, String>> heldResultsDone = new java.util.HashMap<>();
+    /** Marca de {@link #sendResults}: a fatia acabou com arquivos por enviar; nada foi fechado. */
+    private static final String IN_PROGRESS = "IN_PROGRESS";
     /**
      * As filas de registros de tentativas terminadas que ainda estao sendo enviadas, abertas neste processo. A fila so sabe em
      * memoria ate onde a Platform confirmou: reabri-la a cada consulta recomecaria o envio do inicio. Com o aplicativo reaberto,
@@ -969,15 +1009,19 @@ public final class RemoteMachine implements AutoCloseable {
      * espera crescente (30 s ate 15 min). Credencial recusada: a falha sobe, e quem chama trata o fim do vinculo - nada e
      * enviado sem credencial valida. {@code now}: sem respeitar a espera (logo depois do desfecho).
      */
-    private void deliverHeld(MachineVault.Link current, Work w, boolean now) throws Refused {
+    private void deliverHeld(MachineVault.Link current, Work w, boolean now, boolean busy) throws Refused {
         if (w == null) {
             return;
         }
+        // uma fatia para a consulta inteira (todas as tentativas guardadas); com tentativa ativa, so um lote de registros
+        long until = busy ? Long.MIN_VALUE : clock.millis() + heldSendBudgetMillis;
+        boolean started = false;
         long at = clock.instant().getEpochSecond();
         LossLedger ledger = vault.losses();
         boolean any = false;
         // fila que nao esta mais guardada (confirmada, impedida ou removida pelo prazo) sai da memoria
         heldQueues.keySet().removeIf(id -> ledger.load(id).filter(x -> x.logsHeld() && x.logsBlock() == LossLedger.Block.NONE).isEmpty());
+        heldResultsDone.keySet().removeIf(id -> ledger.load(id).filter(x -> x.resultsHeld() && x.resultsBlock() == LossLedger.Block.NONE).isEmpty());
         for (LossLedger.Entry e : ledger.all(at)) {
             if (!e.deliverable()) {
                 continue;
@@ -986,8 +1030,14 @@ public final class RemoteMachine implements AutoCloseable {
             if (!now && wait != null && at < wait[0]) {
                 continue;
             }
+            if (started && clock.millis() >= until) {
+                // a fatia desta consulta acabou: as outras tentativas guardadas ficam para a seguinte
+                break;
+            }
             try {
-                if (e.logsHeld() && e.logsBlock() == LossLedger.Block.NONE && !sendHeldLogs(current, e, ledger)) {
+                boolean logs = e.logsHeld() && e.logsBlock() == LossLedger.Block.NONE;
+                started = started || logs;
+                if (logs && !sendHeldLogs(current, e, ledger, until)) {
                     // a fatia de tempo desta consulta acabou com linhas por enviar: segue na proxima, sem espera; os registros
                     // vao antes dos resultados
                     heldRetry.remove(e.attemptId());
@@ -996,7 +1046,16 @@ public final class RemoteMachine implements AutoCloseable {
                 }
                 e = ledger.load(e.attemptId()).orElse(null);
                 if (e != null && e.resultsHeld() && e.resultsBlock() == LossLedger.Block.NONE) {
-                    sendHeldResults(current.credential(), e, w, ledger);
+                    if (busy) {
+                        // um arquivo pode levar minutos: com tentativa ativa, os resultados guardados esperam a maquina ficar livre
+                        continue;
+                    }
+                    started = true;
+                    if (!sendHeldResults(current.credential(), e, w, ledger, until)) {
+                        heldRetry.remove(e.attemptId());
+                        any = true;
+                        continue;
+                    }
                 }
                 heldRetry.remove(e == null ? "" : e.attemptId());
                 any = true;
@@ -1033,9 +1092,14 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /** Os resultados guardados de uma tentativa terminada: envia, fecha, e so com TUDO confirmado apaga a pasta. */
-    private void sendHeldResults(String credential, LossLedger.Entry e, Work w, LossLedger ledger) throws Refused {
+    private boolean sendHeldResults(String credential, LossLedger.Entry e, Work w, LossLedger ledger, long until) throws Refused {
         long at = clock.instant().getEpochSecond();
-        String pending = sendResults(credential, e, w);
+        String pending = sendResults(credential, e, w, until);
+        if (IN_PROGRESS.equals(pending)) {
+            // a fatia acabou com arquivos por enviar: nada foi fechado, nada foi apagado; segue na consulta seguinte
+            return false;
+        }
+        heldResultsDone.remove(e.attemptId());
         if (pending == null) {
             try {
                 w.discardOutputs(e.attemptId());
@@ -1043,18 +1107,19 @@ public final class RemoteMachine implements AutoCloseable {
                 // a pasta fica para a proxima limpeza; a Platform ja tem tudo
             }
             ledger.resultsSettled(e.attemptId());
-            return;
+            return true;
         }
         // sem a confirmacao de TUDO, a pasta fica, com o motivo; nao ha o que enviar de novo
         ledger.resultsHeld(e.attemptId(), e.token(), e.epoch(), at, "OUT_OF_LIMIT".equals(pending) ? LossLedger.Block.LIMIT : LossLedger.Block.CONFLICT);
         holdReason(w, e.attemptId(), pending);
+        return true;
     }
 
     /**
      * Os registros guardados de uma tentativa terminada: envia o que falta, fecha, e so com o fechamento confirmado apaga a fila.
      * {@code false}: a fatia de tempo desta consulta acabou e ainda ha linhas por enviar (nada foi fechado, nada foi apagado).
      */
-    private boolean sendHeldLogs(MachineVault.Link current, LossLedger.Entry e, LossLedger ledger) throws Refused {
+    private boolean sendHeldLogs(MachineVault.Link current, LossLedger.Entry e, LossLedger ledger, long until) throws Refused {
         long at = clock.instant().getEpochSecond();
         boolean mine = e.attemptId().equals(queueAttempt) && queue != null;
         LogQueue q;
@@ -1081,7 +1146,7 @@ public final class RemoteMachine implements AutoCloseable {
         // o prazo de guarda conta do desfecho, nao da ultima tentativa de envio: a data do arquivo e preservada
         java.nio.file.attribute.FileTime since = vault.logQueueTime(e.attemptId());
         try {
-            Boolean closed = closeLogs(current.credential(), q, e.attemptId(), e.token(), e.epoch());
+            Boolean closed = closeLogs(current.credential(), q, e.attemptId(), e.token(), e.epoch(), until);
             if (closed == null) {
                 return false;
             }
@@ -1104,16 +1169,15 @@ public final class RemoteMachine implements AutoCloseable {
     /**
      * Envia tudo o que a fila tem e ainda nao foi confirmado e fecha o envio. {@code true}: a Platform confirmou o fechamento com
      * as mesmas contagens. {@code false}: nao ha como confirmar (ela tem outra coisa nessas linhas, ou outro fechamento).
-     * {@code null}: a fatia de tempo ({@link #heldSendBudgetMillis}) acabou com linhas por enviar - nada foi fechado; segue na
-     * consulta seguinte. Falha passageira: lanca, e a fila fica como esta.
+     * {@code null}: a fatia desta consulta ({@code until}; ver {@link #heldSendBudgetMillis}) acabou com linhas por enviar - nada
+     * foi fechado; segue na consulta seguinte. Falha passageira: lanca, e a fila fica como esta.
      */
-    private Boolean closeLogs(String credential, LogQueue q, String attemptId, String token, int epoch) throws Refused {
+    private Boolean closeLogs(String credential, LogQueue q, String attemptId, String token, int epoch, long until) throws Refused {
         try {
             q.flush();
         } catch (IOException x) {
             // o que esta na memoria ainda pode ser enviado
         }
-        long until = clock.millis() + heldSendBudgetMillis;
         boolean first = true;
         try {
             while (true) {

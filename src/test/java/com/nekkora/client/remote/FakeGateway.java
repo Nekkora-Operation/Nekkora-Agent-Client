@@ -343,6 +343,76 @@ public final class FakeGateway implements AutoCloseable {
     }
 
     /** Uma solicitacao aceita para esta maquina, ainda nao entregue. */
+    /**
+     * Uma tentativa ANTERIOR, ja terminada, que a Platform continua reconhecendo enquanto outra esta ativa: o que a maquina
+     * enviar para ela (registros e resultados) cai nos campos {@code earlier*}. Uma so.
+     */
+    public volatile String earlierId;
+    private String earlierState;
+    private String earlierToken;
+    private int earlierEpoch;
+    public final Map<Integer, String> earlierLogs = new java.util.concurrent.ConcurrentSkipListMap<>();
+    public volatile String earlierLogsClosure;
+    public final Map<Integer, String> earlierResults = new ConcurrentHashMap<>();
+    public volatile String earlierResultsClosure;
+    public final java.util.concurrent.atomic.AtomicInteger earlierLogBatches = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Guarda a tentativa atual (terminada) como a anterior e enfileira outra. */
+    public synchronized String queueKeepingEarlier() {
+        earlierId = attemptId;
+        earlierState = attemptState;
+        earlierToken = attemptToken;
+        earlierEpoch = attemptEpoch;
+        earlierLogs.clear();
+        earlierLogs.putAll(logs);
+        earlierLogsClosure = logsClosure;
+        earlierResults.clear();
+        earlierResults.putAll(results);
+        earlierResultsClosure = resultsClosure;
+        earlierLogBatches.set(0);
+        return queue();
+    }
+
+    /** Troca a tentativa atual pela anterior (e de volta): os tratadores de registros e resultados so conhecem "a atual". */
+    private synchronized void swapEarlier() {
+        String id = attemptId;
+        attemptId = earlierId;
+        earlierId = id;
+        String state = attemptState;
+        attemptState = earlierState;
+        earlierState = state;
+        String token = attemptToken;
+        attemptToken = earlierToken;
+        earlierToken = token;
+        int epoch = attemptEpoch;
+        attemptEpoch = earlierEpoch;
+        earlierEpoch = epoch;
+        Map<Integer, String> l = new java.util.TreeMap<>(logs);
+        logs.clear();
+        logs.putAll(earlierLogs);
+        earlierLogs.clear();
+        earlierLogs.putAll(l);
+        String lc = logsClosure;
+        logsClosure = earlierLogsClosure;
+        earlierLogsClosure = lc;
+        Map<Integer, String> r = new java.util.TreeMap<>(results);
+        results.clear();
+        results.putAll(earlierResults);
+        earlierResults.clear();
+        earlierResults.putAll(r);
+        String rc = resultsClosure;
+        resultsClosure = earlierResultsClosure;
+        earlierResultsClosure = rc;
+        int b = logBatches.get();
+        logBatches.set(earlierLogBatches.get());
+        earlierLogBatches.set(b);
+    }
+
+    private boolean forEarlier(String path) {
+        String id = earlierId;
+        return id != null && path.startsWith("/agent/api/v1/remote/attempts/" + id + "/");
+    }
+
     public String queue() {
         attemptId = UUID.randomUUID().toString();
         attemptState = "QUEUED";
@@ -608,7 +678,17 @@ public final class FakeGateway implements AutoCloseable {
         if (path.startsWith("/agent/api/v1/remote/attempts/") && (path.endsWith("/logs") || path.endsWith("/logs/complete"))
                 && "POST".equals(x.getRequestMethod())) {
             if (authenticated(x, auth)) {
-                logs(x, path, text);
+                boolean earlier = forEarlier(path);
+                if (earlier) {
+                    swapEarlier();
+                }
+                try {
+                    logs(x, path, text);
+                } finally {
+                    if (earlier) {
+                        swapEarlier();
+                    }
+                }
             }
             return;
         }
@@ -621,7 +701,17 @@ public final class FakeGateway implements AutoCloseable {
         if (path.startsWith("/agent/api/v1/remote/attempts/") && path.contains("/results/")
                 && ("PUT".equals(x.getRequestMethod()) || "POST".equals(x.getRequestMethod()))) {
             if (authenticated(x, auth)) {
-                result(x, path, text, raw);
+                boolean earlier = forEarlier(path);
+                if (earlier) {
+                    swapEarlier();
+                }
+                try {
+                    result(x, path, text, raw);
+                } finally {
+                    if (earlier) {
+                        swapEarlier();
+                    }
+                }
             }
             return;
         }
