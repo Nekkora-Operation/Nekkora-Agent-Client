@@ -118,8 +118,8 @@ class ArchitectureTest {
     }
 
     /**
-     * PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01a. As rotas do canal da maquina sao uma lista FECHADA: resgate do codigo,
-     * presenca, recebimento e encerramento do vinculo. Nesta versao nenhuma e de solicitacao, download, registro ou
+     * PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01a e T01b. As rotas do canal da maquina sao uma lista FECHADA: resgate do codigo,
+     * presenca, recebimento, encerramento do vinculo e renovacao da propria credencial. Nesta versao nenhuma e de solicitacao, download, registro ou
      * resultado de execucao (essas entram com as proximas tarefas, cada uma acrescentada aqui de forma explicita).
      */
     @Test
@@ -133,7 +133,7 @@ class ArchitectureTest {
             }
         }
         assertEquals(new TreeSet<>(Set.of("/agent/api/v1/enrollments/redeem", "/agent/api/v1/heartbeat", "/agent/api/v1/remote/receiving",
-                "/agent/api/v1/link/unlink")), rotas);
+                "/agent/api/v1/link/unlink", "/agent/api/v1/remote/credential/renew")), rotas);
     }
 
     /**

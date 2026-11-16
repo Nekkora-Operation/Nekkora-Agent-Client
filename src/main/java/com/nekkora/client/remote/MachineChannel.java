@@ -25,7 +25,8 @@ import com.nekkora.client.auth.PlatformOrigin;
  * <li>{@link #redeem}: resgata o codigo de habilitacao, declarando que a confirmacao foi feita NESTE computador;</li>
  * <li>{@link #heartbeat}: presenca; devolve o recebimento, cuja referencia e o servidor;</li>
  * <li>{@link #receiving}: pausar ou retomar o recebimento;</li>
- * <li>{@link #unlink}: encerrar o vinculo deste computador.</li>
+ * <li>{@link #unlink}: encerrar o vinculo deste computador;</li>
+ * <li>{@link #renew}: trocar a propria credencial perto do vencimento, sem pessoa e sem codigo.</li>
  * </ul>
  * Uma resposta so e aceita com a forma do contrato; qualquer outra coisa e {@link Problem#UNEXPECTED}, nunca sucesso.
  * Nenhuma excecao carrega codigo, segredo ou credencial.
@@ -37,6 +38,7 @@ public final class MachineChannel {
     static final String HEARTBEAT = "/agent/api/v1/heartbeat";
     static final String RECEIVING = "/agent/api/v1/remote/receiving";
     static final String UNLINK = "/agent/api/v1/link/unlink";
+    static final String RENEW = "/agent/api/v1/remote/credential/renew";
     /** A intencao declarada no resgate: habilitar ESTE computador para execucao remota. */
     static final String INTENT = "pair-remote";
 
@@ -63,6 +65,8 @@ public final class MachineChannel {
         STORAGE,
         /** Ja ha um vinculo neste computador. */
         ALREADY_ENABLED,
+        /** A credencial ainda esta longe do vencimento: a Platform nao a renova agora. */
+        RENEWAL_NOT_DUE,
         UNEXPECTED
     }
 
@@ -177,6 +181,28 @@ public final class MachineChannel {
             throw new Refused(reason.startsWith("link_ended_") ? Problem.LINK_ENDED : Problem.UNEXPECTED);
         }
         ok(authenticated(r));
+    }
+
+    /**
+     * Troca a credencial da maquina: prova a posse da atual e envia o segredo NOVO, gerado aqui. A resposta traz so o
+     * identificador e a validade da nova. Repetir com a mesma credencial e o MESMO segredo (resposta perdida) devolve a mesma
+     * credencial nova. Credencial vencida ou revogada: {@link Problem#LINK_ENDED} - ela nunca volta a valer.
+     */
+    Redeemed renew(String credential, String newSecret, Redeemed identity) throws Refused {
+        HttpResponse<String> r = send(request(RENEW, credential).POST(HttpRequest.BodyPublishers.ofString("{\"credentialSecret\":" + Json.quote(newSecret) + "}")));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "credential_renewal_not_due" -> Problem.RENEWAL_NOT_DUE;
+                case "remote_execution_not_enabled" -> Problem.NOT_ENABLED;
+                case "remote_execution_unavailable" -> Problem.FEATURE_OFF;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        return new Redeemed(identity.organizationId(), identity.agentId(), identity.workerId(), uuid(o, "credentialId"), text(o, "credentialExpiresAt"));
     }
 
     private HttpRequest.Builder request(String path, String credential) {

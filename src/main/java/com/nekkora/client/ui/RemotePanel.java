@@ -45,6 +45,7 @@ final class RemotePanel extends JPanel {
     private final WrappedText what = new WrappedText(WIDTH).alignLeft();
     private final WrappedText local = new WrappedText(WIDTH).alignLeft();
     private final Notice notYet = new Notice(WIDTH);
+    private final WrappedText validity = new WrappedText(WIDTH).alignLeft();
     private final JLabel codeLabel = new JLabel(RemoteText.CODE_FIELD);
     private final JTextField code = new JTextField(20);
     private final JCheckBox confirm = new JCheckBox(RemoteText.CONFIRM);
@@ -101,9 +102,9 @@ final class RemotePanel extends JPanel {
         footer.setOpaque(false);
         footer.add(close);
 
-        JComponent[] all = {title, status, contact, what, local, notYet, enableSection, enabledSection, disableSection, result, footer};
-        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
+        JComponent[] all = {title, status, contact, what, local, notYet, validity, enableSection, enabledSection, disableSection, result, footer};
+        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
+                ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -233,6 +234,9 @@ final class RemotePanel extends JPanel {
         } else {
             notYet.clear();
         }
+        String until = linked ? v.credentialExpiresAt().map(RemotePanel::day).orElse("") : "";
+        validity.setText(until.isEmpty() ? "" : RemoteText.validUntil(until));
+        validity.setVisible(!until.isEmpty());
         what.setVisible(s == Status.NOT_ENABLED);
         enableSection.setVisible(s == Status.NOT_ENABLED);
         enabledSection.setVisible((linked || s == Status.ENDED) && !confirmingDisable);
@@ -254,6 +258,16 @@ final class RemotePanel extends JPanel {
         repaint();
         // a janela acompanha a altura do conteudo (mesmo aviso dos demais formularios)
         firePropertyChange("conteudo", null, Boolean.TRUE);
+    }
+
+    /** A data de validade no fuso deste computador, como dia/mês/ano; vazio se não for uma data. */
+    private static String day(String instant) {
+        try {
+            return java.time.OffsetDateTime.parse(instant).atZoneSameInstant(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        } catch (java.time.DateTimeException e) {
+            return "";
+        }
     }
 
     private static JPanel column() {
@@ -282,7 +296,7 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -337,6 +351,10 @@ final class RemotePanel extends JPanel {
 
     Notice resultNotice() {
         return result;
+    }
+
+    String validityText() {
+        return validity.isVisible() ? validity.getText() : "";
     }
 
     Notice notYetNotice() {
