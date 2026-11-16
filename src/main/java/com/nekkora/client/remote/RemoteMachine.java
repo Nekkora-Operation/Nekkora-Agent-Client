@@ -78,7 +78,11 @@ public final class RemoteMachine implements AutoCloseable {
         /** Uma solicitacao da Platform esta em execucao. */
         REMOTE_RUNNING,
         /** A execucao pedida pela Platform terminou; o desfecho, os registros e os resultados estao sendo enviados. */
-        REMOTE_SENDING
+        REMOTE_SENDING,
+        /** O processo principal da execucao pedida pela Platform terminou, e ha processos da automacao ainda ativos aqui. */
+        REMOTE_FINISHING,
+        /** Uma execucao pedida pela Platform terminou e este computador nao tem como dizer se restou processo dela. */
+        REMOTE_UNCERTAIN
     }
 
     /** A atividade de agora e a origem dela. Nunca lanca. */
@@ -93,6 +97,19 @@ public final class RemoteMachine implements AutoCloseable {
                 return pending.phase() == AttemptJournal.Phase.RUNNING ? Activity.REMOTE_RUNNING : Activity.REMOTE_PREPARING;
             }
             Work w = work;
+            if (current != null) {
+                // tentativas ja terminadas cujo ultimo relato a Platform nao foi "nenhum processo continua"
+                boolean uncertain = false;
+                for (AbsenceLedger.Entry a : vault.absences().all(clock.instant().getEpochSecond())) {
+                    if (ACTIVE.equals(a.last())) {
+                        return Activity.REMOTE_FINISHING;
+                    }
+                    uncertain = true;
+                }
+                if (uncertain) {
+                    return Activity.REMOTE_UNCERTAIN;
+                }
+            }
             return w != null && w.busy() ? Activity.LOCAL_RUNNING : Activity.IDLE;
         } catch (RuntimeException x) {
             return Activity.IDLE;
@@ -216,11 +233,11 @@ public final class RemoteMachine implements AutoCloseable {
         Optional<Progress> progress(String run);
 
         /**
-         * Este computador CONFERIU que nada da execucao continua em andamento nele - nem o processo lancado, nem os processos
-         * filhos dele? Falso quando resta algum vivo E quando nao ha como saber (identificacao incerta).
+         * O que este computador sabe dos PROCESSOS da execucao (o lancado e os descendentes dele): {@code GONE} - ha prova de que
+         * nenhum continua; {@code ALIVE} - ha algum vivo; qualquer outra coisa - nao ha como saber.
          */
-        default boolean processGone(String run) {
-            return false;
+        default String processes(String run) {
+            return "UNCERTAIN";
         }
 
         /** Pede que a execucao pare. */
@@ -620,12 +637,13 @@ public final class RemoteMachine implements AutoCloseable {
                 keep(e);
             }
             if (e.phase() != AttemptJournal.Phase.RESULTS) {
-                boolean absent = processAbsent(e, w);
-                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode(), absent);
-                if (!absent && w != null && e.phase() == AttemptJournal.Phase.RUNNING && e.run() != null && !"REFUSED".equals(e.report())) {
-                    // o fim foi informado SEM a afirmacao (resta processo filho vivo, ou nao deu para conferir): este computador
-                    // confere de novo a cada consulta e repete o relato quando houver prova
-                    vault.absences().note(e.attemptId(), e.token(), e.epoch(), e.run(), e.report(), e.exitCode(), clock.instant().getEpochSecond());
+                // junto do fim: o que este computador sabe dos processos da tentativa (ausentes, ainda ativos, ou sem como saber)
+                String tree = processTree(e, w);
+                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode(), tree);
+                if (tree != null && !ABSENT.equals(tree)) {
+                    // o fim foi informado SEM a prova (ha processo da automacao vivo, ou nao deu para saber): este computador
+                    // confere de novo a cada consulta e repete o relato quando o que ele sabe mudar
+                    vault.absences().note(e.attemptId(), e.token(), e.epoch(), e.run(), e.report(), e.exitCode(), tree, clock.instant().getEpochSecond());
                 }
                 if (w == null || e.phase() != AttemptJournal.Phase.RUNNING) {
                     // nao chegou a executar: nao ha o que enviar
@@ -1243,19 +1261,28 @@ public final class RemoteMachine implements AutoCloseable {
      * andamento - o motor so fecha uma execucao que ele nao viu terminar depois de conferir que o processo dela nao existe mais.
      * Quando o aplicativo fechou entre pedir o inicio e registrar a execucao, ou o motor nao a conhece, nao ha o que conferir: falso.
      */
-    private static boolean processAbsent(AttemptJournal.Entry e, Work w) {
+    static final String ABSENT = "ABSENT";
+    static final String ACTIVE = "ACTIVE";
+    static final String UNCERTAIN = "UNCERTAIN";
+
+    /** Nulo: a tentativa nao chegou a lancar nada aqui (nao ha processo de que falar). */
+    private static String processTree(AttemptJournal.Entry e, Work w) {
         if (e.report() == null || "REFUSED".equals(e.report()) || e.phase() != AttemptJournal.Phase.RUNNING || w == null || e.run() == null) {
-            return false;
+            return null;
         }
-        return gone(w, e.run());
+        return processes(w, e.run());
     }
 
-    /** O motor conhece a execucao, diz que ela nao esta em andamento E conferiu a arvore de processos dela (principal e filhos). */
-    private static boolean gone(Work w, String run) {
+    /** O que o motor sabe dos processos da execucao: so {@code ABSENT} com prova; {@code ACTIVE} com algum vivo; senao incerto. */
+    private static String processes(Work w, String run) {
         try {
-            return w.progress(run).map(p -> !"RUNNING".equals(p.state())).orElse(false) && w.processGone(run);
+            if (w.progress(run).isEmpty()) {
+                return UNCERTAIN;
+            }
+            String p = w.processes(run);
+            return "GONE".equals(p) ? ABSENT : "ALIVE".equals(p) ? ACTIVE : UNCERTAIN;
         } catch (RuntimeException x) {
-            return false;
+            return UNCERTAIN;
         }
     }
 
@@ -1275,17 +1302,29 @@ public final class RemoteMachine implements AutoCloseable {
             } catch (RuntimeException x) {
                 continue;
             }
-            if (!known) {
-                // este computador nao conhece mais a execucao: nao ha o que conferir, nunca
-                ledger.drop(a.attemptId());
-                continue;
-            }
-            if (!gone(w, a.run())) {
+            String now = processes(w, a.run());
+            if (now.equals(a.last())) {
+                if (!known) {
+                    // este computador nao conhece mais a execucao e ja disse que nao sabe: nao ha o que conferir, nunca
+                    ledger.drop(a.attemptId());
+                }
                 continue;
             }
             try {
-                channel.state(current.credential(), a.attemptId(), a.token(), a.epoch(), a.report(), null, a.exitCode() < 0 ? null : a.exitCode(), true);
-                ledger.drop(a.attemptId());
+                channel.state(current.credential(), a.attemptId(), a.token(), a.epoch(), a.report(), null, a.exitCode() < 0 ? null : a.exitCode(), now);
+                if (ABSENT.equals(now) || !known) {
+                    ledger.drop(a.attemptId());
+                } else {
+                    ledger.said(a.attemptId(), now);
+                }
+                if (ABSENT.equals(now)) {
+                    // a limpeza que esperava os processos: o codigo sai; a pasta de saida so se nada dela esta pendente de envio
+                    w.discard(a.attemptId(), a.run());
+                    if (vault.losses().load(a.attemptId()).isEmpty()) {
+                        w.discardOutputs(a.attemptId());
+                    }
+                    changed();
+                }
             } catch (Refused x) {
                 if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
                     ledger.drop(a.attemptId());

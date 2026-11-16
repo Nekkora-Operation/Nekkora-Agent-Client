@@ -6,20 +6,24 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * A conferencia da arvore de processos de uma execucao (decisao de 16/11: confirmar que o processo terminou considera os filhos;
- * com processo vivo ou identificacao incerta, nada e afirmado). Aqui, sem lancar nada: o "processo vivo" e o do proprio teste.
+ * O que conta como PROVA de que nada de uma execucao gerenciada continua em andamento (decisoes de 16/11): o Windows dizer que
+ * o grupo dela esta vazio, ou a sessao do Windows em que ela rodou ter acabado. Sem isso nada e afirmado, mesmo que nenhum
+ * processo anotado esteja vivo. Aqui, sem lancar nada: o "processo vivo" e o do proprio teste.
  */
 class ProcessTreeTest {
     @TempDir
     Path tmp;
 
-    /** Um PID que nao existe agora (o maior possivel no Windows e multiplo de 4; este nunca e usado). */
     private static final long DEAD = 4_000_000_003L;
+    private static final Function<String, Boolean> MARCA_EXISTE = n -> true;
+    private static final Function<String, Boolean> MARCA_SUMIU = n -> false;
+    private static final Function<String, Boolean> SEM_RESPOSTA = n -> null;
 
     private static long ownStart() {
         return ProcessHandle.current().info().startInstant().map(Instant::toEpochMilli).orElseThrow();
@@ -35,40 +39,51 @@ class ProcessTreeTest {
         return new ProcessOwner(DEAD, 1_000L, ProcessOwner.digest("C:\\x\\python.exe"));
     }
 
-    @Test
-    void soEAusenteComOFimVistoENadaVivo() throws Exception {
-        assertEquals(ProcessTree.Verdict.GONE, ProcessTree.verdict(dead(), file("FIM\n")));
-        assertEquals(ProcessTree.Verdict.GONE, ProcessTree.verdict(dead(), file((DEAD - 4) + " 2000\n" + (DEAD - 8) + " 3000\nFIM\n")));
-        // um PID anotado que hoje e de OUTRO processo (outro inicio): reaproveitado, nao e desta arvore
-        long me = ProcessHandle.current().pid();
-        assertEquals(ProcessTree.Verdict.GONE, ProcessTree.verdict(dead(), file(me + " " + (ownStart() - 60_000) + "\nFIM\n")));
+    private ProcessTree.Verdict v(String text, Function<String, Boolean> mark) throws Exception {
+        return ProcessTree.verdict(dead(), file(text), mark, "NekkoraClient-teste");
     }
 
     @Test
-    void umDescendenteAnotadoVivoMantemAArvoreEmAndamentoMesmoComOPrincipalTerminado() throws Exception {
+    void aProvaEOGrupoVazioDitoPeloWindows() throws Exception {
+        assertEquals(ProcessTree.Verdict.GONE, v("GRUPO\nMARCA\n" + (DEAD - 4) + " 2000\nFIM\nVAZIO\n", MARCA_EXISTE));
+        // o grupo vazio decide mesmo com um PID anotado hoje ocupado por OUTRO programa (reaproveitado): a contagem e do Windows
         long me = ProcessHandle.current().pid();
-        assertEquals(ProcessTree.Verdict.ALIVE, ProcessTree.verdict(dead(), file(me + " " + ownStart() + "\nFIM\n")));
-        // o proprio processo principal vivo
+        assertEquals(ProcessTree.Verdict.GONE, v("GRUPO\n" + me + " " + (ownStart() - 60_000) + "\nFIM\nVAZIO\n", MARCA_EXISTE));
+        // "vazio" de um grupo que falhou ou nunca recebeu o processo principal nao prova nada
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nFALHA\nFIM\nVAZIO\n", MARCA_EXISTE));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("FIM\nVAZIO\n", MARCA_EXISTE));
+    }
+
+    @Test
+    void aSessaoDoWindowsEncerradaAcabaComADuvidaSobreOsProcessos() throws Exception {
+        // o aplicativo estava fechado quando o processo principal terminou: sem "vazio"; a marca da sessao sumiu = sessao encerrada
+        assertEquals(ProcessTree.Verdict.GONE, v("GRUPO\nMARCA\n" + (DEAD - 4) + " 2000\n", MARCA_SUMIU));
+        assertEquals(ProcessTree.Verdict.GONE, v("FALHA\nMARCA\n", MARCA_SUMIU));
+        // a marca nunca foi gravada: a falta dela nao prova nada; o Windows nao respondeu: tambem nao
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\n" + (DEAD - 4) + " 2000\n", MARCA_SUMIU));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n", SEM_RESPOSTA));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n", MARCA_EXISTE));
+    }
+
+    @Test
+    void semProvaNadaEAfirmadoMesmoSemNenhumProcessoAnotadoVivo() throws Exception {
+        // fim visto e nenhum anotado vivo, mas sem o grupo vazio: um descendente de processo ja terminado nao aparece em lista nenhuma
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n" + (DEAD - 4) + " 2000\nFIM\n", MARCA_EXISTE));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("", MARCA_EXISTE));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), tmp.resolve("nao-existe.txt"), MARCA_SUMIU, "x"));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(null, file("FIM\n"), MARCA_EXISTE, "x"));
+        // arquivo cortado ou alterado: nem "vazio" nem a marca valem
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n123\nFIM\nVAZIO\n", MARCA_SUMIU));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nabc 1\nVAZIO\n", MARCA_EXISTE));
+    }
+
+    @Test
+    void umProcessoAnotadoVivoDizQueHaAlgoEmAndamento() throws Exception {
+        long me = ProcessHandle.current().pid();
+        assertEquals(ProcessTree.Verdict.ALIVE, v("GRUPO\nMARCA\n" + me + " " + ownStart() + "\nFIM\n", MARCA_EXISTE));
         ProcessOwner alive = new ProcessOwner(me, ownStart(), ProcessOwner.digest("C:\\x\\python.exe"));
-        assertEquals(ProcessTree.Verdict.ALIVE, ProcessTree.verdict(alive, file("FIM\n")));
-    }
-
-    @Test
-    void semProvaNadaEAfirmado() throws Exception {
-        // o fim nao foi visto pelo acompanhamento (o aplicativo estava fechado quando o processo terminou)
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), file("")));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), file((DEAD - 4) + " 2000\n")));
-        // sem o arquivo (execucao de uma versao anterior do aplicativo), sem posse, posse sem instante de inicio
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), tmp.resolve("nao-existe.txt")));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(null, file("FIM\n")));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(new ProcessOwner(DEAD, -1, ProcessOwner.digest("C:\\x\\python.exe")), file("FIM\n")));
-        // arquivo cortado ou alterado
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), file("123\nFIM\n")));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), file("abc 1\nFIM\n")));
-        // um PID anotado esta vivo e o inicio dele nao foi anotado: nao da para saber se e o mesmo
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), file(ProcessHandle.current().pid() + " -1\nFIM\n")));
-        // vivo vence incerto: se ha prova de processo em andamento, e isso que se diz
-        long me = ProcessHandle.current().pid();
-        assertEquals(ProcessTree.Verdict.ALIVE, ProcessTree.verdict(dead(), file(me + " " + ownStart() + "\n")));
+        assertEquals(ProcessTree.Verdict.ALIVE, ProcessTree.verdict(alive, file("GRUPO\nFIM\n"), MARCA_EXISTE, "x"));
+        // mesmo PID, outro inicio: e outro programa
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n" + me + " " + (ownStart() - 60_000) + "\nFIM\n", MARCA_EXISTE));
     }
 }

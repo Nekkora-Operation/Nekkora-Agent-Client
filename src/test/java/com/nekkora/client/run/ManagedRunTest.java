@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -211,34 +212,52 @@ class ManagedRunTest {
         reopened.close();
     }
 
+    private static final String DEIXA_FILHO = String.join("\n",
+            "import json, os, pathlib, subprocess, sys, time",
+            "from comum import saida, sinal",
+            "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(pathlib.Path(__file__).with_name('filho.py'))],",
+            "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+            "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': filho.pid}), encoding='utf-8')",
+            "time.sleep(1.5)",
+            "sinal('BUSINESS_SUCCESS')",
+            "");
+
+    private ProcessHandle childOf(RunController.Request job, ExecutionId id) throws Exception {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"filho\": *(\\d+)")
+                .matcher(Files.readString(job.outputRoot().resolve(id.value()).resolve("pids.json"), StandardCharsets.UTF_8));
+        assertTrue(m.find());
+        return ProcessHandle.of(Long.parseLong(m.group(1))).orElseThrow();
+    }
+
+    private void waitFree(RunController c) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (c.occupied() && System.nanoTime() < deadline) Thread.sleep(50);
+        assertFalse(c.occupied(), "a vaga foi liberada no prazo do teste");
+    }
+
     /**
-     * Decisao de 16/11: confirmar que o processo terminou considera os FILHOS. A automacao termina com sucesso e deixa um processo
-     * filho rodando: a execucao TERMINOU (o desfecho e o dela), mas a arvore nao e dada como ausente enquanto o filho viver - nem
-     * depois de reabrir o aplicativo. Quando o filho acaba, e so entao, ha prova.
+     * Decisoes de 16/11: terminar o processo principal NAO libera o computador enquanto houver descendente da execucao vivo. A
+     * automacao termina com sucesso (o desfecho e o codigo de saida sao os dela) e deixa um filho: a execucao fica "finalizando" -
+     * a vaga continua ocupada, nada novo inicia, os processos sao dados como vivos. Quando o filho acaba, o Windows diz que o
+     * grupo esvaziou: so entao ha prova, e a vaga e liberada.
      */
     @Test
-    void aArvoreSoEDadaComoAusenteQuandoOsFilhosDaExecucaoTambemAcabaram() throws Exception {
-        String main = String.join("\n",
-                "import json, os, pathlib, subprocess, sys, time",
-                "from comum import saida, sinal",
-                "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(pathlib.Path(__file__).with_name('filho.py'))],",
-                "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
-                "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': filho.pid}), encoding='utf-8')",
-                "time.sleep(1.5)",
-                "sinal('BUSINESS_SUCCESS')",
-                "");
-        RunController.Request job = job("dez", main, null);
+    void terminarOPrincipalNaoLiberaAVagaEnquantoHouverDescendenteVivo() throws Exception {
+        RunController.Request job = job("dez", DEIXA_FILHO, null);
         ExecutionId id = controller.startManaged(job).record().id();
         assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id), "em andamento");
         ExecutionRecord end = waitEnd(controller);
         assertEquals(ExecutionState.SUCCEEDED, end.state());
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"filho\": *(\\d+)")
-                .matcher(Files.readString(job.outputRoot().resolve(id.value()).resolve("pids.json"), StandardCharsets.UTF_8));
-        assertTrue(m.find());
-        ProcessHandle child = ProcessHandle.of(Long.parseLong(m.group(1))).orElseThrow();
+        assertEquals(Integer.valueOf(0), end.exitCode(), "o codigo de saida do processo principal fica registrado");
+        ProcessHandle child = childOf(job, id);
         try {
             assertTrue(child.isAlive(), "o filho sobreviveu ao processo principal");
-            assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id), "o principal terminou, o filho nao");
+            assertFalse(controller.isRunning(), "a execucao terminou");
+            assertTrue(controller.occupied(), "mas o computador continua ocupado: finalizando");
+            assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id));
+            ExecRefused busy = assertThrows(ExecRefused.class, () -> controller.startManaged(job("onze", RunFixtures.SUCESSO, null)));
+            assertEquals(ErrorCode.EXEC_ALREADY_RUNNING, busy.code());
+            // outro controlador (o aplicativo reaberto) nao alcanca mais o grupo, mas ve o filho anotado vivo
             RunController reopened = controller();
             assertEquals(ProcessTree.Verdict.ALIVE, reopened.processTree(id), "a anotacao esta no disco: vale depois de reabrir");
             reopened.close();
@@ -246,17 +265,89 @@ class ManagedRunTest {
             // so o processo deste teste, pelo PID que ele mesmo gravou
             child.destroyForcibly();
         }
-        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
-        while (child.isAlive() && System.nanoTime() < deadline) Thread.sleep(50);
-        assertFalse(child.isAlive());
-        // o host de console do filho sai logo depois dele, nao no mesmo instante: a conferencia e repetida, como no aplicativo
-        deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
-        while (controller.processTree(id) != ProcessTree.Verdict.GONE && System.nanoTime() < deadline) Thread.sleep(100);
-        StringBuilder vivos = new StringBuilder();
-        for (String line : Files.readAllLines(managed.dir(id).resolve(ProcessTree.FILE), StandardCharsets.UTF_8)) {
-            if (line.equals(ProcessTree.END)) continue;
-            ProcessHandle.of(Long.parseLong(line.split(" ")[0])).filter(ProcessHandle::isAlive).ifPresent(h -> vivos.append(line).append(" -> ").append(h.info().command().orElse("?")).append(" ").append(h.info().startInstant().map(java.time.Instant::toEpochMilli).orElse(-1L)).append("; "));
+        waitFree(controller);
+        assertEquals(ProcessTree.Verdict.GONE, controller.processTree(id), "o Windows disse que o grupo esvaziou");
+        String facts = Files.readString(managed.dir(id).resolve(ProcessTree.FILE), StandardCharsets.UTF_8);
+        for (String fact : List.of(ProcessTree.GROUP, ProcessTree.MARK, ProcessTree.END, ProcessTree.EMPTY)) assertTrue(facts.contains(fact + "\n"), fact);
+        assertFalse(facts.contains(ProcessTree.BROKEN));
+        assertEquals(Boolean.FALSE, WindowsSupervision.marked(WindowsSupervision.name(id)), "com a prova, a marca da sessao sai");
+        // liberada: outra execucao inicia
+        controller.startManaged(job("doze", RunFixtures.SUCESSO, null));
+        waitEnd(controller);
+        waitFree(controller);
+    }
+
+    /**
+     * O aplicativo estava fechado quando o processo principal terminou, e restou um descendente: o grupo nao e mais alcancavel.
+     * Enquanto o descendente anotado vive, ha algo em andamento; depois que ele acaba NADA e afirmado - a evidencia e
+     * insuficiente - ate a sessao do Windows acabar (aqui, simulada tirando a marca da execucao).
+     */
+    @Test
+    void comOAplicativoFechadoNoFimDoPrincipalSoASessaoEncerradaAcabaComADuvida() throws Exception {
+        RunController.Request job = job("treze", DEIXA_FILHO, null);
+        ExecutionId id = controller.startManaged(job).record().id();
+        waitEnd(controller);
+        ProcessHandle child = childOf(job, id);
+        Path tree = managed.dir(id).resolve(ProcessTree.FILE);
+        try {
+            // o que o disco teria se o aplicativo tivesse fechado antes do fim: sem "fim" e sem "vazio"
+            String seen = Files.readString(tree, StandardCharsets.UTF_8);
+            Files.writeString(tree, seen.replace(ProcessTree.END + "\n", "").replace(ProcessTree.EMPTY + "\n", ""), StandardCharsets.UTF_8);
+            RunController reopened = controller();
+            assertEquals(ProcessTree.Verdict.ALIVE, reopened.processTree(id), "o descendente anotado continua vivo");
+            child.destroyForcibly();
+            long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+            while (child.isAlive() && System.nanoTime() < deadline) Thread.sleep(50);
+            // o controlador deste teste ainda acompanhava o grupo: anotou o fim e tirou a marca. O disco e a sessao voltam a ser os de
+            // um aplicativo que estava FECHADO quando tudo terminou
+            waitFree(controller);
+            assertTrue(WindowsSupervision.mark(WindowsSupervision.name(id)));
+            String after = Files.readString(tree, StandardCharsets.UTF_8);
+            Files.writeString(tree, after.replace(ProcessTree.END + "\n", "").replace(ProcessTree.EMPTY + "\n", ""), StandardCharsets.UTF_8);
+            assertEquals(ProcessTree.Verdict.UNCERTAIN, reopened.processTree(id), "nenhum anotado vivo NAO e prova");
+            assertFalse(reopened.occupied(), "a vaga local nao fica presa; a duvida e dita a quem pergunta");
+            // a sessao do Windows acabou (simulado): a marca da execucao nao existe mais
+            WindowsSupervision.unmark(WindowsSupervision.name(id));
+            assertEquals(ProcessTree.Verdict.GONE, reopened.processTree(id));
+            reopened.close();
+        } finally {
+            child.destroyForcibly();
+            WindowsSupervision.unmark(WindowsSupervision.name(id));
         }
-        assertEquals(ProcessTree.Verdict.GONE, controller.processTree(id), vivos.toString());
+    }
+
+    /**
+     * Parar a execucao encerra o GRUPO inteiro: tambem o neto cujo pai ja terminou, que nenhuma arvore pai-filho mostra mais.
+     */
+    @Test
+    void cancelarEncerraTambemODescendenteCujoPaiJaTerminou() throws Exception {
+        String main = String.join("\n",
+                "import json, os, pathlib, subprocess, sys, time",
+                "from comum import saida",
+                "meio = subprocess.Popen([sys.executable, '-E', '-s', '-B', '-c',",
+                "    'import subprocess, sys; n = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(900)\"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print(n.pid, flush=True)'],",
+                "    stdout=subprocess.PIPE, text=True)",
+                "neto = int(meio.stdout.readline().strip())",
+                "meio.wait()",
+                "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': neto}), encoding='utf-8')",
+                "time.sleep(900)",
+                "");
+        RunController.Request job = job("catorze", main, null);
+        ExecutionId id = controller.startManaged(job).record().id();
+        Path pids = job.outputRoot().resolve(id.value()).resolve("pids.json");
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (!Files.exists(pids) && System.nanoTime() < deadline) Thread.sleep(50);
+        ProcessHandle orphan = childOf(job, id);
+        try {
+            assertTrue(orphan.isAlive());
+            assertTrue(orphan.parent().isEmpty(), "o pai dele ja terminou: o sistema nao diz mais de quem ele descende");
+            assertEquals(RunController.CancelResult.REQUESTED, controller.cancel(id, ExecutionRecord.CancelSource.MANAGED_REQUEST));
+            assertEquals(ExecutionState.CANCELLED, waitEnd(controller).state());
+            waitFree(controller);
+            assertFalse(orphan.isAlive(), "o grupo foi encerrado inteiro");
+            assertEquals(ProcessTree.Verdict.GONE, controller.processTree(id));
+        } finally {
+            orphan.destroyForcibly();
+        }
     }
 }

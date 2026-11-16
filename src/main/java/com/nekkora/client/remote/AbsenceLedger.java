@@ -29,7 +29,7 @@ final class AbsenceLedger {
     private static final String SUFFIX = ".confirmar";
 
     /** {@code report}: o estado final ja informado; {@code exitCode}: -1 = sem codigo. */
-    record Entry(String attemptId, String token, int epoch, String run, String report, int exitCode, long notedAt) {
+    record Entry(String attemptId, String token, int epoch, String run, String report, int exitCode, long notedAt, String last) {
     }
 
     private final Path dir;
@@ -48,23 +48,40 @@ final class AbsenceLedger {
     }
 
     /** Anota (uma vez por tentativa). Sem conseguir gravar, nada e anotado: a tentativa so sai por declaracao na Platform. */
-    synchronized void note(String attemptId, String token, int epoch, String run, String report, Integer exitCode, long now) {
-        if (token == null || token.isEmpty() || run == null || run.isEmpty() || report == null || report.contains("\t") || run.contains("\t")) {
+    synchronized void note(String attemptId, String token, int epoch, String run, String report, Integer exitCode, String said, long now) {
+        if (token == null || token.isEmpty() || run == null || run.isEmpty() || report == null || report.contains("\t") || run.contains("\t")
+                || said == null || !said.matches("[A-Z]{1,20}")) {
             return;
         }
         try {
-            Path target = file(attemptId);
-            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            if (Files.exists(file(attemptId), LinkOption.NOFOLLOW_LINKS)) {
                 return;
             }
-            String text = String.join("\t", "v1", attemptId, token, String.valueOf(epoch), run, report, String.valueOf(exitCode == null ? -1 : exitCode),
-                    String.valueOf(now));
+            save(new Entry(attemptId, token, epoch, run, report, exitCode == null ? -1 : exitCode, now, said));
+        } catch (RuntimeException x) {
+            // sem o registro, este computador nao repete o relato
+        }
+    }
+
+    /** O que este computador disse por ultimo a Platform sobre os processos da tentativa. */
+    synchronized void said(String attemptId, String said) {
+        if (said == null || !said.matches("[A-Z]{1,20}")) {
+            return;
+        }
+        read(file(attemptId)).ifPresent(e -> save(new Entry(e.attemptId(), e.token(), e.epoch(), e.run(), e.report(), e.exitCode(), e.notedAt(), said)));
+    }
+
+    private void save(Entry e) {
+        try {
+            String text = String.join("\t", "v2", e.attemptId(), e.token(), String.valueOf(e.epoch()), e.run(), e.report(), String.valueOf(e.exitCode()),
+                    String.valueOf(e.notedAt()), e.last());
             Files.createDirectories(dir);
+            Path target = file(e.attemptId());
             Path fresh = target.resolveSibling(target.getFileName() + ".novo");
             Files.write(fresh, keyring.protect(text.getBytes(StandardCharsets.UTF_8)));
             Files.move(fresh, target, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException | RuntimeException x) {
-            // sem o registro, este computador nao repete o relato
+            // fica como estava
         }
     }
 
@@ -118,10 +135,10 @@ final class AbsenceLedger {
                 return Optional.empty();
             }
             String[] p = new String(keyring.unprotect(Files.readAllBytes(f)), StandardCharsets.UTF_8).split("\t", -1);
-            if (p.length != 8 || !p[0].equals("v1") || !ATTEMPT.matcher(p[1]).matches() || !String.valueOf(f.getFileName()).equals(p[1] + SUFFIX)) {
+            if (p.length != 9 || !p[0].equals("v2") || !ATTEMPT.matcher(p[1]).matches() || !String.valueOf(f.getFileName()).equals(p[1] + SUFFIX)) {
                 return Optional.empty();
             }
-            return Optional.of(new Entry(p[1], p[2], Integer.parseInt(p[3]), p[4], p[5], Integer.parseInt(p[6]), Long.parseLong(p[7])));
+            return Optional.of(new Entry(p[1], p[2], Integer.parseInt(p[3]), p[4], p[5], Integer.parseInt(p[6]), Long.parseLong(p[7]), p[8]));
         } catch (IOException | RuntimeException e) {
             return Optional.empty();
         }

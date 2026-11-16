@@ -55,6 +55,8 @@ class RemoteDeliveryTest {
         volatile boolean known = true;
         /** O motor conferiu que nada da arvore de processos da execucao continua vivo. */
         volatile boolean treeGone = true;
+        /** Quando nao nulo, o que o motor diz dos processos (GONE, ALIVE ou UNCERTAIN); senao vale {@link #treeGone}. */
+        volatile String processes;
         volatile byte[] zipSeen;
 
         FakeWork(Path root) {
@@ -98,8 +100,8 @@ class RemoteDeliveryTest {
         }
 
         @Override
-        public boolean processGone(String run) {
-            return treeGone;
+        public String processes(String run) {
+            return processes != null ? processes : treeGone ? "GONE" : "ALIVE";
         }
 
         @Override
@@ -1114,12 +1116,12 @@ class RemoteDeliveryTest {
     }
 
     /**
-     * Decisao de 16/11: confirmar que o processo terminou considera os FILHOS. Com algum processo da arvore ainda vivo - ou sem
-     * como saber - este computador informa o desfecho mas NAO afirma que nada mais executa; confere de novo a cada consulta e so
-     * entao repete o mesmo relato com a afirmacao, uma vez.
+     * Decisoes de 16/11: junto do fim, este computador diz o que sabe dos PROCESSOS da tentativa - ausentes (com prova), ainda
+     * ativos, ou sem como saber. Sem a prova ele confere de novo a cada consulta e repete o MESMO relato so quando o que sabe
+     * muda; com a prova, uma vez, e faz a limpeza que esperava os processos.
      */
     @Test
-    void comProcessoFilhoVivoNaoAfirmaProcessoAusenteEAfirmaDepoisQuandoAArvoreAcaba() throws Exception {
+    void juntoDoFimDizOQueSabeDosProcessosERepeteSoQuandoMuda() throws Exception {
         RemoteMachine m = enabled(true);
         gw.queue();
         m.pull();
@@ -1127,35 +1129,51 @@ class RemoteDeliveryTest {
         work.ends("SUCCEEDED", 0);
         m.pull();
         assertEquals("SUCCEEDED", gw.attemptState);
-        assertFalse(gw.lastProcessAbsent, "resta processo filho (ou identificacao incerta): nada e afirmado");
-        // o processo filho continua: nada e repetido
+        assertEquals("ACTIVE", gw.lastProcessTree, "ha processo da automacao vivo: o desfecho vai, a prova nao");
+        // os processos continuam: nada e repetido
         m.pull();
         m.pull();
         assertEquals(List.of(), gw.afterEnd);
-        // o aplicativo fecha e abre com o filho ainda vivo: a pendencia esta no disco, protegida
+        // o aplicativo fecha e abre: a pendencia esta no disco, protegida
         m.close();
         RemoteMachine again = machine(true);
         again.pull();
         assertEquals(List.of(), gw.afterEnd);
-        work.treeGone = true;
+        // perdeu a capacidade de identifica-los: passa a dizer que nao sabe, uma vez
+        work.processes = "UNCERTAIN";
         again.pull();
-        assertEquals(List.of("SUCCEEDED+ausente"), gw.afterEnd);
+        again.pull();
+        assertEquals(List.of("SUCCEEDED+UNCERTAIN"), gw.afterEnd);
+        // ha prova (o grupo esvaziou, ou a sessao do Windows acabou): afirma uma vez
+        work.processes = "GONE";
+        again.pull();
+        assertEquals(List.of("SUCCEEDED+UNCERTAIN", "SUCCEEDED+ausente"), gw.afterEnd);
         assertEquals("SUCCEEDED", gw.attemptState);
         again.pull();
-        assertEquals(List.of("SUCCEEDED+ausente"), gw.afterEnd, "afirma uma vez");
+        assertEquals(2, gw.afterEnd.size(), "afirma uma vez");
 
-        // sem prova do resultado E com filho vivo: ENDED_UNKNOWN sem a afirmacao; se o motor esquecer a execucao, nunca afirma
+        // com prova ja no fim: ABSENT junto do desfecho, e nada fica pendente
         gw.afterEnd.clear();
         gw.queue();
         work.state = "RUNNING";
         again.pull();
-        work.treeGone = false;
+        work.ends("FAILED", 3);
+        again.pull();
+        assertEquals("ABSENT", gw.lastProcessTree);
+        again.pull();
+        assertEquals(List.of(), gw.afterEnd);
+
+        // sem prova do resultado E sem como saber dos processos; se o motor esquecer a execucao, nada mais e dito
+        gw.queue();
+        work.state = "RUNNING";
+        again.pull();
+        work.processes = "UNCERTAIN";
         work.ends("UNKNOWN", null);
         again.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
-        assertFalse(gw.lastProcessAbsent);
+        assertEquals("UNCERTAIN", gw.lastProcessTree);
         work.known = false;
-        work.treeGone = true;
+        work.processes = "GONE";
         again.pull();
         again.pull();
         assertEquals(List.of(), gw.afterEnd, "o motor nao conhece mais a execucao: nao ha o que conferir");
