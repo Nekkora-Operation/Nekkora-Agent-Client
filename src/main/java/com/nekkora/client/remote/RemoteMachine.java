@@ -247,8 +247,12 @@ public final class RemoteMachine implements AutoCloseable {
         }
     }
 
-    /** Registros de uma tentativa que ficaram neste computador sem confirmacao de recebimento. Nada do conteudo. */
-    public record HeldLogs(String attemptId, long sinceEpochSecond, long removeAtEpochSecond) {
+    /**
+     * Registros de uma tentativa que ficaram neste computador sem confirmacao de recebimento. Nada do conteudo. {@code reason}:
+     * {@code SENDING} (o envio continua sendo tentado), {@code NOT_CONFIRMED} (a Platform nao confirmou e nao ha novo envio) ou
+     * {@code LINK_ENDED} (o vinculo deste computador acabou: nao podem mais ser enviados).
+     */
+    public record HeldLogs(String attemptId, long sinceEpochSecond, long removeAtEpochSecond, String reason) {
     }
 
     /**
@@ -269,7 +273,13 @@ public final class RemoteMachine implements AutoCloseable {
         try {
             MachineVault.Link current = usable();
             String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
-            return vault.heldLogQueues(keep).stream().map(q -> new HeldLogs(q.attemptId(), q.sinceEpochSecond(), q.removeAtEpochSecond())).toList();
+            LossLedger ledger = vault.losses();
+            return vault.heldLogQueues(keep).stream().map(q -> new HeldLogs(q.attemptId(), q.sinceEpochSecond(), q.removeAtEpochSecond(),
+                    ledger.load(q.attemptId()).map(e -> switch (e.logsBlock()) {
+                        case NONE -> e.token().isEmpty() ? "LINK_ENDED" : "SENDING";
+                        case AUTHORIZATION -> "LINK_ENDED";
+                        default -> "NOT_CONFIRMED";
+                    }).orElse("NOT_CONFIRMED"))).toList();
         } catch (RuntimeException x) {
             return List.of();
         }
@@ -407,6 +417,8 @@ public final class RemoteMachine implements AutoCloseable {
         synchronized (operation) {
             MachineVault.Link current = usable();
             if (current == null) {
+                // o vinculo acabou (revogado, vencido ou desabilitado na Platform): o que estiver em execucao para aqui
+                abandonIfEnded();
                 return;
             }
             AttemptJournal.Entry pending = journal.load(current.agentId()).orElse(null);
@@ -415,12 +427,66 @@ public final class RemoteMachine implements AutoCloseable {
             }
             try {
                 deliver(current, pending);
+                // o que tentativas ja terminadas deixaram aqui sem confirmacao continua sendo enviado, a parte do diario
+                deliverHeld(current, work, false);
             } catch (Refused e) {
                 if (e.problem() == Problem.LINK_ENDED || e.problem() == Problem.NOT_ENABLED) {
                     failed(e.problem());
+                    abandonIfEnded();
                 }
             }
         }
+    }
+
+    /**
+     * O vinculo deste computador com a Platform ACABOU com uma tentativa ainda no diario: a credencial nao vale mais, entao nada
+     * mais pode ser informado nem enviado, e este computador nao esta mais autorizado a executar trabalho da Platform. O processo
+     * em execucao e parado de forma controlada; o que ele ja produziu (registros e pasta de saida) FICA neste computador, dito
+     * como "nao pode mais ser enviado: vinculo encerrado", ate o prazo de guarda. Nada e enviado por outro caminho. A Platform,
+     * do lado dela, ja encerrou a tentativa como sem confirmacao (ou como nao iniciada). Nunca lanca.
+     */
+    private void abandonIfEnded() {
+        MachineVault.Link old;
+        synchronized (this) {
+            old = ended ? link : null;
+        }
+        if (old == null) {
+            return;
+        }
+        long now = clock.instant().getEpochSecond();
+        try {
+            AttemptJournal.Entry e = journal.load(old.agentId()).orElse(null);
+            Work w = work;
+            if (e != null) {
+                if (w != null && e.run() != null) {
+                    w.cancel(e.run());
+                }
+                LogQueue q = queue;
+                int lines = -1;
+                if (q != null && e.attemptId().equals(queueAttempt)) {
+                    try {
+                        q.flush();
+                    } catch (IOException x) {
+                        // o que nao foi gravado se perde
+                    }
+                    lines = q.lines();
+                }
+                boolean started = e.run() != null;
+                if (started) {
+                    vault.losses().logsHeld(e.attemptId(), "", e.epoch(), now, Math.max(0, lines), LossLedger.Block.AUTHORIZATION);
+                    vault.losses().resultsHeld(e.attemptId(), "", e.epoch(), now, LossLedger.Block.AUTHORIZATION);
+                    if (w != null) {
+                        w.holdOutputs(e.attemptId(), "LINK_ENDED");
+                    }
+                }
+                forget(e, w);
+            }
+            // o que tentativas anteriores deixaram guardado tambem nao pode mais ser enviado
+            vault.losses().unlink(now);
+        } catch (RuntimeException x) {
+            // fica para a proxima consulta
+        }
+        changed();
     }
 
     private void deliver(MachineVault.Link current, AttemptJournal.Entry e) throws Refused {
@@ -471,7 +537,7 @@ public final class RemoteMachine implements AutoCloseable {
                         w.cancel(e.run());
                     }
                     // o que o processo ja escreveu vai indo, em lotes; falha aqui nao interrompe nada e e retomada depois
-                    sendLogs(credential, current, e, false);
+                    sendLogs(credential, current, e);
                     return;
                 }
                 String end = p == null || "UNKNOWN".equals(p.state()) ? "ENDED_UNKNOWN" : p.state();
@@ -490,32 +556,32 @@ public final class RemoteMachine implements AutoCloseable {
                 e = e.results();
                 keep(e);
             }
-            // os registros primeiro (dizem por que um robo falhou); a fila so e apagada com o fechamento confirmado
-            sendLogs(credential, current, e, true);
-            long noted = clock.instant().getEpochSecond();
-            if (heldLines >= 0) {
-                // a fila ficou no disco sem confirmacao: fica dito, para a pessoa ver e para avisar a Platform se o prazo vencer
-                vault.losses().logsHeld(e.attemptId(), e.token(), e.epoch(), noted, heldLines);
-            }
-            // a pasta de saida so e apagada com o recebimento de TUDO confirmado pela Platform; senao, fica neste computador
-            String pending = sendResults(credential, e, w);
-            if (pending != null && w != null) {
-                vault.losses().resultsHeld(e.attemptId(), e.token(), e.epoch(), noted);
-            }
-            forget(e, w);
-            if (w != null) {
+            // O desfecho esta na Platform: a tentativa esta resolvida e a maquina fica livre para outra. Resolver o estado NAO
+            // encerra a entrega: os registros e a pasta de saida passam para a entrega continuada (o token da atribuicao vai junto,
+            // protegido), que tenta ate a Platform confirmar, o prazo de guarda vencer ou surgir um impedimento. O prazo conta daqui.
+            LogQueue open = queue;
+            if (open != null && e.attemptId().equals(queueAttempt)) {
                 try {
-                    if (pending == null) {
-                        w.discardOutputs(e.attemptId());
-                    } else {
-                        // sem a confirmacao de TUDO, a pasta fica: marcada como pendente, visivel na tela e com prazo de guarda
-                        w.holdOutputs(e.attemptId(), pending);
-                    }
-                } catch (RuntimeException x) {
-                    // a pasta fica para a proxima limpeza
+                    open.flush();
+                } catch (IOException x) {
+                    // o que esta na memoria ainda e enviado agora, logo abaixo
                 }
-                changed();
             }
+            vault.losses().enqueue(e.attemptId(), e.token(), e.epoch(), e.run(), clock.instant().getEpochSecond());
+            try {
+                w.holdOutputs(e.attemptId(), "SENDING");
+            } catch (RuntimeException x) {
+                // sem a marca, a limpeza a grava ao encontrar a pasta
+            }
+            // a primeira tentativa de envio e ja, com a fila ainda aberta neste processo
+            String attempt = e.attemptId();
+            forget(e, w);
+            changed();
+            deliverHeld(current, w, true);
+            if (attempt.equals(queueAttempt)) {
+                dropQueue(false);
+            }
+            changed();
         } catch (Refused x) {
             if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
                 // esta entrega nao vale mais: o que ela iniciou aqui para, e nada e alterado na Platform
@@ -619,7 +685,7 @@ public final class RemoteMachine implements AutoCloseable {
      * SHA-256 e tamanho, o fechamento desta tentativa foi aceito com as mesmas contagens, nenhum arquivo ficou de fora, e o que
      * esta na pasta agora e exatamente o que foi confirmado. Senao, o motivo da pendencia.
      */
-    private String sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
+    private String sendResults(String credential, LossLedger.Entry e, Work w) throws Refused {
         java.util.Map<String, String> confirmed = new java.util.LinkedHashMap<>();
         List<ResultFile> files;
         try {
@@ -642,8 +708,9 @@ public final class RemoteMachine implements AutoCloseable {
                 sent++;
                 total += f.size();
             } catch (Refused x) {
-                if (x.problem() == Problem.RESULT_LIMIT || x.problem() == Problem.STORAGE) {
-                    // a Platform nao aceitou este arquivo (limite ou nome), ou ele nao pode ser lido aqui: fica de fora, contado
+                if (x.problem() == Problem.RESULT_LIMIT) {
+                    // a Platform nao aceita este arquivo (limite ou nome): fica de fora, contado. Arquivo que nao pode ser LIDO aqui
+                    // agora (em uso, por exemplo) nao e limite: a falha sobe e o envio e tentado de novo depois
                     skipped++;
                 } else if (x.problem() == Problem.RESULT_CONFLICT) {
                     // o envio desta tentativa ja foi fechado (ou este numero ja tem outro arquivo): nao ha mais o que enviar,
@@ -736,8 +803,6 @@ public final class RemoteMachine implements AutoCloseable {
     /** A fila de registros aberta neste processo e a tentativa dela (uma por vez). */
     private LogQueue queue;
     private String queueAttempt;
-    /** Do ultimo fechamento de registros: quantas linhas a fila que FICOU no disco tem; -1 = nenhuma fila ficou. */
-    private int heldLines = -1;
 
     /** A fila da tentativa (aberta uma vez por processo). Nulo: este computador nao consegue proteger a fila, entao nao ha fila. */
     private LogQueue queue(MachineVault.Link current, AttemptJournal.Entry e) {
@@ -770,13 +835,11 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /**
-     * Envia a Platform o que a fila de registros tem e ainda nao foi confirmado, em lotes. Com {@code close} (a tentativa
-     * terminou): envia tudo, fecha o envio dizendo quantas linhas foram e quantas foram descartadas por limite e, so com o
-     * fechamento confirmado com as mesmas contagens, apaga a fila. Sem {@code close} (execucao em andamento): no maximo alguns
-     * lotes por consulta, e qualquer falha fica para a proxima - registro nunca interrompe a execucao nem muda o resultado.
+     * DURANTE a execucao: envia a Platform parte do que a fila de registros tem e ainda nao foi confirmado - no maximo alguns
+     * lotes por consulta. Qualquer falha fica para a proxima: registro nunca interrompe a execucao nem muda o resultado. O envio
+     * do que faltar e o fechamento sao da entrega continuada ({@link #deliverHeld}), depois do desfecho.
      */
-    private void sendLogs(String credential, MachineVault.Link current, AttemptJournal.Entry e, boolean close) throws Refused {
-        heldLines = -1;
+    private void sendLogs(String credential, MachineVault.Link current, AttemptJournal.Entry e) throws Refused {
         LogQueue q = queue(current, e);
         if (q == null) {
             return;
@@ -787,68 +850,208 @@ public final class RemoteMachine implements AutoCloseable {
             } catch (IOException x) {
                 // o que esta na memoria ainda pode ser enviado
             }
-            for (int sent = 0; close || sent < 10; sent++) {
+            for (int sent = 0; sent < 10; sent++) {
+                List<LogQueue.Line> batch = q.batch();
+                if (batch.isEmpty()) {
+                    break;
+                }
+                q.acked(channel.sendLogs(credential, e.attemptId(), e.token(), e.epoch(), batch));
+            }
+        } catch (Refused x) {
+            if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.LINK_ENDED
+                    || x.problem() == Problem.NOT_ENABLED) {
+                throw x;
+            }
+            // limite, conflito ou falha passageira com a execucao em andamento: fica para o fechamento, depois do desfecho
+        }
+    }
+
+    /** A proxima vez (segundos) em que a entrega continuada de cada tentativa e tentada, e a espera que ela ja acumulou. */
+    private final java.util.Map<String, long[]> heldRetry = new java.util.HashMap<>();
+    static final long HELD_RETRY_FIRST_SECONDS = 30;
+    static final long HELD_RETRY_MAX_SECONDS = 900;
+
+    /** Para testes: esquece as esperas da entrega continuada (a proxima consulta tenta de novo ja). */
+    void forgetHeldWaits() {
+        synchronized (operation) {
+            heldRetry.clear();
+        }
+    }
+
+    /**
+     * A entrega continuada: para cada tentativa TERMINADA que deixou aqui registros ou resultados sem a confirmacao da Platform, e
+     * sem impedimento, tenta de novo. Acaba, para cada tipo, de um de tres jeitos:
+     * <ul>
+     * <li>a Platform CONFIRMA (fechamento aceito com as mesmas contagens; cada arquivo com o mesmo SHA-256): so entao o que
+     * estava guardado e apagado daqui;</li>
+     * <li>um IMPEDIMENTO fica dito com o motivo e nao ha novo envio: a Platform fechou o envio com arquivos fora do limite
+     * (eles so existem aqui), a Platform tem outra coisa nessas linhas ou outro fechamento, ou ela nao reconhece mais a
+     * atribuicao. O que esta guardado fica ate o prazo de guarda;</li>
+     * <li>o PRAZO DE GUARDA vence antes (a limpeza remove, registra a perda e avisa a Platform).</li>
+     * </ul>
+     * Falha passageira (rede, servidor, limite de requisicoes, arquivo que nao pode ser lido agora): tenta de novo depois, com
+     * espera crescente (30 s ate 15 min). Credencial recusada: a falha sobe, e quem chama trata o fim do vinculo - nada e
+     * enviado sem credencial valida. {@code now}: sem respeitar a espera (logo depois do desfecho).
+     */
+    private void deliverHeld(MachineVault.Link current, Work w, boolean now) throws Refused {
+        if (w == null) {
+            return;
+        }
+        long at = clock.instant().getEpochSecond();
+        LossLedger ledger = vault.losses();
+        boolean any = false;
+        for (LossLedger.Entry e : ledger.all(at)) {
+            if (!e.deliverable()) {
+                continue;
+            }
+            long[] wait = heldRetry.get(e.attemptId());
+            if (!now && wait != null && at < wait[0]) {
+                continue;
+            }
+            try {
+                if (e.logsHeld() && e.logsBlock() == LossLedger.Block.NONE) {
+                    sendHeldLogs(current, e, ledger);
+                }
+                e = ledger.load(e.attemptId()).orElse(null);
+                if (e != null && e.resultsHeld() && e.resultsBlock() == LossLedger.Block.NONE) {
+                    sendHeldResults(current.credential(), e, w, ledger);
+                }
+                heldRetry.remove(e == null ? "" : e.attemptId());
+                any = true;
+            } catch (Refused x) {
+                String attempt = e == null ? "" : e.attemptId();
+                if (x.problem() == Problem.LINK_ENDED || x.problem() == Problem.NOT_ENABLED) {
+                    throw x;
+                }
+                if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
+                    // a Platform nao reconhece mais esta atribuicao: nao ha novo envio, e o motivo fica dito
+                    ledger.blocked(attempt, LossLedger.Block.AUTHORIZATION);
+                    holdReason(w, attempt, "NOT_AUTHORIZED");
+                    heldRetry.remove(attempt);
+                    any = true;
+                    continue;
+                }
+                long next = wait == null ? HELD_RETRY_FIRST_SECONDS : Math.min(wait[1] * 2, HELD_RETRY_MAX_SECONDS);
+                heldRetry.put(attempt, new long[] {at + next, next});
+            } catch (RuntimeException x) {
+                // fica para a proxima consulta
+            }
+        }
+        if (any && !now) {
+            changed();
+        }
+    }
+
+    private static void holdReason(Work w, String attemptId, String reason) {
+        try {
+            w.holdOutputs(attemptId, reason);
+        } catch (RuntimeException x) {
+            // a marca fica como estava: a pasta continua guardada
+        }
+    }
+
+    /** Os resultados guardados de uma tentativa terminada: envia, fecha, e so com TUDO confirmado apaga a pasta. */
+    private void sendHeldResults(String credential, LossLedger.Entry e, Work w, LossLedger ledger) throws Refused {
+        long at = clock.instant().getEpochSecond();
+        String pending = sendResults(credential, e, w);
+        if (pending == null) {
+            try {
+                w.discardOutputs(e.attemptId());
+            } catch (RuntimeException x) {
+                // a pasta fica para a proxima limpeza; a Platform ja tem tudo
+            }
+            ledger.resultsSettled(e.attemptId());
+            return;
+        }
+        // sem a confirmacao de TUDO, a pasta fica, com o motivo; nao ha o que enviar de novo
+        ledger.resultsHeld(e.attemptId(), e.token(), e.epoch(), at, "OUT_OF_LIMIT".equals(pending) ? LossLedger.Block.LIMIT : LossLedger.Block.CONFLICT);
+        holdReason(w, e.attemptId(), pending);
+    }
+
+    /** Os registros guardados de uma tentativa terminada: envia o que falta, fecha, e so com o fechamento confirmado apaga a fila. */
+    private void sendHeldLogs(MachineVault.Link current, LossLedger.Entry e, LossLedger ledger) throws Refused {
+        long at = clock.instant().getEpochSecond();
+        boolean mine = e.attemptId().equals(queueAttempt) && queue != null;
+        LogQueue q;
+        try {
+            q = mine ? queue : vault.logQueue(e.attemptId(), List.of(current.credential(), e.token()));
+        } catch (RuntimeException x) {
+            // este computador nao consegue abrir a fila (outro usuario, arquivo cortado): nao ha o que enviar
+            ledger.logsHeld(e.attemptId(), e.token(), e.epoch(), at, e.logLines(), LossLedger.Block.CONFLICT);
+            return;
+        }
+        if (!mine && !q.existed()) {
+            // nao ha fila (a tentativa nao capturou nada, ou a fila ja saiu): nada a esperar deste tipo
+            ledger.logsSettled(e.attemptId());
+            return;
+        }
+        // o prazo de guarda conta do desfecho, nao da ultima tentativa de envio: a data do arquivo e preservada
+        java.nio.file.attribute.FileTime since = vault.logQueueTime(e.attemptId());
+        try {
+            if (closeLogs(current.credential(), q, e.attemptId(), e.token(), e.epoch())) {
+                q.delete();
+                if (mine) {
+                    dropQueue(false);
+                }
+                ledger.logsSettled(e.attemptId());
+                return;
+            }
+            ledger.logsHeld(e.attemptId(), e.token(), e.epoch(), at, q.lines(), LossLedger.Block.CONFLICT);
+        } finally {
+            vault.logQueueTime(e.attemptId(), since);
+        }
+    }
+
+    /**
+     * Envia tudo o que a fila tem e ainda nao foi confirmado e fecha o envio. {@code true}: a Platform confirmou o fechamento com
+     * as mesmas contagens. {@code false}: nao ha como confirmar (ela tem outra coisa nessas linhas, ou outro fechamento). Falha
+     * passageira: lanca, e a fila fica como esta.
+     */
+    private boolean closeLogs(String credential, LogQueue q, String attemptId, String token, int epoch) throws Refused {
+        try {
+            q.flush();
+        } catch (IOException x) {
+            // o que esta na memoria ainda pode ser enviado
+        }
+        try {
+            while (true) {
                 List<LogQueue.Line> batch = q.batch();
                 if (batch.isEmpty()) {
                     break;
                 }
                 try {
-                    q.acked(channel.sendLogs(credential, e.attemptId(), e.token(), e.epoch(), batch));
+                    q.acked(channel.sendLogs(credential, attemptId, token, epoch, batch));
                 } catch (Refused x) {
-                    if (x.problem() == Problem.LOG_LIMIT) {
-                        // a Platform chegou ao limite dela antes da fila (ela nao grava parte de um lote): o que ainda cabe vai
-                        // linha a linha, e o resto conta como descartado
-                        for (LogQueue.Line one : batch) {
-                            try {
-                                q.acked(channel.sendLogs(credential, e.attemptId(), e.token(), e.epoch(), List.of(one)));
-                            } catch (Refused y) {
-                                if (y.problem() != Problem.LOG_LIMIT) {
-                                    throw y;
-                                }
-                                q.refusedFrom(one.sequence());
-                                break;
+                    if (x.problem() != Problem.LOG_LIMIT) {
+                        throw x;
+                    }
+                    // a Platform chegou ao limite dela antes da fila (ela nao grava parte de um lote): o que ainda cabe vai
+                    // linha a linha, e o resto conta como descartado
+                    for (LogQueue.Line one : batch) {
+                        try {
+                            q.acked(channel.sendLogs(credential, attemptId, token, epoch, List.of(one)));
+                        } catch (Refused y) {
+                            if (y.problem() != Problem.LOG_LIMIT) {
+                                throw y;
                             }
+                            q.refusedFrom(one.sequence());
+                            break;
                         }
-                        break;
                     }
-                    if (x.problem() == Problem.LOG_CONFLICT) {
-                        // o envio ja foi fechado por outra entrega, ou a Platform tem outra coisa nessas linhas: nao ha o que enviar
-                        if (close) {
-                            heldLines = q.lines();
-                        }
-                        dropQueue(false);
-                        return;
-                    }
-                    throw x;
+                    break;
                 }
             }
-            if (!close) {
-                return;
-            }
-            try {
-                if (q.drained() && channel.completeLogs(credential, e.attemptId(), e.token(), e.epoch(), q.lines(), q.dropped())) {
-                    dropQueue(true);
-                    return;
-                }
-            } catch (Refused x) {
-                if (x.problem() != Problem.LOG_CONFLICT) {
-                    throw x;
-                }
-            }
-            // sem a confirmacao do fechamento, a fila fica no disco ate o prazo de guarda
-            heldLines = q.lines();
-            dropQueue(false);
+            return q.drained() && channel.completeLogs(credential, attemptId, token, epoch, q.lines(), q.dropped());
         } catch (Refused x) {
-            if (close || x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.LINK_ENDED
-                    || x.problem() == Problem.NOT_ENABLED) {
-                throw x;
+            if (x.problem() == Problem.LOG_CONFLICT) {
+                return false;
             }
-            // execucao em andamento e falha passageira: fica para a proxima consulta
+            throw x;
         }
     }
 
     private void forget(AttemptJournal.Entry e, Work w) {
-        if (e.attemptId().equals(queueAttempt)) {
+        if (e.attemptId().equals(queueAttempt) && vault.losses().load(e.attemptId()).filter(LossLedger.Entry::logsHeld).isEmpty()) {
             dropQueue(false);
         }
         try {
@@ -1051,6 +1254,12 @@ public final class RemoteMachine implements AutoCloseable {
                     pendingUnlink = UUID.randomUUID().toString();
                 }
                 op = pendingUnlink;
+            }
+            if (!onlyLocal && journal.load(current.agentId()).isPresent()) {
+                // ha uma tentativa recebida e ainda nao resolvida com a Platform (em andamento, ou com o desfecho por informar):
+                // desvincular agora a deixaria sem desfecho. A pessoa espera, ou pede o cancelamento na Platform; para so deixar
+                // de receber trabalho novo, pausa. Quem administra continua podendo revogar a maquina na Platform
+                throw new Refused(Problem.ATTEMPT_ACTIVE);
             }
             if (!onlyLocal) {
                 try {

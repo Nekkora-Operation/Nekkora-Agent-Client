@@ -24,6 +24,8 @@ import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.nekkora.client.remote.MachineChannel.Problem;
+import com.nekkora.client.remote.MachineChannel.Refused;
 import com.nekkora.client.remote.RemoteMachine.Status;
 
 /**
@@ -115,6 +117,7 @@ class RemoteDeliveryTest {
         @Override
         public void discardOutputs(String attemptId) {
             outputsDiscarded.add(attemptId);
+            outputsHeld.remove(attemptId);
         }
 
         /** As pastas de saida guardadas, como o motor as informaria. */
@@ -675,11 +678,12 @@ class RemoteDeliveryTest {
         m.pull();
         assertNull(gw.resultsClosure);
         assertTrue(work.outputsDiscarded.isEmpty());
-        assertTrue(work.outputsHeld.isEmpty());
-        assertTrue(Files.exists(journal()), "a tentativa continua pendente");
+        assertEquals("SENDING", work.outputsHeld.get(attempt), "a pasta fica guardada e o envio continua sendo tentado");
+        assertFalse(Files.exists(journal()), "o desfecho ja esta na Platform: a tentativa esta resolvida, e a entrega segue a parte");
         gw.wrongResultSize = false;
         // (2) o fechamento volta com OUTRA contagem: nao e a confirmacao desta entrega; a pasta fica, marcada
         gw.wrongClosure = true;
+        m.forgetHeldWaits();
         m.pull();
         assertEquals("1|0", gw.resultsClosure);
         assertTrue(work.outputsDiscarded.isEmpty());
@@ -737,17 +741,19 @@ class RemoteDeliveryTest {
         work.ends("SUCCEEDED", 0);
         gw.failResults = 5;
         m.pull();
+        m.forgetHeldWaits();
         m.pull();
         assertEquals("SUCCEEDED", gw.attemptState);
         assertNull(gw.resultsClosure);
         assertTrue(work.outputsDiscarded.isEmpty(), "sem confirmacao de recebimento, a pasta de saida fica");
         assertTrue(Files.exists(work.root.resolve(attempt).resolve("saida").resolve("um.txt")));
-        assertTrue(Files.exists(journal()));
-        // o aplicativo fecha e abre: a varredura de sobras preserva a tentativa pendente e nao apaga resultado nenhum
+        assertFalse(Files.exists(journal()), "informar o desfecho resolveu a tentativa; o envio dos arquivos continua pendente");
+        assertEquals("SENDING", work.outputsHeld.get(attempt));
+        // o aplicativo fecha e abre: a varredura de sobras nao apaga resultado nenhum (a pasta esta marcada, dentro do prazo)
         m.close();
         RemoteMachine again = machine(true);
         again.sweep();
-        assertEquals(List.of(attempt), work.swept);
+        assertEquals(List.of("null"), work.swept);
         assertTrue(work.outputsDiscarded.isEmpty());
         gw.failResults = 0;
         again.pull();
@@ -817,7 +823,7 @@ class RemoteDeliveryTest {
         gw.failResults = 1; // o primeiro arquivo nao chega
         m.pull();
         assertEquals("SUCCEEDED", gw.attemptState);
-        assertTrue(journalText().contains("\"fase\":\"RESULTS\""), "o desfecho ja foi aceito; falta so o envio");
+        assertFalse(Files.exists(journal()), "o desfecho ja foi aceito: a tentativa esta resolvida; falta so o envio, que segue a parte");
         assertNull(gw.resultsClosure);
         long finals = gw.reported.stream().filter("SUCCEEDED"::equals).count();
         // o aplicativo fecha e abre: retoma o envio, sem informar o desfecho de novo
@@ -1165,7 +1171,7 @@ class RemoteDeliveryTest {
     }
 
     @Test
-    void pausadaNadaEEntregueEDesabilitarApagaODiario() throws Exception {
+    void pausadaNadaEEntregueEComTentativaAtivaOComputadorNaoEDesabilitado() throws Exception {
         RemoteMachine m = enabled(true);
         m.pause();
         gw.queue();
@@ -1176,10 +1182,169 @@ class RemoteDeliveryTest {
         gw.failAcks = 1;
         m.pull();
         assertTrue(Files.exists(journal()));
+        // ha uma tentativa recebida e ainda nao resolvida: desvincular agora a deixaria sem desfecho. Nada muda, nem aqui nem la
+        Refused active = assertThrows(Refused.class, m::disable);
+        assertEquals(Problem.ATTEMPT_ACTIVE, active.problem());
+        assertTrue(Files.exists(journal()));
+        assertEquals(Status.RECEIVING, m.view().status());
+        assertTrue(gw.unlinkOperations.isEmpty(), "o desvinculo nem foi pedido a Platform");
+        // em execucao: continua recusado; pausar continua possivel e NAO mexe na execucao em andamento
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals(Problem.ATTEMPT_ACTIVE, assertThrows(Refused.class, m::disable).problem());
+        m.pause();
+        assertEquals(Status.PAUSED, m.view().status());
+        assertTrue(work.cancelled.isEmpty(), "pausar novos trabalhos nao para a execucao atual");
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState, "a execucao em andamento segue acompanhada com a maquina pausada");
+        // o desfecho verdadeiro e informado; so entao o computador pode ser desabilitado
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertFalse(Files.exists(journal()));
         m.disable();
-        assertFalse(Files.exists(journal()), "o diario sai junto com o vinculo");
         assertEquals(Status.NOT_ENABLED, m.view().status());
         assertNull(gw.credential);
+    }
+
+    /** O que o processo "escreveu": entra na fila de registros da tentativa, como a captura real faria. */
+    private void writes(int job, String... lines) {
+        for (String l : lines) {
+            work.jobs.get(job).log().line(false, System.currentTimeMillis(), false, l);
+        }
+    }
+
+    private long calls(String part) {
+        return gw.calls.stream().filter(c -> c.path().contains(part)).count();
+    }
+
+    @Test
+    void informarODesfechoNaoEncerraAEntregaQueContinuaAteAPlatformConfirmar() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        writes(0, "linha 1", "linha 2", "linha 3");
+        work.outputs.put("relatorio.txt", "ok".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        // a Platform aceita o desfecho, mas o envio de registros e de resultados falha (servidor indisponivel)
+        gw.failLogs = 1000;
+        gw.failResults = 1000;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(0, gw.attemptExit);
+        // a tentativa esta RESOLVIDA: o diario saiu, a maquina esta livre e volta a perguntar por trabalho
+        assertFalse(Files.exists(journal()));
+        assertEquals(RemoteMachine.Activity.IDLE, m.activity());
+        long asked = calls("/remote/next");
+        // ... e a entrega NAO acabou: fila e pasta guardadas, ditas como "ainda sendo enviadas", com data de remocao
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertEquals("SENDING", work.outputsHeld.get(attempt));
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals(List.of("SENDING"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        assertNull(gw.logsClosure);
+        assertNull(gw.resultsClosure);
+        // a espera entre tentativas: a consulta seguinte, logo depois, nao insiste; pergunta por trabalho novo normalmente
+        long sends = calls("/logs") + calls("/results");
+        long since = Files.getLastModifiedTime(queueFile(attempt)).toMillis();
+        m.pull();
+        assertEquals(sends, calls("/logs") + calls("/results"));
+        assertEquals(asked + 1, calls("/remote/next"));
+        // passada a espera, tenta de novo; ainda falhando, nada e apagado e o prazo de guarda NAO recomeca
+        m.forgetHeldWaits();
+        m.pull();
+        assertTrue(calls("/logs") + calls("/results") > sends);
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertEquals(since, Files.getLastModifiedTime(queueFile(attempt)).toMillis(), "tentar de novo nao recomeca o prazo de guarda");
+        // o aplicativo fecha e abre: a entrega continua de onde estava, sem informar o desfecho de novo
+        long finals = gw.reported.stream().filter("SUCCEEDED"::equals).count();
+        m.close();
+        RemoteMachine again = machine(true);
+        gw.failLogs = 0;
+        gw.failResults = 0;
+        again.pull();
+        assertEquals(finals, gw.reported.stream().filter("SUCCEEDED"::equals).count());
+        assertEquals(3, gw.logs.size());
+        assertEquals("3|0", gw.logsClosure);
+        assertEquals("1|0", gw.resultsClosure);
+        // so com a confirmacao de TUDO o que estava guardado sai deste computador, e nao sobra registro nem token
+        assertFalse(Files.exists(queueFile(attempt)));
+        assertEquals(List.of(attempt), work.outputsDiscarded);
+        assertTrue(again.heldLogs().isEmpty());
+        assertTrue(again.lost().isEmpty());
+        assertFalse(Files.exists(dir.resolve("guarda").resolve(attempt + ".guarda")));
+    }
+
+    @Test
+    void impedimentoDeAutorizacaoFicaDitoComOMotivoENaoEContornado() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        writes(0, "linha unica");
+        work.outputs.put("saida.txt", "x".getBytes(StandardCharsets.UTF_8));
+        work.ends("FAILED", 2);
+        gw.failLogs = 1000;
+        gw.failResults = 1000;
+        m.pull();
+        assertEquals("FAILED", gw.attemptState);
+        assertEquals("SENDING", work.outputsHeld.get(attempt));
+        // a Platform deixa de reconhecer a atribuicao (404): nao ha novo envio, e o motivo fica dito - nos dois tipos
+        gw.failLogs = 0;
+        gw.failResults = 0;
+        gw.attemptId = java.util.UUID.randomUUID().toString();
+        m.forgetHeldWaits();
+        m.pull();
+        assertEquals("NOT_AUTHORIZED", work.outputsHeld.get(attempt));
+        assertEquals(List.of("LINK_ENDED"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        assertTrue(Files.exists(queueFile(attempt)), "o que esta guardado fica ate o prazo de guarda");
+        assertTrue(work.outputsDiscarded.isEmpty());
+        long sends = calls("/logs") + calls("/results");
+        m.forgetHeldWaits();
+        m.pull();
+        m.pull();
+        assertEquals(sends, calls("/logs") + calls("/results"), "com o impedimento dito, nada mais e enviado");
+    }
+
+    @Test
+    void vinculoEncerradoComExecucaoEmAndamentoParaOProcessoEGuardaOQueHaSemEnviar() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        writes(0, "antes da revogacao");
+        work.outputs.put("parcial.txt", "p".getBytes(StandardCharsets.UTF_8));
+        // quem administra revogou a maquina: a Platform nao reconhece mais a credencial
+        gw.credential = null;
+        long before = gw.calls.size();
+        m.pull();
+        assertEquals(Status.ENDED, m.view().status());
+        // este computador nao esta mais autorizado a executar trabalho da Platform: o processo e parado, de forma controlada
+        assertEquals(1, work.cancelled.size());
+        assertFalse(Files.exists(journal()));
+        // o que ele produziu fica AQUI, dito como impedido por autorizacao; nada e enviado por outro caminho
+        assertEquals("LINK_ENDED", work.outputsHeld.get(attempt));
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertEquals(List.of("LINK_ENDED"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        assertEquals(0, gw.logs.size());
+        assertNull(gw.resultsClosure);
+        assertEquals("RUNNING", gw.attemptState, "esta maquina nao informou desfecho nenhum: quem encerra a tentativa e a Platform");
+        long after = gw.calls.size();
+        m.pull();
+        m.pull();
+        assertEquals(after, gw.calls.size(), "sem vinculo, nenhuma chamada a mais");
+        assertTrue(after - before <= 2);
+        // remover o vinculo daqui nao apaga o que ficou guardado nem o registro do motivo
+        m.disable();
+        assertEquals(Status.NOT_ENABLED, m.view().status());
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertEquals(List.of("LINK_ENDED"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        // vencido o prazo de guarda, a remocao fica registrada como perda, e o aviso a Platform e dado por impossivel
+        age(queueFile(attempt), java.time.Duration.ofDays(8));
+        m.sweep();
+        assertFalse(Files.exists(queueFile(attempt)));
+        List<RemoteMachine.Lost> lost = m.lost();
+        assertEquals(1, lost.stream().filter(RemoteMachine.Lost::logs).count());
+        assertTrue(lost.stream().allMatch(l -> "IMPOSSIBLE".equals(l.notice())));
     }
 
     @Test
