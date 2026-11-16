@@ -14,7 +14,7 @@ final class RemoteText {
     static final String LOCAL_STAYS_LOCAL = "O que você executa aqui pelo botão Executar continua local. Nada dessas execuções é enviado à Platform, "
             + "com o computador habilitado ou não.";
     /** Quando o aplicativo executa o que a Platform solicitar. */
-    static final String RUNS_HERE = "Com o recebimento ligado, este computador executa o que a Platform solicitar: uma execução por vez, com o Python "
+    static final String RUNS_HERE = "Recebendo novos trabalhos, este computador executa o que a Platform solicitar: uma execução por vez, com o Python "
             + "escolhido na Platform para cada automação. Nada é instalado aqui. Com a tela do Windows bloqueada, a execução não inicia. "
             + "O andamento é acompanhado na Platform.";
     /** Quando o aplicativo foi montado sem quem execute (nao declara a capacidade a Platform). */
@@ -186,7 +186,7 @@ final class RemoteText {
         return switch (s) {
             case UNAVAILABLE -> "Este computador não consegue proteger a credencial da máquina. A habilitação não está disponível aqui.";
             case NOT_ENABLED -> "Este computador não está habilitado. Ele não recebe execuções solicitadas pela Platform.";
-            case RECEIVING -> "Este computador está habilitado e com o recebimento ligado.";
+            case RECEIVING -> "Este computador está habilitado e recebendo novos trabalhos.";
             case PAUSED -> "Novos trabalhos pausados. Este computador não recebe novas execuções até você voltar a receber. "
                     + "Uma execução já em andamento continua até o fim. Pausar não desabilita o computador.";
             case ENDED -> "A habilitação deste computador expirou, foi revogada ou não pode mais ser usada. Remova-a para poder habilitar de novo "

@@ -44,7 +44,9 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
 - **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Nesta versão
   ela **não declara nenhuma capacidade de execução remota**, então a Platform mostra o computador como *incompatível* e
   não lhe entrega nada.
-- **Pausar / Retomar recebimento:** vale no servidor, que é a referência; a presença traz o valor de lá.
+- **Pausar novos trabalhos / Voltar a receber trabalhos:** vale no servidor, que é a referência; a presença traz o valor de
+  lá. Pausar **não** desabilita o computador e **não** interrompe a execução em andamento. (Até o Client #41 os botões
+  chamavam-se "Pausar recebimento" e "Retomar recebimento".)
 - **Desabilitar este computador:** pede um segundo passo de confirmação, encerra o vínculo na Platform e remove a
   credencial daqui. **Sem contato com a Platform, nada é removido** e a tela avisa: a pessoa tenta de novo, ou quem
   administra revoga a máquina na Platform.
@@ -56,7 +58,7 @@ São três situações diferentes, com três tratamentos:
 
 | Situação | O que acontece com a execução da Platform que está ativa neste computador |
 |---|---|
-| **Pausar recebimento** | Nada. Ela continua, é acompanhada até terminar e o desfecho verdadeiro é informado. Só não chega trabalho novo |
+| **Pausar novos trabalhos** | Nada. Ela continua, é acompanhada até terminar e o desfecho verdadeiro é informado. Só não chega trabalho novo |
 | **Desabilitar este computador** | **Recusado** enquanto houver uma tentativa recebida e não resolvida com a Platform (em preparação, em execução, ou com o desfecho ainda por informar). Nada muda, nem aqui nem lá; o desvínculo nem é pedido. A tela diz o que fazer: esperar terminar, pedir o cancelamento na Platform, ou só pausar. Assim o desvínculo pela pessoa nunca abandona o estado de uma execução |
 | **Vínculo encerrado na Platform** (quem administra revogou a máquina; credencial vencida) | Não dá para recusar: é o caminho de emergência. O computador deixa de estar autorizado a executar trabalho da Platform, então **o processo é parado, de forma controlada**. O que ele já produziu (registros e pasta de saída) **fica neste computador**, dito na tela como "não podem mais ser enviados: o vínculo foi encerrado", até o prazo de guarda. **Nada é enviado por outro caminho** e a máquina não informa desfecho: quem encerra a tentativa é a Platform ("Resultado não confirmado", ou "Não iniciada") |
 
@@ -208,6 +210,31 @@ Enquanto nada impede (`SENDING`), a tela diz "O envio à Platform continua sendo
 indisponível, limite de requisições, arquivo que não pôde ser lido agora — **não** vira impedimento: é tentada de novo.
 
 O prazo de guarda conta **do desfecho**, não da última tentativa de envio: tentar de novo não recomeça o prazo.
+
+### A fatia de envio: quanto de uma consulta é gasto com o que ficou guardado
+
+A máquina consulta a Platform a cada 15 s. Em cada consulta ela gasta **no máximo 10 s** enviando o que tentativas **já
+terminadas** deixaram guardado, somando todas elas, e devolve a vez. Os 10 s são o tamanho da vez — não são prazo de entrega
+nem tempo limite de um envio. A presença, a renovação do prazo da tentativa em execução, o pedido de cancelamento e a consulta
+de trabalho novo passam pela mesma vez; por isso ela é limitada.
+
+| | Registros | Resultados |
+|---|---|---|
+| Lote | até 200 linhas e 256 KiB | um arquivo (até 20 MiB) |
+| Confirmação | a Platform responde até qual linha tem | a Platform responde o SHA-256 que recebeu |
+| Retomada | de onde a Platform confirmou | o que foi confirmado neste processo não é enviado de novo |
+
+- A fatia só é conferida **entre** lotes: pelo menos um lote por consulta; um lote em andamento não é cortado.
+- **Com uma tentativa ativa** neste computador, o que ficou de tentativas anteriores cede a vez: um lote de registros por
+  consulta e nenhum arquivo de resultado. O estado da tentativa ativa e o cancelamento são tratados antes, em toda consulta.
+- Limite conhecido: um arquivo grande numa conexão lenta ainda atrasa a presença, porque ela usa a mesma vez.
+
+### Vínculo novo não herda o anterior
+
+No fim de um vínculo o token de cada atribuição é descartado e o que ficou guardado passa a "não pode mais ser enviado: vínculo
+encerrado". Habilitar o computador de novo (outro código, outra credencial) **não** reenvia esse conteúdo nem o atribui ao
+vínculo novo: ele continua guardado, com o mesmo motivo, até o prazo de guarda, e a perda fica registrada com "não foi possível
+avisar". Uma recuperação autorizada desse conteúdo não existe nesta versão.
 
 ### Prazo de guarda do que a Platform não confirmou
 
