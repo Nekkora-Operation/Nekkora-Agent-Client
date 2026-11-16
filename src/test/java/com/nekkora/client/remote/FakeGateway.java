@@ -200,7 +200,14 @@ public final class FakeGateway implements AutoCloseable {
             respond(x, 503, "{\"error\":\"unavailable\"}");
             return;
         }
-        Map<String, Object> body = com.nekkora.client.auth.Json.object(text);
+        Map<String, Object> body;
+        try {
+            // um lote cheio (200 linhas) passa do limite do leitor pequeno usado nas outras rotas
+            body = com.nekkora.client.pack.JsonReader.object(text);
+        } catch (com.nekkora.client.pack.JsonReader.Invalid e) {
+            respond(x, 400, "{\"error\":\"invalid_request\"}");
+            return;
+        }
         if (attemptToken == null || !attemptToken.equals(body.get("token")) || ((Number) body.get("epoch")).intValue() != attemptEpoch) {
             respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
             return;
