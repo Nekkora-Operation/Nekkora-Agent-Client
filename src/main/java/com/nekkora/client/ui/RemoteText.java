@@ -13,7 +13,11 @@ final class RemoteText {
             + "Entrar com a sua conta não habilita o computador: é preciso um código de habilitação, criado na Platform por quem administra as máquinas.";
     static final String LOCAL_STAYS_LOCAL = "O que você executa aqui pelo botão Executar continua local. Nada dessas execuções é enviado à Platform, "
             + "com o computador habilitado ou não.";
-    /** Enquanto o aplicativo nao executa o que a Platform solicitar (as proximas entregas trazem a execucao). */
+    /** Quando o aplicativo executa o que a Platform solicitar. */
+    static final String RUNS_HERE = "Com o recebimento ligado, este computador executa o que a Platform solicitar: uma execução por vez, com o Python "
+            + "escolhido na Platform para cada automação. Nada é instalado aqui. Com a tela do Windows bloqueada, a execução não inicia. "
+            + "O andamento é acompanhado na Platform.";
+    /** Quando o aplicativo foi montado sem quem execute (nao declara a capacidade a Platform). */
     static final String NOT_YET = "Esta versão do aplicativo ainda não executa solicitações da Platform. Até lá, a Platform mostra este computador como "
             + "incompatível e não envia nada para ele.";
 
@@ -84,7 +88,7 @@ final class RemoteText {
             case RENEWAL_NOT_DUE -> "A credencial deste computador ainda não precisa ser renovada.";
             case ALREADY_ENABLED -> "Este computador já tem um vínculo. Desabilite ou remova o vínculo atual antes de habilitar de novo.";
             // da entrega de uma tentativa: nunca chegam a uma acao da pessoa nesta tela
-            case ATTEMPT_STALE, ATTEMPT_GONE, ATTEMPT_TRANSITION, UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
+            case ATTEMPT_STALE, ATTEMPT_GONE, ATTEMPT_TRANSITION, PACKAGE_UNAVAILABLE, UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
         };
     }
 }

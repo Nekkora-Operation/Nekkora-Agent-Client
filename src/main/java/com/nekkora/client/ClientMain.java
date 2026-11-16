@@ -65,6 +65,8 @@ public final class ClientMain {
             Workshop workshop = new Workshop(data.root());
             // execucao local: so deste computador, sem vinculo de maquina com a Platform
             com.nekkora.client.run.Runner runner = new com.nekkora.client.run.Runner(data.root(), workshop.packages(), java.awt.GraphicsEnvironment::isHeadless);
+            // as execucoes pedidas pela Platform ficam em pastas proprias, dentro da pasta do vinculo da maquina
+            runner.enableManaged(data.remoteDir());
             runner.reconcile();
             java.util.concurrent.ExecutorService background = java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
                 Thread t = new Thread(r, "consultas");
@@ -92,9 +94,9 @@ public final class ClientMain {
             // identidade local, o tipo e a versao, e manda a Platform um identificador opaco - nunca o caminho
             remote.setPythonFinder(() -> runner.installedPythons().stream()
                     .map(p -> new com.nekkora.client.remote.RemoteMachine.PythonSeen(p.id(), p.virtual(), p.version())).toList());
-            // ensaio de entrega, so para o laboratorio (desligado por padrao): a maquina declara a capacidade de execucao e
-            // RECUSA o que receber, para provar o caminho da entrega. Esta versao nao baixa nem executa nada da Platform
-            remote.setDeliveryTrial("1".equals(System.getenv("NEKKORA_CLIENT_ENSAIO_ENTREGA")));
+            // execucao do que a Platform solicitar: o canal da maquina recebe e baixa; quem confere e executa e o motor, numa
+            // execucao gerenciada (mesma vaga da local, registro proprio, sem as aprovacoes locais). So esta ponte ve os dois
+            remote.setWork(new RemoteWork(runner));
             window.setRemote(remote);
             remote.start();
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta

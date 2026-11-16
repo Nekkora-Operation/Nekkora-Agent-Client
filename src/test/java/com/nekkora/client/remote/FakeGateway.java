@@ -103,6 +103,58 @@ public final class FakeGateway implements AutoCloseable {
     public final String remoteExecutionId = UUID.randomUUID().toString();
     public final String automationId = UUID.randomUUID().toString();
     public final String automationVersionId = UUID.randomUUID().toString();
+    public final String workspaceId = UUID.randomUUID().toString();
+    /** O que a entrega diz do Python escolhido (identificador opaco) e da regra do pacote; nulo = campo ausente. */
+    public volatile String offerPython;
+    public volatile String offerRule = "nekkora-agent/external-python-fingerprint/1";
+    public volatile boolean offerWorkspace = true;
+    /** Os bytes do pacote da tentativa e o SHA-256 que o "servidor" declara para eles (nulo = o verdadeiro). */
+    public volatile byte[] packageBytes = "PK pacote sintetico".getBytes(StandardCharsets.US_ASCII);
+    public volatile String declaredSha256;
+    /** O download responde 409 remote_package_unavailable. */
+    public volatile boolean packageUnavailable;
+    /** Antes de iniciar, o "servidor" recusa com este motivo (revalidacao). */
+    public volatile String refuseStart;
+    public volatile Integer attemptExit;
+    /** Os estados que a maquina informou, na ordem. */
+    public final List<String> reported = new CopyOnWriteArrayList<>();
+
+    public static String sha256(byte[] data) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void pack(HttpExchange x, String path) throws IOException {
+        String id = path.substring("/agent/api/v1/remote/attempts/".length()).split("/")[0];
+        if (!id.equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        if (attemptToken == null || !attemptToken.equals(x.getRequestHeaders().getFirst("Nekkora-Attempt-Token"))
+                || !String.valueOf(attemptEpoch).equals(x.getRequestHeaders().getFirst("Nekkora-Attempt-Epoch"))) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        if (!attemptState.equals("RECEIVED") && !attemptState.equals("PREPARING")) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            return;
+        }
+        if (packageUnavailable) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_package_unavailable\"}");
+            return;
+        }
+        byte[] b = packageBytes;
+        x.getResponseHeaders().set("Content-Type", "application/zip");
+        x.getResponseHeaders().set("Cache-Control", "no-store");
+        x.getResponseHeaders().set("Nekkora-Package-Sha256", declaredSha256 == null ? sha256(b) : declaredSha256);
+        x.sendResponseHeaders(200, b.length);
+        try (OutputStream out = x.getResponseBody()) {
+            out.write(b);
+        }
+    }
 
     /** Uma solicitacao aceita para esta maquina, ainda nao entregue. */
     public String queue() {
@@ -143,7 +195,9 @@ public final class FakeGateway implements AutoCloseable {
             attemptState = "OFFERED";
             respond(x, 200, "{\"attempt\":{\"attemptId\":\"" + attemptId + "\",\"remoteExecutionId\":\"" + remoteExecutionId + "\",\"attemptNumber\":1,"
                     + "\"automationId\":\"" + automationId + "\",\"automationVersionId\":\"" + automationVersionId + "\",\"packageFingerprint\":\""
-                    + "c".repeat(64) + "\",\"packageFingerprintRule\":\"nekkora-agent/package-fingerprint/1\",\"dependencies\":[\"requests==2.32.3\"],"
+                    + "c".repeat(64) + "\",\"packageFingerprintRule\":\"" + offerRule + "\",\"dependencies\":[\"requests==2.32.3\"],"
+                    + (offerWorkspace ? "\"workspaceId\":\"" + workspaceId + "\"," : "")
+                    + (offerPython == null ? "" : "\"pythonEnvironmentId\":\"" + offerPython + "\",")
                     + "\"token\":\"" + (malformedOffer ? "nao e um token" : attemptToken) + "\",\"epoch\":" + attemptEpoch + ",\"leaseSeconds\":90}}");
             return;
         }
@@ -189,13 +243,36 @@ public final class FakeGateway implements AutoCloseable {
         } else {
             String wanted = field(text, "state");
             String reason = field(text, "refusalReason");
-            if (!attemptState.equals("RECEIVED") || !wanted.equals("REFUSED") || reason.isEmpty()) {
+            reported.add(wanted);
+            java.util.regex.Matcher exit = java.util.regex.Pattern.compile("\"exitCode\":(-?\\d+)").matcher(text);
+            // as mesmas transicoes do servidor real (046)
+            List<String> next = switch (attemptState) {
+                case "RECEIVED" -> List.of("PREPARING", "CANCELLED", "REFUSED", "ENDED_UNKNOWN");
+                case "PREPARING" -> List.of("STARTING", "CANCELLED", "REFUSED", "ENDED_UNKNOWN");
+                case "STARTING" -> List.of("RUNNING", "FAILED", "CANCELLED", "REFUSED", "ENDED_UNKNOWN");
+                case "RUNNING" -> List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ENDED_UNKNOWN");
+                default -> List.<String>of();
+            };
+            if (wanted.equals(attemptState)) {
+                proceed = true;
+            } else if (!next.contains(wanted) || wanted.equals("REFUSED") == reason.isEmpty()
+                    || (exit.find() && !List.of("SUCCEEDED", "FAILED", "TIMED_OUT").contains(wanted))) {
                 respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
                 return;
+            } else if (wanted.equals("STARTING") && cancelRequested) {
+                attemptState = "CANCELLED";
+                proceed = false;
+            } else if (wanted.equals("STARTING") && refuseStart != null) {
+                attemptState = "REFUSED";
+                attemptReason = refuseStart;
+                proceed = false;
+            } else {
+                attemptState = wanted;
+                attemptReason = reason.isEmpty() ? null : reason;
+                exit.reset();
+                attemptExit = exit.find() ? Integer.valueOf(exit.group(1)) : null;
+                proceed = List.of("PREPARING", "STARTING", "RUNNING").contains(wanted);
             }
-            attemptState = wanted;
-            attemptReason = reason;
-            proceed = false;
         }
         respond(x, 200, "{\"attemptId\":\"" + attemptId + "\",\"state\":\"" + attemptState + "\",\"proceed\":" + proceed
                 + (attemptReason == null ? "" : ",\"refusalReason\":\"" + attemptReason + "\"") + ",\"cancelRequested\":" + cancelRequested
@@ -288,6 +365,12 @@ public final class FakeGateway implements AutoCloseable {
         if (get && "1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
             if (authenticated(x, auth)) {
                 next(x);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/package") && "GET".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                pack(x, path);
             }
             return;
         }

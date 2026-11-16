@@ -95,6 +95,63 @@ public final class Runner implements AutoCloseable {
     public record ProjectPythons(String folder, List<PythonOption> options, List<PythonEnvironments.Problem> problems, boolean cancelled) {
     }
 
+    /** Por que uma execucao gerenciada nao comecou, em termos que quem a pediu entende. */
+    public enum ManagedRefusal {
+        /** Ja ha uma execucao em andamento neste computador (de qualquer tipo). */
+        BUSY,
+        /** O ZIP nao confere (SHA-256 ou impressao), nao e um pacote valido, ou mudou. */
+        PACKAGE_INVALID,
+        /** O pacote e de um tipo que este aplicativo nao executa (so pacote Python externo). */
+        PACKAGE_UNSUPPORTED,
+        /** O Python indicado nao existe mais neste computador, ou nao responde. */
+        ENVIRONMENT_GONE,
+        /** O Python indicado nao atende a versao que o pacote exige. */
+        ENVIRONMENT_INCOMPATIBLE,
+        /** Falta, no Python indicado, alguma dependencia (do pacote ou das indicadas por quem pediu), na versao exata. */
+        DEPENDENCIES_MISSING,
+        /** Nao ha sessao interativa utilizavel (tela bloqueada, sessao de servico, sem area de trabalho). */
+        SESSION_UNAVAILABLE,
+        /** Este computador nao conseguiu preparar as pastas ou gravar o registro. */
+        STORAGE
+    }
+
+    public static final class ManagedRefused extends Exception {
+        private static final long serialVersionUID = 1L;
+        private final ManagedRefusal why;
+
+        public ManagedRefused(ManagedRefusal why) {
+            super(why.name(), null, false, false);
+            this.why = why;
+        }
+
+        public ManagedRefusal why() {
+            return why;
+        }
+    }
+
+    /**
+     * O que uma execucao gerenciada e AGORA. {@code state}: RUNNING, SUCCEEDED, FAILED, CANCELLED, TIMED_OUT ou UNKNOWN (terminou
+     * sem que o fim fosse observado, ou nao ha registro). {@code exitCode}: so quando o processo terminou e o codigo foi lido.
+     */
+    public record ManagedStatus(String id, String state, Integer exitCode) {
+        public boolean running() {
+            return "RUNNING".equals(state);
+        }
+    }
+
+    /** O que quem pede uma execucao gerenciada entrega. {@code dir}: a pasta dela, de {@link #managedDir}. */
+    public record ManagedJob(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, Path zip, String sha256, String fingerprint,
+                             List<String> dependencies, String pythonId, Path dir) {
+
+        /** O mesmo, com os caminhos em texto (para quem monta o aplicativo, que nao toca em disco). */
+        public static ManagedJob of(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, String zip, String sha256,
+                                    String fingerprint, List<String> dependencies, String pythonId, String dir) {
+            return new ManagedJob(organizationId, workspaceId, automationId, automationVersionId, Path.of(zip), sha256, fingerprint, dependencies, pythonId,
+                    Path.of(dir));
+        }
+    }
+
+    private volatile Path managedRoot;
     private final LocalPackages packages;
     private final RunController controller;
     private final PythonEnvironments environments;
@@ -122,9 +179,156 @@ public final class Runner implements AutoCloseable {
         this.controller = controller;
         this.environments = environments;
         controller.addListener(s -> {
+            // a tela da execucao local so acompanha o que a pessoa iniciou aqui
+            if (controller.managed(s.record().id())) return;
             Status status = status(s);
             listeners.forEach(l -> l.accept(status));
         });
+    }
+
+    // ------------------------------------------------------------------------------- execucao gerenciada
+
+    /**
+     * Liga as execucoes gerenciadas (PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T03): as que nao nascem de uma aprovacao da pessoa
+     * neste aplicativo. {@code root} e uma pasta dentro da pasta de dados; os registros ficam em {@code root/execucoes} e o
+     * trabalho de cada uma em {@code root/tentativas/<id>}. Chamado uma vez, antes de {@link #reconcile}.
+     */
+    public void enableManaged(Path root) {
+        Path base = root.toAbsolutePath().normalize();
+        controller.enableManaged(RunStore.managed(base.resolve("execucoes"), AtomicWriter.DEFAULT), base.resolve("tentativas"));
+        managedRoot = base.resolve("tentativas");
+    }
+
+    /** A pasta de trabalho de uma execucao gerenciada ({@code key}: um UUID de quem pede). Nao a cria. Vazio: fora do formato ou desligado. */
+    public Optional<Path> managedDir(String key) {
+        Path root = managedRoot;
+        if (root == null || key == null || !key.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) return Optional.empty();
+        return Optional.of(root.resolve(key));
+    }
+
+    /** O caminho de {@link #managedDir}, em texto. */
+    public Optional<String> managedFolder(String key) {
+        return managedDir(key).map(Path::toString);
+    }
+
+    /** {@code true} se ha uma execucao em andamento neste computador, local ou gerenciada. */
+    public boolean busy() {
+        return controller.isRunning();
+    }
+
+    /**
+     * Confere o pacote, o Python e as dependencias e INICIA uma execucao gerenciada. Em ordem: nada em andamento; ZIP
+     * conferido (SHA-256 e impressao) e extraido em {@code dir/pacote}; o Python indicado ainda existe; as dependencias
+     * indicadas por quem pede estao nele, na versao exata; e entao as travas do motor (pacote reconferido, sessao, versao do
+     * Python e dependencias do pacote, saida em {@code dir/saida}). As aprovacoes locais nao sao consultadas nem criadas. Nada
+     * e instalado. Devolve o identificador da execucao. Bloqueia (processos, com prazo): fora da linha de eventos.
+     */
+    public String startManaged(ManagedJob job) throws ManagedRefused {
+        if (managedRoot == null || job.dir() == null || !job.dir().toAbsolutePath().normalize().startsWith(managedRoot)) {
+            throw new ManagedRefused(ManagedRefusal.STORAGE);
+        }
+        if (controller.isRunning()) throw new ManagedRefused(ManagedRefusal.BUSY);
+        ExecutionPackage pkg;
+        try {
+            pkg = com.nekkora.client.pack.DownloadedPackages.unpackVerified(job.zip(), job.sha256(), job.fingerprint(), job.dir().resolve("pacote"),
+                    () -> false);
+        } catch (com.nekkora.client.pack.ImportProblem e) {
+            throw new ManagedRefused(e.detail().filter(com.nekkora.client.pack.ErrorCode.EXEC_PACKAGE_UNSUPPORTED.code()::equals).isPresent() ? ManagedRefusal.PACKAGE_UNSUPPORTED
+                    : e.code() == com.nekkora.client.pack.ImportProblem.Code.DOWNLOAD_STORE_FAILED ? ManagedRefusal.STORAGE : ManagedRefusal.PACKAGE_INVALID);
+        }
+        Path python = installedPath(job.pythonId()).orElseThrow(() -> new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE));
+        requireListed(python, job.dependencies());
+        try {
+            Path out = Files.createDirectories(job.dir().resolve("saida"));
+            RunContext run = new RunContext(job.organizationId(), job.workspaceId(), pkg.fingerprint(), pkg.name(), job.automationId(),
+                    job.automationVersionId());
+            return controller.startManaged(new RunController.Request(pkg.dir(), run, python, out, null)).record().id().value();
+        } catch (ExecRefused e) {
+            throw new ManagedRefused(switch (e.code()) {
+                case EXEC_ALREADY_RUNNING -> ManagedRefusal.BUSY;
+                case EXEC_SESSION_UNAVAILABLE, EXEC_SESSION_LOCKED, EXEC_UNSUPPORTED_OS -> ManagedRefusal.SESSION_UNAVAILABLE;
+                case EXEC_PYTHON_INVALID -> ManagedRefusal.ENVIRONMENT_GONE;
+                case EXT_ENVIRONMENT_INCOMPATIBLE -> ManagedRefusal.ENVIRONMENT_INCOMPATIBLE;
+                case EXEC_OUTPUT_INVALID, EXEC_STORAGE_FAILED, EXEC_LAUNCH_FAILED -> ManagedRefusal.STORAGE;
+                default -> ManagedRefusal.PACKAGE_INVALID;
+            });
+        } catch (java.io.IOException | IllegalArgumentException e) {
+            throw new ManagedRefused(ManagedRefusal.STORAGE);
+        }
+    }
+
+    /** O estado de uma execucao gerenciada, pelo identificador de {@link #startManaged}. Vazio: nao e (ou nao e mais) conhecida. */
+    public Optional<ManagedStatus> managedStatus(String id) {
+        if (!ExecutionId.valid(id)) return Optional.empty();
+        ExecutionId eid = new ExecutionId(id);
+        if (!controller.managed(eid)) return Optional.empty();
+        Optional<RunController.Snapshot> active = controller.running().filter(s -> s.record().id().equals(eid));
+        if (active.isPresent()) return Optional.of(new ManagedStatus(id, "RUNNING", null));
+        return controller.record(eid).map(r -> new ManagedStatus(id, switch (r.state()) {
+            case READY, STARTING, RUNNING -> "RUNNING";
+            case SUCCEEDED -> "SUCCEEDED";
+            case FAILED -> "FAILED";
+            case CANCELLED -> "CANCELLED";
+            case TIMED_OUT -> "TIMED_OUT";
+            case BLOCKED, OUTCOME_UNKNOWN -> "UNKNOWN";
+        }, r.exitCode()));
+    }
+
+    /** Pede o cancelamento de uma execucao gerenciada em andamento. {@code false}: nao esta em andamento. */
+    public boolean cancelManaged(String id) {
+        if (!ExecutionId.valid(id)) return false;
+        ExecutionId eid = new ExecutionId(id);
+        if (!controller.managed(eid)) return false;
+        RunController.CancelResult r = controller.cancel(eid, ExecutionRecord.CancelSource.MANAGED_REQUEST);
+        return r == RunController.CancelResult.REQUESTED || r == RunController.CancelResult.ALREADY_REQUESTED;
+    }
+
+    /** Apaga o CODIGO de uma execucao gerenciada (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
+    public void discardManaged(String key) {
+        managedDir(key).ifPresent(dir -> {
+            try {
+                Files.deleteIfExists(dir.resolve("pacote.zip"));
+            } catch (java.io.IOException e) {
+                // tentado de novo na proxima vez
+            }
+            RunStore.deleteTree(dir.resolve("pacote"));
+        });
+    }
+
+    /** O executavel de uma instalacao de {@link #installedPythons}, pelo identificador dela, se ainda existe. */
+    private static Optional<Path> installedPath(String id) {
+        String prefix = "computador:";
+        if (id == null || !id.startsWith(prefix) || id.length() == prefix.length()) return Optional.empty();
+        try {
+            Path p = Path.of(id.substring(prefix.length()));
+            return p.isAbsolute() && Files.isRegularFile(p) ? Optional.of(p) : Optional.empty();
+        } catch (java.nio.file.InvalidPathException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** As dependencias indicadas por quem pede ({@code nome==versao}) estao no Python, na versao exata. Nada e instalado. */
+    private void requireListed(Path python, List<String> dependencies) throws ManagedRefused {
+        java.util.Map<String, String> wanted = new java.util.LinkedHashMap<>();
+        for (String d : dependencies == null ? List.<String>of() : dependencies) {
+            if (!ExecutionPackage.validDependency(d)) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+            int at = d.indexOf("==");
+            String name = d.substring(0, at);
+            int extras = name.indexOf('[');
+            wanted.put(ExecutionPackage.normalized(extras < 0 ? name : name.substring(0, extras)), d.substring(at + 2).strip());
+        }
+        if (wanted.isEmpty()) return;
+        PythonProbe.Info info;
+        try {
+            info = PythonProbe.run(python, List.copyOf(wanted.keySet()), controller.probeDir(), PythonProbe.DEFAULT_TIMEOUT, PythonProbe.Cancel.NEVER);
+        } catch (PythonProbe.Failed | RuntimeException e) {
+            throw new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE);
+        }
+        if (info.installed() == null) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+        for (java.util.Map.Entry<String, String> w : wanted.entrySet()) {
+            String found = info.installed().get(w.getKey());
+            if (found == null || !found.strip().equals(w.getValue())) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+        }
     }
 
     /** Uma vez, ao abrir o aplicativo: fecha os registros de execucoes que ficaram abertas de uma sessao anterior. */
@@ -296,18 +500,23 @@ public final class Runner implements AutoCloseable {
         }
     }
 
-    /** A execucao em andamento, se houver. E o que as salvaguardas de sair, terminar sessao e trocar de contexto consultam. */
+    /**
+     * A execucao em andamento, se houver, de QUALQUER tipo (a gerenciada tambem ocupa o computador): e o que as salvaguardas
+     * de sair, terminar sessao e trocar de contexto consultam.
+     */
     public Optional<Status> running() {
         return controller.running().map(this::status);
     }
 
     /** A execucao ativa ou a ultima desta sessao do aplicativo. */
     public Optional<Status> current() {
-        return controller.current().map(this::status);
+        return controller.current().filter(s -> !controller.managed(s.record().id())).map(this::status);
     }
 
     /** Pede o cancelamento da execucao em andamento (o processo e os que ele abriu). Nao bloqueia. */
     public boolean cancel() {
+        // o botao da tela local so cancela o que a pessoa iniciou aqui; a gerenciada e cancelada por quem a pediu
+        if (controller.running().filter(s -> controller.managed(s.record().id())).isPresent()) return false;
         return controller.cancel();
     }
 

@@ -217,6 +217,12 @@ public final class RunController implements AutoCloseable {
         return m != null && (managedIds.contains(id) || Files.isDirectory(m.dir(id), java.nio.file.LinkOption.NOFOLLOW_LINKS));
     }
 
+    /** O registro gravado de uma execucao (local ou gerenciada), se existe. */
+    public Optional<ExecutionRecord> record(ExecutionId id) {
+        ExecutionRecord pending = unsaved.get(id);
+        return pending != null ? Optional.of(pending) : storeOf(id).record(id);
+    }
+
     private RunStore storeOf(ExecutionId id) {
         return managed(id) ? managedStore : store;
     }

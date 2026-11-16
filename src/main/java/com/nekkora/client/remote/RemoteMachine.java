@@ -1,6 +1,7 @@
 package com.nekkora.client.remote;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
@@ -25,8 +26,8 @@ import com.nekkora.client.remote.MachineChannel.Refused;
  * <li>{@link #disable}: encerra o vinculo na Platform e remove a credencial deste computador;</li>
  * <li>{@link #beat}: a presenca, enquanto o aplicativo esta aberto.</li>
  * </ul>
- * Nesta versao o aplicativo ainda NAO executa o que a Platform solicitar: ele mantem o vinculo e a presenca, e tem o
- * caminho da entrega ({@link #pull}), que so pergunta a Platform no ensaio do laboratorio ({@link #setDeliveryTrial}).
+ * Com quem executa ligado ({@link #setWork}), o aplicativo declara que executa, recebe a tentativa, baixa o pacote e a conduz
+ * ate o desfecho ({@link #pull}). Esta camada nao cria processos nem abre pacotes: so fala com a Platform e guarda o diario.
  * A execucao feita aqui pela pessoa continua local e nao passa por esta classe.
  */
 public final class RemoteMachine implements AutoCloseable {
@@ -100,8 +101,8 @@ public final class RemoteMachine implements AutoCloseable {
     private long renewWaitSeconds = RENEW_RETRY_FIRST_SECONDS;
     /** O diario da entrega: a tentativa recebida e ainda nao resolvida com a Platform. */
     private final AttemptJournal journal;
-    /** Ensaio de entrega do laboratorio (desligado por padrao): ver {@link #setDeliveryTrial}. */
-    private volatile boolean deliveryTrial;
+    /** Quem executa neste computador (nulo = este aplicativo nao executa o que a Platform solicitar). */
+    private volatile Work work;
 
     /** {@code appVersion}: a versao do build, ou vazio na execucao de desenvolvimento. */
     public RemoteMachine(MachineVault vault, MachineChannel channel, Optional<String> appVersion) {
@@ -132,28 +133,90 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /**
-     * ENSAIO DE ENTREGA, so para o laboratorio (desligado por padrao). Esta versao ainda nao executa o que a Platform
-     * solicitar; sem o ensaio, ela nao declara a capacidade de execucao, a Platform a mostra como incompativel e nada lhe e
-     * entregue. Com o ensaio ligado, a maquina declara a capacidade e pergunta pela entrega, para provar o caminho
-     * (receber, gravar, confirmar, informar): toda tentativa recebida e RECUSADA com o motivo CLIENT_INCOMPATIBLE. Nada e
-     * baixado nem executado. Sai quando a execucao de verdade entrar.
+     * Quem EXECUTA neste computador (entregue por quem monta o aplicativo: esta camada nao cria processos, nao abre pacotes
+     * e nao conhece o motor de execucao). Sem ele, o aplicativo nao declara que executa e a Platform nao lhe entrega nada.
      */
-    public void setDeliveryTrial(boolean on) {
-        this.deliveryTrial = on;
+    public interface Work {
+        /** Ha uma execucao em andamento neste computador (de qualquer tipo). */
+        boolean busy();
+
+        /** O caminho da pasta de trabalho da tentativa (ainda nao criada). Vazio: nao ha onde trabalhar. */
+        Optional<String> dir(String attemptId);
+
+        /**
+         * Confere o pacote baixado, o Python e as dependencias, e INICIA. Devolve o identificador da execucao neste computador.
+         * Nao inicia: {@link WorkRefused}, com o motivo.
+         */
+        String start(Job job) throws WorkRefused;
+
+        /** O que a execucao e agora. Vazio: este computador nao a conhece (mais). */
+        Optional<Progress> progress(String run);
+
+        /** Pede que a execucao pare. */
+        void cancel(String run);
+
+        /** Apaga o codigo da tentativa (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
+        void discard(String attemptId);
+    }
+
+    /** {@code pythonLocalId}: a identidade LOCAL do Python escolhido (com o caminho); nunca sai deste computador. */
+    public record Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
+                      String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir) {
+    }
+
+    /** {@code state}: RUNNING, SUCCEEDED, FAILED, CANCELLED, TIMED_OUT ou UNKNOWN (terminou sem que o fim fosse observado). */
+    public record Progress(String state, Integer exitCode) {
+    }
+
+    /** {@code reason}: um motivo de recusa do contrato da maquina (PACKAGE_INVALID, ENVIRONMENT_GONE, DEPENDENCIES_MISSING...). */
+    public static final class WorkRefused extends Exception {
+        private static final long serialVersionUID = 1L;
+        private final String reason;
+
+        public WorkRefused(String reason) {
+            super(reason, null, false, false);
+            this.reason = reason;
+        }
+
+        public String reason() {
+            return reason;
+        }
+    }
+
+    /** O unico tipo de pacote que este aplicativo executa. */
+    static final String RUNNABLE_RULE = "nekkora-agent/external-python-fingerprint/1";
+
+    /** {@code true} se este aplicativo executa o que a Platform solicitar (declara a capacidade na presenca). */
+    public boolean executes() {
+        return work != null;
+    }
+
+    /** Liga a execucao do que a Platform solicitar (quem monta o aplicativo entrega quem executa). */
+    public void setWork(Work work) {
+        this.work = work;
     }
 
     /**
-     * Uma consulta de entrega. Nunca lanca. Com uma tentativa no diario, resolve-a com a Platform (mesmo com o ensaio
-     * desligado ou o recebimento pausado); sem tentativa no diario, so pergunta se o ensaio estiver ligado.
+     * Uma consulta de entrega. Nunca lanca. Com uma tentativa no diario, segue com ela (mesmo com o recebimento pausado); sem
+     * tentativa no diario, so pergunta a Platform se este aplicativo executa ({@link #setWork}).
      * <ol>
      * <li>a tentativa entregue e GRAVADA no diario (token protegido) antes de qualquer confirmacao; se nao der para gravar,
      * nada e confirmado e a Platform a entrega de novo, com token e epoca novos;</li>
      * <li>o recebimento e confirmado com o token e a epoca da entrega; repetir (resposta perdida, aplicativo fechado) nao
      * muda nada;</li>
-     * <li>o desfecho e informado; so depois de a Platform aceitar, o diario e apagado.</li>
+     * <li>PREPARING: o pacote da tentativa e baixado (so chega inteiro e com o SHA-256 declarado) e o Python escolhido e
+     * localizado NESTE computador; se ele nao existe mais, a tentativa e recusada - nenhum outro e escolhido;</li>
+     * <li>STARTING: a Platform reconfere as condicoes da solicitacao; se algo caiu (ou o cancelamento foi pedido), NADA e
+     * iniciado;</li>
+     * <li>quem executa confere o pacote, o Python e as dependencias e inicia; a intencao de iniciar e gravada ANTES e o
+     * identificador da execucao logo depois: se o aplicativo fechar entre os dois, a tentativa termina sem prova do resultado
+     * e nada e lancado de novo;</li>
+     * <li>RUNNING: a cada consulta o estado e repetido (renova o prazo) e o pedido de cancelamento e obedecido;</li>
+     * <li>o desfecho e informado; so depois de a Platform aceitar, o diario e apagado e o codigo da tentativa e removido.</li>
      * </ol>
-     * Token ou epoca que nao valem mais, tentativa que a Platform ja encerrou ou nao tem: o diario e apagado e nada e alterado
-     * la. Falha de rede: fica tudo como esta, para a proxima consulta.
+     * Token ou epoca que nao valem mais, tentativa que a Platform ja encerrou ou nao tem: o que estiver em execucao e parado, o
+     * diario e apagado e nada e alterado la. Falha de rede: fica tudo como esta, para a proxima consulta - uma execucao em
+     * andamento NAO e interrompida por falta de rede.
      */
     public void pull() {
         synchronized (operation) {
@@ -162,7 +225,7 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             AttemptJournal.Entry pending = journal.load(current.agentId()).orElse(null);
-            if (pending == null && !deliveryTrial) {
+            if (pending == null && work == null) {
                 return;
             }
             try {
@@ -183,38 +246,166 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
-                e = new AttemptJournal.Entry(current.agentId(), o.attemptId(), o.remoteExecutionId(), o.attemptNumber(), o.automationId(),
-                        o.automationVersionId(), o.packageFingerprint(), o.packageFingerprintRule(), o.dependencies(), o.token(), o.epoch(), false, null, null);
+                e = AttemptJournal.Entry.received(current.agentId(), o);
                 journal.save(e);
             } catch (IOException | IllegalArgumentException x) {
                 // nao gravou: nao confirma. A tentativa continua oferecida no servidor
                 return;
             }
         }
+        Work w = work;
         try {
             if (!e.acked()) {
                 if (!channel.ack(credential, e.attemptId(), e.token(), e.epoch()).proceed()) {
                     // a Platform ja a encerrou (cancelada ou recusada antes de chegar aqui)
-                    forget();
+                    forget(e, w);
                     return;
                 }
                 e = e.withAck();
                 keep(e);
             }
-            if (e.report() == null) {
-                // esta versao nao executa: o desfecho e a recusa, com o motivo
-                e = e.reporting("REFUSED", "CLIENT_INCOMPATIBLE");
+            if (e.report() == null && e.phase() == AttemptJournal.Phase.STARTING) {
+                // o aplicativo fechou entre pedir o inicio e gravar a execucao: nao ha prova de nada, e nada e lancado de novo
+                e = e.reporting("ENDED_UNKNOWN", null, null);
                 keep(e);
             }
-            channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason());
-            forget();
+            if (e.report() == null && e.phase() == AttemptJournal.Phase.RECEIVED) {
+                e = begin(current, e, w);
+                if (e == null || e.report() == null) {
+                    // acabou aqui, ou esta em execucao (o estado acabou de ser informado): o resto fica para a proxima consulta
+                    return;
+                }
+            }
+            if (e.report() == null && e.phase() == AttemptJournal.Phase.RUNNING) {
+                Progress p = w == null ? null : w.progress(e.run()).orElse(null);
+                if (p != null && "RUNNING".equals(p.state())) {
+                    // repetir o estado renova o prazo; o pedido de cancelamento vem na resposta
+                    if (channel.state(credential, e.attemptId(), e.token(), e.epoch(), "RUNNING", null, null).cancelRequested()) {
+                        w.cancel(e.run());
+                    }
+                    return;
+                }
+                String end = p == null || "UNKNOWN".equals(p.state()) ? "ENDED_UNKNOWN" : p.state();
+                boolean coded = p != null && p.exitCode() != null && (end.equals("SUCCEEDED") || end.equals("FAILED") || end.equals("TIMED_OUT"));
+                e = e.reporting(end, null, coded ? p.exitCode() : null);
+                keep(e);
+            }
+            channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode());
+            forget(e, w);
         } catch (Refused x) {
             if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
-                forget();
+                // esta entrega nao vale mais: o que ela iniciou aqui para, e nada e alterado na Platform
+                if (w != null && e.run() != null) {
+                    w.cancel(e.run());
+                }
+                forget(e, w);
                 return;
             }
             throw x;
         }
+    }
+
+    /**
+     * Da tentativa recebida ate a execucao iniciada. Devolve a entrada como ficou (em execucao, ou com a recusa a informar), ou
+     * {@code null} se a tentativa acabou aqui (a Platform mandou nao seguir).
+     */
+    private AttemptJournal.Entry begin(MachineVault.Link current, AttemptJournal.Entry e, Work w) throws Refused {
+        String credential = current.credential();
+        if (w == null || !RUNNABLE_RULE.equals(e.packageFingerprintRule()) || e.workspaceId() == null || e.pythonEnvironmentId() == null) {
+            return refuse(e, "CLIENT_INCOMPATIBLE");
+        }
+        if (w.busy()) {
+            return refuse(e, "BUSY");
+        }
+        if (!channel.state(credential, e.attemptId(), e.token(), e.epoch(), "PREPARING", null, null).proceed()) {
+            forget(e, w);
+            return null;
+        }
+        Path dir;
+        try {
+            dir = w.dir(e.attemptId()).map(Path::of).orElse(null);
+        } catch (java.nio.file.InvalidPathException x) {
+            dir = null;
+        }
+        if (dir == null) {
+            return refuse(e, "DISK_PRESSURE");
+        }
+        Path zip = dir.resolve("pacote.zip");
+        String sha;
+        try {
+            w.discard(e.attemptId());
+            java.nio.file.Files.createDirectories(dir);
+            sha = channel.download(credential, e.attemptId(), e.token(), e.epoch(), zip);
+        } catch (IOException x) {
+            return refuse(e, "DISK_PRESSURE");
+        } catch (Refused x) {
+            if (x.problem() == Problem.PACKAGE_UNAVAILABLE || x.problem() == Problem.STORAGE) {
+                return refuse(e, x.problem() == Problem.STORAGE ? "DISK_PRESSURE" : "PACKAGE_INVALID");
+            }
+            throw x;
+        }
+        String python = localPython(e.pythonEnvironmentId());
+        if (python == null) {
+            // o Python escolhido nao esta mais neste computador: nenhum outro e escolhido
+            return refuse(e, "ENVIRONMENT_GONE");
+        }
+        // imediatamente antes de iniciar, a Platform reconfere; cancelamento pedido ou condicao perdida: nada e iniciado
+        if (!channel.state(credential, e.attemptId(), e.token(), e.epoch(), "STARTING", null, null).proceed()) {
+            forget(e, w);
+            return null;
+        }
+        e = e.starting();
+        try {
+            journal.save(e);
+        } catch (IOException x) {
+            // sem conseguir gravar a intencao, nao inicia: um reinicio nao saberia que algo foi lancado
+            return refuse(e.reporting(null, null, null), "DISK_PRESSURE");
+        }
+        String run;
+        try {
+            run = w.start(new Job(e.attemptId(), current.organizationId(), e.workspaceId(), e.automationId(), e.automationVersionId(),
+                    zip.toString(), sha, e.packageFingerprint(), e.dependencies(), python, dir.toString()));
+        } catch (WorkRefused x) {
+            return refuse(e, x.reason());
+        } catch (RuntimeException x) {
+            // quem executa falhou sem dizer se lancou: sem prova de nada
+            e = e.reporting("ENDED_UNKNOWN", null, null);
+            keep(e);
+            return e;
+        }
+        e = e.running(run);
+        keep(e);
+        if (channel.state(credential, e.attemptId(), e.token(), e.epoch(), "RUNNING", null, null).cancelRequested()) {
+            w.cancel(run);
+        }
+        return e;
+    }
+
+    private AttemptJournal.Entry refuse(AttemptJournal.Entry e, String reason) {
+        AttemptJournal.Entry refused = e.reporting("REFUSED", reason, null);
+        keep(refused);
+        return refused;
+    }
+
+    /** A identidade local do Python cujo identificador opaco e o indicado, se ele ainda esta neste computador. */
+    private String localPython(String environmentId) {
+        PythonFinder finder = pythons;
+        if (finder == null) {
+            return null;
+        }
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(vault.inventorySalt(), "HmacSHA256"));
+            for (PythonSeen s : finder.find()) {
+                if (s != null && s.localId() != null && environmentId.equals(
+                        Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(s.localId().getBytes(java.nio.charset.StandardCharsets.UTF_8))))) {
+                    return s.localId();
+                }
+            }
+        } catch (IOException | java.security.GeneralSecurityException | RuntimeException | LinkageError x) {
+            // sem conseguir conferir, o ambiente nao e dado como presente
+        }
+        return null;
     }
 
     private void keep(AttemptJournal.Entry e) {
@@ -225,11 +416,19 @@ public final class RemoteMachine implements AutoCloseable {
         }
     }
 
-    private void forget() {
+    /** A tentativa esta resolvida com a Platform: o diario e apagado e o codigo dela e removido deste computador. */
+    private void forget(AttemptJournal.Entry e, Work w) {
         try {
             journal.clear();
         } catch (IOException x) {
             // fica para a proxima consulta: a Platform respondera que a tentativa ja terminou
+        }
+        if (w != null) {
+            try {
+                w.discard(e.attemptId());
+            } catch (RuntimeException x) {
+                // a limpeza do codigo e tentada de novo na proxima tentativa nesta pasta
+            }
         }
     }
 
@@ -456,7 +655,7 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
-                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, deliveryTrial, journal.load(current.agentId()).isPresent());
+                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, work != null, journal.load(current.agentId()).isPresent() || (work != null && work.busy()));
                 MachineVault.Link next = current.withPaused(p.paused());
                 try {
                     next = next.withExpiry(p.credentialExpiresAt());
