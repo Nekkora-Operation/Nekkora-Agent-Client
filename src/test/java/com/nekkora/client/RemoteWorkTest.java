@@ -313,6 +313,41 @@ class RemoteWorkTest {
     }
 
     @Test
+    void aSaidaDoProcessoChegaLinhaALinhaEnquantoEleRodaESemMudarOResultado() throws Exception {
+        String script = "import sys, time\n"
+                + "print('primeira linha')\n"
+                + "print('acentuação e símbolo €')\n"
+                + "sys.stderr.write('erro escrito em stderr\\n')\n"
+                + "print('x' * 9000)\n"
+                + "time.sleep(4)\n"
+                + "print('ultima, sem quebra no fim', end='')\n"
+                + "sys.exit(3)\n";
+        List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        RemoteMachine.Job plain = job(script, List.of());
+        RemoteMachine.Job job = new RemoteMachine.Job(plain.attemptId(), plain.organizationId(), plain.workspaceId(), plain.automationId(),
+                plain.automationVersionId(), plain.zip(), plain.sha256(), plain.fingerprint(), plain.dependencies(), plain.pythonLocalId(), plain.dir(),
+                (error, at, cut, text) -> seen.add((error ? "E" : "O") + (cut ? "!" : " ") + (text.length() > 40 ? text.length() + " caracteres" : text)));
+        String run = work.start(job);
+        // a primeira linha chega com o processo AINDA rodando (a saida nao fica retida ate o fim)
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
+        while (!seen.contains("O primeira linha") && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        assertTrue(seen.contains("O primeira linha"), String.valueOf(seen));
+        assertEquals("RUNNING", work.progress(run).orElseThrow().state());
+        RemoteMachine.Progress end = waitEnd(run);
+        // o resultado e o do robo: falhou com o codigo dele, com ou sem captura
+        assertEquals("FAILED", end.state());
+        assertEquals(3, end.exitCode());
+        List<String> out = seen.stream().filter(s -> s.startsWith("O")).toList();
+        assertEquals(List.of("O primeira linha", "O acentuação e símbolo €", "O!8192 caracteres", "O ultima, sem quebra no fim"), out);
+        assertEquals(List.of("E erro escrito em stderr"), seen.stream().filter(s -> s.startsWith("E")).toList());
+        // sem quem receba a saida, a execucao e a mesma (nada e guardado)
+        String silent = work.start(job(script.replace("time.sleep(4)", "pass"), List.of()));
+        assertEquals("FAILED", waitEnd(silent).state());
+    }
+
+    @Test
     void codigoDeSaidaCancelamentoEUmaPorVez() throws Exception {
         String failed = work.start(job(EXIT_3, List.of()));
         RemoteMachine.Progress end = waitEnd(failed);

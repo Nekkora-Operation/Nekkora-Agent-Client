@@ -228,7 +228,21 @@ public final class RemoteMachine implements AutoCloseable {
 
     /** {@code pythonLocalId}: a identidade LOCAL do Python escolhido (com o caminho); nunca sai deste computador. */
     public record Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
-                      String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir) {
+                      String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir, LogSink log) {
+
+        /** Sem quem receba a saida do processo. */
+        public Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
+                   String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir) {
+            this(attemptId, organizationId, workspaceId, automationId, automationVersionId, zip, sha256, fingerprint, dependencies, pythonLocalId, dir, null);
+        }
+    }
+
+    /**
+     * Quem recebe a saida do processo da tentativa, linha a linha, enquanto ele roda. Tem de voltar logo e nao lanca: e a fila
+     * local da entrega, nunca a rede.
+     */
+    public interface LogSink {
+        void line(boolean error, long epochMillis, boolean truncated, String text);
     }
 
     /** {@code state}: RUNNING, SUCCEEDED, FAILED, CANCELLED, TIMED_OUT ou UNKNOWN (terminou sem que o fim fosse observado). */
@@ -344,12 +358,16 @@ public final class RemoteMachine implements AutoCloseable {
                 }
             }
             if (e.report() == null && e.phase() == AttemptJournal.Phase.RUNNING) {
+                // a fila dos registros e aberta ja aqui: se o aplicativo foi reaberto no meio da execucao, isso fica dito nela
+                queue(current, e);
                 Progress p = w == null ? null : w.progress(e.run()).orElse(null);
                 if (p != null && "RUNNING".equals(p.state())) {
                     // repetir o estado renova o prazo; o pedido de cancelamento vem na resposta
                     if (channel.state(credential, e.attemptId(), e.token(), e.epoch(), "RUNNING", null, null).cancelRequested()) {
                         w.cancel(e.run());
                     }
+                    // o que o processo ja escreveu vai indo, em lotes; falha aqui nao interrompe nada e e retomada depois
+                    sendLogs(credential, current, e, false);
                     return;
                 }
                 String end = p == null || "UNKNOWN".equals(p.state()) ? "ENDED_UNKNOWN" : p.state();
@@ -368,6 +386,8 @@ public final class RemoteMachine implements AutoCloseable {
                 e = e.results();
                 keep(e);
             }
+            // os registros primeiro (dizem por que um robo falhou); a fila so e apagada com o fechamento confirmado
+            sendLogs(credential, current, e, true);
             // a pasta de saida so e apagada com o recebimento de TUDO confirmado pela Platform; senao, fica neste computador
             String pending = sendResults(credential, e, w);
             forget(e, w);
@@ -454,10 +474,13 @@ public final class RemoteMachine implements AutoCloseable {
             return refuse(e.reporting(null, null, null), "DISK_PRESSURE");
         }
         String run;
+        // a fila local dos registros desta tentativa: o que o processo escrever entra nela (ja sem segredos) e vai a Platform
+        LogQueue q = queue(current, e);
         try {
             run = w.start(new Job(e.attemptId(), current.organizationId(), e.workspaceId(), e.automationId(), e.automationVersionId(),
-                    zip.toString(), sha, e.packageFingerprint(), e.dependencies(), python, dir.toString()));
+                    zip.toString(), sha, e.packageFingerprint(), e.dependencies(), python, dir.toString(), q == null ? null : q::add));
         } catch (WorkRefused x) {
+            dropQueue(true);
             return refuse(e, x.reason());
         } catch (RuntimeException x) {
             // quem executa falhou sem dizer se lancou: sem prova de nada
@@ -598,7 +621,117 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /** A tentativa esta resolvida com a Platform: o diario e apagado e o codigo dela e removido deste computador. */
+    /** A fila de registros aberta neste processo e a tentativa dela (uma por vez). */
+    private LogQueue queue;
+    private String queueAttempt;
+
+    /** A fila da tentativa (aberta uma vez por processo). Nulo: este computador nao consegue proteger a fila, entao nao ha fila. */
+    private LogQueue queue(MachineVault.Link current, AttemptJournal.Entry e) {
+        if (queue != null && e.attemptId().equals(queueAttempt)) {
+            return queue;
+        }
+        try {
+            queue = vault.logQueue(e.attemptId(), List.of(current.credential(), e.token()));
+            queueAttempt = e.attemptId();
+            if (queue.existed() && e.phase() == AttemptJournal.Phase.RUNNING && e.report() == null) {
+                // o aplicativo foi reaberto no meio da tentativa: o que o processo escreveu desde entao nao foi lido por ninguem
+                queue.note(clock.millis(), "O aplicativo deste computador foi reaberto durante a execução: a saída do processo a partir deste ponto "
+                        + "não foi capturada.");
+            }
+            return queue;
+        } catch (RuntimeException x) {
+            queue = null;
+            queueAttempt = null;
+            return null;
+        }
+    }
+
+    /** Solta a fila deste processo; {@code delete}: apaga o arquivo (confirmado pela Platform, ou a tentativa nao executou). */
+    private void dropQueue(boolean delete) {
+        if (queue != null && delete) {
+            queue.delete();
+        }
+        queue = null;
+        queueAttempt = null;
+    }
+
+    /**
+     * Envia a Platform o que a fila de registros tem e ainda nao foi confirmado, em lotes. Com {@code close} (a tentativa
+     * terminou): envia tudo, fecha o envio dizendo quantas linhas foram e quantas foram descartadas por limite e, so com o
+     * fechamento confirmado com as mesmas contagens, apaga a fila. Sem {@code close} (execucao em andamento): no maximo alguns
+     * lotes por consulta, e qualquer falha fica para a proxima - registro nunca interrompe a execucao nem muda o resultado.
+     */
+    private void sendLogs(String credential, MachineVault.Link current, AttemptJournal.Entry e, boolean close) throws Refused {
+        LogQueue q = queue(current, e);
+        if (q == null) {
+            return;
+        }
+        try {
+            try {
+                q.flush();
+            } catch (IOException x) {
+                // o que esta na memoria ainda pode ser enviado
+            }
+            for (int sent = 0; close || sent < 10; sent++) {
+                List<LogQueue.Line> batch = q.batch();
+                if (batch.isEmpty()) {
+                    break;
+                }
+                try {
+                    q.acked(channel.sendLogs(credential, e.attemptId(), e.token(), e.epoch(), batch));
+                } catch (Refused x) {
+                    if (x.problem() == Problem.LOG_LIMIT) {
+                        // a Platform chegou ao limite dela antes da fila (ela nao grava parte de um lote): o que ainda cabe vai
+                        // linha a linha, e o resto conta como descartado
+                        for (LogQueue.Line one : batch) {
+                            try {
+                                q.acked(channel.sendLogs(credential, e.attemptId(), e.token(), e.epoch(), List.of(one)));
+                            } catch (Refused y) {
+                                if (y.problem() != Problem.LOG_LIMIT) {
+                                    throw y;
+                                }
+                                q.refusedFrom(one.sequence());
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    if (x.problem() == Problem.LOG_CONFLICT) {
+                        // o envio ja foi fechado por outra entrega, ou a Platform tem outra coisa nessas linhas: nao ha o que enviar
+                        dropQueue(false);
+                        return;
+                    }
+                    throw x;
+                }
+            }
+            if (!close) {
+                return;
+            }
+            try {
+                if (q.drained() && channel.completeLogs(credential, e.attemptId(), e.token(), e.epoch(), q.lines(), q.dropped())) {
+                    dropQueue(true);
+                    return;
+                }
+            } catch (Refused x) {
+                if (x.problem() != Problem.LOG_CONFLICT) {
+                    throw x;
+                }
+            }
+            // sem a confirmacao do fechamento, a fila fica no disco ate o prazo de guarda
+            dropQueue(false);
+        } catch (Refused x) {
+            if (close || x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.LINK_ENDED
+                    || x.problem() == Problem.NOT_ENABLED) {
+                throw x;
+            }
+            // execucao em andamento e falha passageira: fica para a proxima consulta
+        }
+    }
+
     private void forget(AttemptJournal.Entry e, Work w) {
+        if (e.attemptId().equals(queueAttempt)) {
+            dropQueue(false);
+        }
         try {
             journal.clear();
         } catch (IOException x) {
@@ -1011,6 +1144,8 @@ public final class RemoteMachine implements AutoCloseable {
         synchronized (operation) {
             MachineVault.Link current = usable();
             String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
+            // filas de registros de tentativas ja resolvidas, sem confirmacao, paradas ha mais que o prazo de guarda
+            vault.sweepLogQueues(keep, clock.instant());
             try {
                 return w.sweep(keep);
             } catch (RuntimeException x) {
@@ -1022,6 +1157,14 @@ public final class RemoteMachine implements AutoCloseable {
     /** Fechar o aplicativo NAO desabilita a maquina: so a presenca para, e a Platform a vera sem contato. */
     @Override
     public synchronized void close() {
+        LogQueue open = queue;
+        if (open != null) {
+            try {
+                open.flush();
+            } catch (IOException | RuntimeException x) {
+                // o que nao foi gravado se perde com o fechamento
+            }
+        }
         if (beats != null) {
             beats.shutdownNow();
             beats = null;
