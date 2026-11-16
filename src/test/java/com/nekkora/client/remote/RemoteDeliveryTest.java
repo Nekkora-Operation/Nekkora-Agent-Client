@@ -1275,6 +1275,42 @@ class RemoteDeliveryTest {
     }
 
     @Test
+    void prazoDeGuardaVencidoComOEnvioAindaSendoTentadoRegistraAPerdaComAQuantidadeVerdadeiraEAvisaQuandoAPlatformVolta() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        writes(0, "linha 1", "linha 2", "linha 3", "linha 4");
+        work.ends("SUCCEEDED", 0);
+        // a Platform aceita o desfecho e fica indisponivel para os registros
+        gw.failLogs = 1000;
+        gw.failLoss = 1000;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(List.of("SENDING"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        // o prazo de guarda vence com o envio ainda sendo tentado: a fila sai, e a perda fica com as 4 linhas que havia - nao zero
+        age(queueFile(attempt), java.time.Duration.ofDays(8));
+        m.sweep();
+        assertFalse(Files.exists(queueFile(attempt)));
+        List<RemoteMachine.Lost> lost = m.lost().stream().filter(RemoteMachine.Lost::logs).toList();
+        assertEquals(1, lost.size());
+        assertEquals(4, lost.get(0).count());
+        assertEquals("PENDING", lost.get(0).notice(), "a Platform ainda nao pode ser avisada");
+        assertTrue(gw.losses.isEmpty());
+        assertTrue(m.heldLogs().isEmpty(), "o que foi removido nao aparece mais como pendente");
+        // depois da remocao nao ha novo envio de registros: nada e dado como entregue
+        long sends = calls("/logs");
+        m.forgetHeldWaits();
+        m.pull();
+        assertEquals(sends, calls("/logs"));
+        assertNull(gw.logsClosure);
+        // a Platform volta: a limpeza seguinte avisa, com a quantidade que havia aqui
+        gw.failLoss = 0;
+        m.sweep();
+        assertEquals(List.of(attempt + "|LOGS|4"), gw.losses.stream().filter(x -> x.contains("|LOGS|")).toList());
+        assertEquals("SENT", m.lost().stream().filter(RemoteMachine.Lost::logs).findFirst().orElseThrow().notice());
+    }
+
+    @Test
     void impedimentoDeAutorizacaoFicaDitoComOMotivoENaoEContornado() throws Exception {
         RemoteMachine m = enabled(true);
         String attempt = gw.queue();
