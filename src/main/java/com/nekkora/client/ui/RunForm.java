@@ -104,8 +104,12 @@ final class RunForm extends JPanel {
     private final JLabel lastOutputLabel = new JLabel(NavText.RUN_LAST_OUTPUT);
     private final JTextField lastOutput = new JTextField(26);
     private final GhostButton openLastOutput = GhostButton.text(NavText.RUN_OPEN_FOLDER);
+    private final JLabel lastTextLabel = new JLabel(NavText.RUN_LAST_TEXT);
+    private final JTextField lastText = new JTextField(26);
+    private final GhostButton openLastText = GhostButton.text(NavText.RUN_OPEN_TEXT);
     private final JPanel lastRunRow;
     private final JPanel lastOutputRow;
+    private final JPanel lastTextRow;
     private final List<JLabel> labels = new ArrayList<>();
     private final List<JTextField> paths = new ArrayList<>();
 
@@ -131,11 +135,13 @@ final class RunForm extends JPanel {
         path(output, NavText.RUN_OUTPUT);
         path(lastRun, NavText.RUN_LAST_CODE);
         path(lastOutput, NavText.RUN_LAST_OUTPUT);
+        path(lastText, NavText.RUN_LAST_TEXT);
         openCode.getAccessibleContext().setAccessibleName(NavText.RUN_OPEN_CODE);
         openCode.setToolTipText(NavText.RUN_OPEN_HINT);
         chooseOutput.getAccessibleContext().setAccessibleName("Escolher a pasta de saída");
         openLastRun.getAccessibleContext().setAccessibleName(NavText.RUN_OPEN_LAST_CODE);
         openLastOutput.getAccessibleContext().setAccessibleName(NavText.RUN_OPEN_LAST_OUTPUT);
+        openLastText.getAccessibleContext().setAccessibleName(NavText.RUN_OPEN_LAST_TEXT);
 
         pythons.getAccessibleContext().setAccessibleName(NavText.PY_TITLE);
         pythons.getAccessibleContext().setAccessibleDescription(NavText.PY_BOX_HINT);
@@ -180,6 +186,7 @@ final class RunForm extends JPanel {
         close.addActionListener(e -> events.close());
         openLastRun.addActionListener(e -> events.openFolder(lastRun.getText()));
         openLastOutput.addActionListener(e -> events.openFolder(lastOutput.getText()));
+        openLastText.addActionListener(e -> events.openFolder(lastText.getText()));
         cancel.setVisible(false);
         details.setEditable(false);
         details.setLineWrap(false);
@@ -242,8 +249,10 @@ final class RunForm extends JPanel {
         last.add(lastState);
         lastRunRow = lastRow(lastRunLabel, lastRun, openLastRun);
         lastOutputRow = lastRow(lastOutputLabel, lastOutput, openLastOutput);
+        lastTextRow = lastRow(lastTextLabel, lastText, openLastText);
         last.add(lastRunRow);
         last.add(lastOutputRow);
+        last.add(lastTextRow);
         add(left(last));
 
         // trocar o tema com a preparacao aberta repinta o formulario inteiro (fundo, textos, caixa e mensagens)
@@ -434,6 +443,8 @@ final class RunForm extends JPanel {
         lastRunRow.setVisible(!s.runDir().isEmpty());
         setPath(lastOutput, s.outputFolder());
         lastOutputRow.setVisible(!s.outputFolder().isEmpty());
+        setPath(lastText, s.outputText());
+        lastTextRow.setVisible(!s.outputText().isEmpty());
         refresh();
     }
 
@@ -627,6 +638,14 @@ final class RunForm extends JPanel {
 
     JTextField lastRunField() {
         return lastRun;
+    }
+
+    JTextField lastTextField() {
+        return lastText;
+    }
+
+    GhostButton openLastTextButton() {
+        return openLastText;
     }
 
     JTextField lastOutputField() {

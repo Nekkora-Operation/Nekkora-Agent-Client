@@ -58,15 +58,19 @@ public final class Runner implements AutoCloseable {
     /**
      * Retrato de uma execucao (a ativa ou a ultima). {@code organizationId} e {@code workspaceId} sao os do INICIO.
      * {@code detail}: por que terminou assim, quando ha o que dizer. {@code outputFolder}: onde o script gravou.
+     * {@code outputText}: o arquivo, neste computador, com o que o processo escreveu na saida padrao e na saida de erro
+     * (vazio se a execucao nao chegou a lancar o processo).
      */
     public record Status(String id, UUID organizationId, UUID workspaceId, String fingerprint, String name, boolean running, boolean finished,
-                         boolean succeeded, String state, String detail, long elapsedMillis, String outputFolder, boolean cancelRequested, String runDir) {
+                         boolean succeeded, String state, String detail, long elapsedMillis, String outputFolder, boolean cancelRequested, String runDir,
+                         String outputText) {
         /**
          * {@code runDir}: a pasta de onde o processo Python desta execucao roda (a copia conferida do pacote, criada no
          * inicio); vazio se a execucao foi recusada antes de a copia existir.
          */
         public Status {
             runDir = runDir == null ? "" : runDir;
+            outputText = outputText == null ? "" : outputText;
         }
     }
 
@@ -642,10 +646,22 @@ public final class Runner implements AutoCloseable {
     public Optional<String> folderUri(String folder) {
         try {
             Path p = folder == null || folder.isBlank() ? null : Path.of(folder.trim()).toAbsolutePath();
+            if (p != null && localOutputText(p)) return Optional.of(p.toUri().toString());
             return p != null && Files.isDirectory(p) ? Optional.of(p.toUri().toString()) : Optional.empty();
         } catch (InvalidPathException | SecurityException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * {@code true} so para o arquivo de texto com a saida do processo de uma execucao iniciada aqui: um arquivo comum, com o
+     * nome fixo, dentro da pasta de um registro local. E o unico ARQUIVO que o aplicativo pede ao sistema para abrir.
+     */
+    private boolean localOutputText(Path p) {
+        Path root = controller.store().root().toAbsolutePath().normalize();
+        Path n = p.normalize();
+        return RunController.OUTPUT_TEXT.equals(String.valueOf(n.getFileName())) && n.getParent() != null && root.equals(n.getParent().getParent())
+                && Files.isRegularFile(n, java.nio.file.LinkOption.NOFOLLOW_LINKS);
     }
 
     /** A pasta de saida precisa existir (a execucao cria nela uma subpasta propria). */
@@ -726,7 +742,7 @@ public final class Runner implements AutoCloseable {
         String out = lastOutputRoot == null ? "" : Path.of(lastOutputRoot).resolve(r.id().value()).toString();
         return new Status(r.id().value(), r.context().organizationId(), r.context().workspaceId(), r.context().fingerprint(), r.context().localName(), s.running(),
                 finished, r.state() == ExecutionState.SUCCEEDED, r.state().label(), detail, s.elapsedMillis(), out, r.cancellation() != null,
-                controller.runCopy(r.id()).map(Path::toString).orElse(""));
+                controller.runCopy(r.id()).map(Path::toString).orElse(""), controller.outputText(r.id()).map(Path::toString).orElse(""));
     }
 
     private static Path path(String text, String whenMissing) throws Refused {

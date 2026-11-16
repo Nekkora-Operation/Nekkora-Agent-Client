@@ -99,6 +99,8 @@ public final class RunController implements AutoCloseable {
     public static final Duration CLOSE_WAIT = Duration.ofSeconds(15);
     /** Arquivo da pasta da execucao com o caminho da saida (local; fora do registro). */
     static final String OUTPUT_REF = "saida.ref";
+    /** O que o processo de uma execucao iniciada AQUI escreveu (ver {@link OutputText}). So no armazem local. */
+    static final String OUTPUT_TEXT = "saida.txt";
     /**
      * Posse do processo lancado (PID + inicio + resumo do executavel), gravada num arquivo NOVO logo depois do lancamento
      * e antes de gravar RUNNING. Se a gravacao de RUNNING falhar e o aplicativo cair, a reconciliacao ainda encontra o
@@ -140,6 +142,8 @@ public final class RunController implements AutoCloseable {
         volatile ExecutionRecord.Cancellation cancelRequest;
         final AtomicLong bytes = new AtomicLong();
         final List<Thread> drains = new ArrayList<>();
+        /** O arquivo com a saida do processo; so na execucao iniciada aqui. */
+        volatile OutputText text;
         /** Gravacoes do {@code record} que falharam desde a ultima que deu certo (0 = o disco tem o {@code record}). */
         volatile int saveFailures;
 
@@ -321,12 +325,27 @@ public final class RunController implements AutoCloseable {
     }
 
     /**
-     * O mesmo, entregando a saida do processo, linha a linha, a {@code sink} (nulo: a saida e lida e desprezada). So a
-     * execucao gerenciada tem quem receba a saida: a que a pessoa inicia aqui continua sem entregar linha a ninguem.
+     * O mesmo, entregando a saida do processo, linha a linha, a {@code sink} (nulo: a saida e lida e desprezada). A execucao
+     * que a pessoa inicia aqui nao entrega linha a ninguem: a saida dela vai para um arquivo deste computador
+     * ({@link #outputText}).
      */
     public Snapshot startManaged(Request req, OutputLines.Sink sink) throws ExecRefused {
         if (managedStore == null) throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
         return launch(req, true, sink);
+    }
+
+    /**
+     * O arquivo com o que o processo de uma execucao INICIADA AQUI escreveu, se existir. Execucao gerenciada nunca tem esse
+     * arquivo: a saida dela e entregue a quem a pediu.
+     */
+    public Optional<Path> outputText(ExecutionId id) {
+        if (managed(id)) return Optional.empty();
+        try {
+            Path f = store.dir(id).resolve(OUTPUT_TEXT);
+            return Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS) ? Optional.of(f) : Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
     }
 
     private Snapshot launch(Request req, boolean managed, OutputLines.Sink sink) throws ExecRefused {
@@ -380,8 +399,16 @@ public final class RunController implements AutoCloseable {
             } catch (IOException e) {
                 throw finish(r, ExecutionState.BLOCKED, ErrorCode.EXEC_OUTPUT_INVALID);
             }
-            // com quem receba a saida, o Python a entrega linha a linha (so a execucao gerenciada tem quem receba)
-            Launch.Spec spec = Launch.spec(pkg, probe.python(), copy, sink != null);
+            // a saida do processo tem sempre um destino: a execucao iniciada aqui a guarda num arquivo deste computador; a
+            // gerenciada a entrega a quem a pediu (ou a despreza, sem sink). Nunca os dois.
+            OutputText text = null;
+            if (!managed) {
+                text = new OutputText(storeOf(id).dir(id).resolve(OUTPUT_TEXT), java.time.ZoneId.systemDefault());
+                text.open();
+            }
+            OutputLines.Sink lines = managed ? sink : text;
+            // com quem receba a saida, o Python a entrega linha a linha
+            Launch.Spec spec = Launch.spec(pkg, probe.python(), copy, lines != null);
             Process p;
             try {
                 ProcessBuilder pb = new ProcessBuilder(spec.command()).directory(spec.workDir().toFile());
@@ -399,10 +426,11 @@ public final class RunController implements AutoCloseable {
             writeProcessRef(id, owner);
             r = r.withOwner(owner).moveTo(ExecutionState.RUNNING, null, clock.instant());
             Active a = new Active(r, p, output, req.timeout());
+            a.text = text;
             storeOf(id).event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
             persist(a);
-            drain(a, p.getInputStream(), "saida", false, sink);
-            drain(a, p.getErrorStream(), "erros", true, sink);
+            drain(a, p.getInputStream(), "saida", false, lines);
+            drain(a, p.getErrorStream(), "erros", true, lines);
             active = a;
             Thread t = new Thread(() -> watch(a), "nekkora-client-execucao");
             t.setDaemon(true);
@@ -489,7 +517,7 @@ public final class RunController implements AutoCloseable {
 
     /**
      * Le o fluxo ate o fim: o processo nunca trava por saida cheia. Sem {@code sink}, so conta os bytes (nada e guardado); com
-     * ele, cada linha e entregue a quem pediu a execucao gerenciada.
+     * ele, cada linha e entregue: ao arquivo local (execucao iniciada aqui) ou a quem pediu a execucao gerenciada.
      */
     private void drain(Active a, InputStream in, String name, boolean error, OutputLines.Sink sink) {
         Thread t = new Thread(() -> OutputLines.pump(in, error, sink, a.bytes, clock), "nekkora-client-" + name);
@@ -553,6 +581,7 @@ public final class RunController implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
+        if (a.text != null) a.text.close(clock.millis());
         Integer exit = null;
         if (a.process != null) {
             waitFor(a.process, Duration.ofSeconds(5));

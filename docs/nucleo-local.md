@@ -388,9 +388,11 @@ RunStore store()                  // histórico: store().all(context), store().l
   pedido (`AGT-EXE-001..005`, `-004` se mudou); aprovação da **mesma** impressão (`-007`); sessão (`-012`, `-013`, `-017`);
   Python, versão e dependências (`-008`, `AGT-EXT-022`); pasta de saída (`-011`). Cada recusa vira um registro `BLOCKED`
   com o contexto do pedido, e o `Listener` é avisado.
-- O processo: `python -E -s -B <entrada>`, sem shell, sem argumento de fora, da cópia conferida, com ambiente mínimo
-  (`PythonRuntime.ENV_KEEP` + `PYTHONIOENCODING`, `PYTHONUTF8`, `NEKKORA_SAIDA`, `NEKKORA_SINAL`). A saída padrão é drenada
-  e descartada; só a contagem de bytes fica (`record.outputBytes()`).
+- O processo: `python -E -s -B -u <entrada>`, sem shell, sem argumento de fora, da cópia conferida, com ambiente mínimo
+  (`PythonRuntime.ENV_KEEP` + `PYTHONIOENCODING`, `PYTHONUTF8`, `NEKKORA_SAIDA`, `NEKKORA_SINAL`). A saída padrão e a de
+  erro são lidas linha a linha e gravadas em `saida.txt`, na pasta do registro da execução, só neste computador
+  (PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T05; ver `docs/execucao-remota.md`, "Execução local"). O registro e os eventos
+  continuam sem nada do que o script escreve: neles só fica a contagem de bytes (`record.outputBytes()`).
 - Os `Listener` são chamados na linha `nekkora-client-execucao` (a cada ~0,5 s enquanto roda) ou na que chamou `start`:
   repasse para a linha de eventos. `recordSaved == false` = o estado mostrado ainda não chegou ao disco (é tentado de novo).
 - Desfecho (`record.state()`, `record.code()`):

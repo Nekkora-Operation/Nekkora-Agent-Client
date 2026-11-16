@@ -177,14 +177,52 @@ descartava.
 | Resultado do robô | **nunca muda** por causa de registro: nem limite, nem falha de envio, nem fila que não pôde ser confirmada |
 | Sem rede | a execução não é interrompida; a fila guarda e o envio é retomado, sem duplicar linha |
 | Aplicativo reaberto no meio | a fila volta do disco; uma linha do aplicativo diz que a saída a partir dali não foi capturada |
-| Execução iniciada neste computador | **não tem fila e não envia nada.** A saída dela continua sendo lida e descartada, como antes |
+| Execução iniciada neste computador | **não tem fila e não envia nada.** A saída dela vai para um arquivo deste computador (ver "Execução local") |
 
-Dois detalhes do Python que a captura trata:
+### Execução local: a saída fica num arquivo deste computador
 
-- O processo é lançado com `-u` quando há quem receba a saída, para as linhas saírem quando são escritas e não só no
-  fim. Isso muda **quando** a saída chega, não o que o script faz. Só vale para a tentativa remota.
-- O Python escreve num fluxo redirecionado na página de código do Windows. A linha é lida como UTF-8 se for UTF-8 válido;
-  senão, na página de código deste computador.
+| Ponto | Como é |
+|---|---|
+| O que é capturado | a saída padrão e a saída de erro do processo de uma execução iniciada pelo botão **Executar** |
+| Para onde vai | para `saida.txt`, na pasta do registro daquela execução (`execucoes/<id>/`), na pasta de dados do aplicativo. **Nunca é enviado**: `run` não conhece rede, e o canal da máquina não lê essa pasta |
+| Formato | texto UTF-8. Primeira linha: o que é o arquivo. Depois, uma linha por linha capturada: instante (relógio deste computador), canal (`saída`, `erro` ou `aplicativo`) e o texto |
+| Como se vê | na área "Última execução" da preparação: o caminho do arquivo e **Abrir arquivo**, que pede ao Windows para abri-lo. O aplicativo não tem visualizador próprio |
+| Segredos | as mesmas regras da tentativa remota: credencial de máquina, código de habilitação e valor de cabeçalho de autorização viram `[removido]` antes do disco |
+| Proteção | arquivo comum na pasta de dados do usuário, como o registro da execução. **Não** passa pela proteção do Windows usada na fila remota |
+| Limite por linha | 8 KiB; a linha cortada termina com `[linha cortada no limite de 8 KiB]` |
+| Limite por execução | 50.000 linhas e 20 MiB. Ao atingir: uma linha `aplicativo` dizendo isso; as seguintes são lidas e contadas; a última linha do arquivo diz quantas ficaram de fora |
+| Resultado da execução | **não muda** por causa do arquivo: nem limite, nem falha de disco |
+| Quanto tempo fica | o mesmo do registro da execução: os 50 mais recentes por pacote (`RunStore.KEEP`); o arquivo sai junto com o registro |
+| Execução remota | **não** gera esse arquivo |
+
+### Como a saída é lida (vale para as duas origens)
+
+**`-u`.** O processo é lançado com `-u` sempre que a saída tem destino (a fila remota ou o arquivo local), para as linhas
+saírem quando são escritas e não só no fim. Muda **quando** a saída chega, não o que o script faz. A variável de ambiente
+equivalente não serviria: o `-E`, que o aplicativo já usava, faz o Python ignorá-la.
+
+**Linha.** Os bytes são acumulados até o `\n`. O `\r` é descartado onde estiver. A decisão de codificação é tomada
+**por linha inteira, depois de a linha estar completa**; por isso um caractere dividido entre duas leituras do fluxo
+chega inteiro.
+
+**Codificação, passo a passo:**
+
+1. Se os bytes da linha são UTF-8 válido, a linha é UTF-8.
+2. Se **qualquer** byte da linha não é UTF-8 válido, a linha **inteira** é lida na página de código do Windows deste
+   computador (`native.encoding`; neste laboratório, `Cp1252`). É nela que o Python escreve num fluxo redirecionado
+   quando o script não muda a codificação, então os acentos chegam certos sem o script fazer nada.
+3. Consequência da regra 2: numa linha que mistura UTF-8 válido com um byte inválido, os caracteres UTF-8 de mais de um
+   byte aparecem como dois ou mais caracteres da página de código. Nada é descartado e nada lança erro.
+4. Se a página de código não puder ser determinada, usa-se UTF-8 com substituição (`\uFFFD`) nos bytes inválidos.
+5. Byte sem caractere na página de código vira `\uFFFD`.
+6. Caractere de controle (abaixo de `0x20`, exceto tabulação, e `0x7f`) vira `\uFFFD`: uma linha é sempre uma linha de
+   texto. Sequências de cor do terminal ficam visíveis como texto, sem o `ESC`.
+7. Linha acima de 8 KiB: o excedente é lido e desprezado. Se o corte cair no meio de um caractere UTF-8, os bytes
+   partidos saem e o resto continua UTF-8. A linha vai marcada como cortada.
+8. A decisão é por linha: uma linha inválida não muda a leitura da seguinte.
+
+**Limite conhecido.** Um texto em página de código cujos bytes formem, por coincidência, UTF-8 válido é lido como UTF-8.
+Com `Cp1252` isso exige sequências como `Ã©`, raras em texto real, mas possíveis.
 
 ## O que continua local
 
@@ -212,6 +250,12 @@ temporária.
 | Limpeza e recuperação: resultado pendente não é apagado antes da confirmação; varredura preserva a pendente e os resultados; processo adotado ao reabrir, nada relançado; código sai, saída só quando pedida | `RemoteDeliveryTest.resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento`, `RemoteWorkTest.aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro`, `RemoteWorkTest.limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado` |
 | Confirmação que corresponde ao enviado; pendência marcada, visível e com prazo; nada fora da tentativa é tocado | `RemoteDeliveryTest.aPastaDeSaidaSoSaiQuandoAConfirmacaoCorrespondeATentativaEAosArquivosEnviados`, `RemoteWorkTest.resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa`, `RemoteDesktopTest.resultadoGuardadoSemConfirmacaoApareceNaTelaComAPastaEADataDeRemocao` |
 | Registros: leitura linha a linha, corte, página de código, quem recebe falhando | `OutputLinesTest` |
+| Codificação: caractere de 2, 3 e 4 bytes dividido entre leituras (pedaços de 1 a 7 bytes); linha com byte inválido lida inteira na página de código; sequências UTF-8 malformadas; uma linha não contamina a outra | `OutputLinesTest.caractereDivididoEntreLeiturasChegaInteiroEmQualquerPontoDeCorte`, `OutputLinesTest.aDecisaoDeCodificacaoEPorLinhaInteiraEUmaLinhaNaoContaminaAOutra` |
+| Saída da execução local: formato, canais, linha cortada, segredos, limite de linhas e de tamanho, falha de disco | `OutputTextTest` |
+| Saída da execução local com Python real: arquivo na pasta do registro, saída e erro; 24 MiB de saída param no limite, avisam e contam; nada do script no registro nem nos eventos | `RunControllerTest.sucesso`, `RunControllerTest.volume` |
+| Saída da execução local na tela: caminho mostrado, **Abrir arquivo**, nenhum outro arquivo é aberto | `RunPreparationDesktopTest` (`-Pdesktop`) |
+| Execução remota não grava arquivo local de saída | `ManagedRunTest.executaSemAprovacaoLocalEGuardaSoNoArmazemProprio` |
+| As duas remoções de segredos dão o mesmo resultado | `RedactionVectors`, usado por `LogQueueTest` e `OutputTextTest` |
 | Registros: fila protegida no disco, sem segredos, limites contados, volta ao reabrir | `LogQueueTest` (DPAPI real) |
 | Registros: lotes durante a execução, sem rede, fechamento, fila apagada só com confirmação, prazo, reabertura, limite da Platform, tentativa que não executou | `RemoteDeliveryTest` (4 testes) |
 | Registros com Python real: linha chega com o processo rodando, acentos, stderr, linha cortada, resultado inalterado | `RemoteWorkTest.aSaidaDoProcessoChegaLinhaALinhaEnquantoEleRodaESemMudarOResultado` |
@@ -223,8 +267,10 @@ temporária.
 
 - **Só pacote Python externo** é executado. Pacote do Studio é recusado (`CLIENT_INCOMPATIBLE`).
 - **Tela bloqueada ou sem sessão interativa: a execução não inicia** (`SESSION_UNAVAILABLE`), como na execução local.
-- **A saída de uma execução iniciada neste computador continua não sendo guardada**: a captura nova serve só à tentativa
-  remota. Não existe, no aplicativo, tela de registros de execução local.
+- **Saída da execução local:** guardada em arquivo de texto comum, sem visualizador no aplicativo (abre no programa
+  padrão do Windows), sem busca e sem filtro. O arquivo não é protegido além das permissões da pasta do usuário.
+- A execução local passou a ser lançada com `-u` (antes, sem). Um script que dependia de a saída só aparecer no fim não
+  muda de resultado, mas escreve com mais chamadas ao sistema.
 - Registros: sem nível (tudo `UNKNOWN`); sem limite de espaço total da fila; a fila que não pôde ser confirmada não aparece
   na tela (o aplicativo não mostra conteúdo de registro remoto); até 1 segundo de saída pode se perder se o aplicativo cair.
 - Depois de o aplicativo ser reaberto no meio de uma execução, a saída do processo **não é mais capturada** (o fluxo ficou
