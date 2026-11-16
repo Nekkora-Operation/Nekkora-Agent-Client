@@ -34,7 +34,7 @@ import com.sun.jna.win32.StdCallLibrary;
  *
  * <p>Fora do Windows, ou se o sistema recusar qualquer chamada, nao ha supervisao: quem chama trata como "sem como saber".
  */
-final class WindowsSupervision {
+final class WindowsProcessGroup {
 
     private interface Api extends StdCallLibrary {
         Pointer CreateJobObjectW(Pointer attributes, WString name);
@@ -73,7 +73,7 @@ final class WindowsSupervision {
     private static volatile Api api;
     private static volatile boolean unavailable;
 
-    private WindowsSupervision() {
+    private WindowsProcessGroup() {
     }
 
     private static Api api() {

@@ -151,7 +151,7 @@ public final class RunController implements AutoCloseable {
         /** O que se sabe dos processos desta execucao (ver {@link ProcessTree}). */
         final ProcessTree tree;
         /** O grupo supervisionado pelo Windows; so em execucao gerenciada, e nulo quando nao ha supervisao. */
-        volatile WindowsSupervision.Group group;
+        volatile WindowsProcessGroup.Group group;
 
         Active(ExecutionRecord r, Process p, Path output, Duration timeout) {
             this.tree = new ProcessTree(storeOf(r.id()).dir(r.id()).resolve(ProcessTree.FILE));
@@ -417,7 +417,7 @@ public final class RunController implements AutoCloseable {
             // com quem receba a saida, o Python a entrega linha a linha
             Launch.Spec spec = Launch.spec(pkg, probe.python(), copy, lines != null);
             Process p;
-            WindowsSupervision.Group group = null;
+            WindowsProcessGroup.Group group = null;
             boolean grouped = false;
             try {
                 ProcessBuilder pb = new ProcessBuilder(spec.command()).directory(spec.workDir().toFile());
@@ -425,7 +425,7 @@ public final class RunController implements AutoCloseable {
                 pb.environment().put(ExternalSignal.OUTPUT_ENV, output.toString());
                 pb.environment().put(ExternalSignal.SIGNAL_ENV, output.resolve(ExternalSignal.SIGNAL_FILE).toString());
                 // execucao gerenciada: o processo entra num grupo supervisionado pelo Windows, que conta TODOS os descendentes
-                if (managed) group = WindowsSupervision.create(WindowsSupervision.name(id));
+                if (managed) group = WindowsProcessGroup.create(WindowsProcessGroup.name(id));
                 if (group != null) group.inheritable(true);
                 try {
                     p = pb.start();
@@ -453,7 +453,7 @@ public final class RunController implements AutoCloseable {
                     if (group != null) group.close();
                     a.tree.fact(ProcessTree.BROKEN);
                 }
-                if (WindowsSupervision.mark(WindowsSupervision.name(id))) a.tree.fact(ProcessTree.MARK);
+                if (WindowsProcessGroup.mark(WindowsProcessGroup.name(id))) a.tree.fact(ProcessTree.MARK);
             }
             a.text = text;
             storeOf(id).event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
@@ -602,7 +602,7 @@ public final class RunController implements AutoCloseable {
         if (forced != null) {
             int killed = a.record.owner() == null ? 0 : a.record.owner().terminate(Duration.ofSeconds(10));
             // o grupo alcanca tambem o descendente que nenhuma arvore pai-filho mostra mais
-            WindowsSupervision.Group g = a.group;
+            WindowsProcessGroup.Group g = a.group;
             if (g != null) g.terminate();
             if (a.process != null) a.process.destroyForcibly();
             storeOf(a.record.id()).event(a.record.id(), clock.instant(), "TERMINATED", Map.of("processes", killed));
@@ -662,7 +662,7 @@ public final class RunController implements AutoCloseable {
         f.put("output_bytes", a.bytes.get());
         if (code != null) f.put("code", code.code());
         storeOf(end.id()).event(end.id(), clock.instant(), state.name(), f);
-        WindowsSupervision.Group g = a.group;
+        WindowsProcessGroup.Group g = a.group;
         Draining d = g == null ? null : new Draining(end.id(), g, a.tree);
         synchronized (lock) {
             active = null;
@@ -789,7 +789,7 @@ public final class RunController implements AutoCloseable {
     }
 
     /** Uma execucao gerenciada cujo processo principal ja terminou e cujo grupo ainda pode ter processos vivos. */
-    private record Draining(ExecutionId id, WindowsSupervision.Group group, ProcessTree tree) {
+    private record Draining(ExecutionId id, WindowsProcessGroup.Group group, ProcessTree tree) {
     }
 
     /**
@@ -798,7 +798,7 @@ public final class RunController implements AutoCloseable {
      * fora, o grupo deixa de servir de prova.
      */
     private void observeTree(Active a) {
-        WindowsSupervision.Group g = a.group;
+        WindowsProcessGroup.Group g = a.group;
         if (g == null) return;
         try {
             List<Long> in = g.pids();
@@ -828,7 +828,7 @@ public final class RunController implements AutoCloseable {
                 int n = d.group().active();
                 if (n == 0) {
                     d.tree().fact(ProcessTree.EMPTY);
-                    WindowsSupervision.unmark(WindowsSupervision.name(d.id()));
+                    WindowsProcessGroup.unmark(WindowsProcessGroup.name(d.id()));
                     storeOf(d.id()).event(d.id(), clock.instant(), "PROCESSES_GONE", Map.of());
                     return;
                 }
@@ -877,7 +877,7 @@ public final class RunController implements AutoCloseable {
         }
         Optional<ExecutionRecord> r = record(id);
         if (r.isEmpty() || !r.get().state().terminal()) return ProcessTree.Verdict.UNCERTAIN;
-        return ProcessTree.verdict(r.get().owner(), storeOf(id).dir(id).resolve(ProcessTree.FILE), WindowsSupervision::marked, WindowsSupervision.name(id));
+        return ProcessTree.verdict(r.get().owner(), storeOf(id).dir(id).resolve(ProcessTree.FILE), WindowsProcessGroup::marked, WindowsProcessGroup.name(id));
     }
 
     private boolean aliveAdopted(Active a) {
@@ -940,7 +940,7 @@ public final class RunController implements AutoCloseable {
                         Active a = new Active(adopted, null, outputOf(r), DEFAULT_TIMEOUT);
                         if (managed(r.id())) {
                             // o processo principal vive: o grupo dele continua alcancavel pelo nome
-                            a.group = WindowsSupervision.open(WindowsSupervision.name(r.id()));
+                            a.group = WindowsProcessGroup.open(WindowsProcessGroup.name(r.id()));
                             if (a.group == null) a.tree.fact(ProcessTree.BROKEN);
                         }
                         persist(a);

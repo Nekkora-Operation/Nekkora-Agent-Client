@@ -270,7 +270,7 @@ class ManagedRunTest {
         String facts = Files.readString(managed.dir(id).resolve(ProcessTree.FILE), StandardCharsets.UTF_8);
         for (String fact : List.of(ProcessTree.GROUP, ProcessTree.MARK, ProcessTree.END, ProcessTree.EMPTY)) assertTrue(facts.contains(fact + "\n"), fact);
         assertFalse(facts.contains(ProcessTree.BROKEN));
-        assertEquals(Boolean.FALSE, WindowsSupervision.marked(WindowsSupervision.name(id)), "com a prova, a marca da sessao sai");
+        assertEquals(Boolean.FALSE, WindowsProcessGroup.marked(WindowsProcessGroup.name(id)), "com a prova, a marca da sessao sai");
         // liberada: outra execucao inicia
         controller.startManaged(job("doze", RunFixtures.SUCESSO, null));
         waitEnd(controller);
@@ -301,18 +301,18 @@ class ManagedRunTest {
             // o controlador deste teste ainda acompanhava o grupo: anotou o fim e tirou a marca. O disco e a sessao voltam a ser os de
             // um aplicativo que estava FECHADO quando tudo terminou
             waitFree(controller);
-            assertTrue(WindowsSupervision.mark(WindowsSupervision.name(id)));
+            assertTrue(WindowsProcessGroup.mark(WindowsProcessGroup.name(id)));
             String after = Files.readString(tree, StandardCharsets.UTF_8);
             Files.writeString(tree, after.replace(ProcessTree.END + "\n", "").replace(ProcessTree.EMPTY + "\n", ""), StandardCharsets.UTF_8);
             assertEquals(ProcessTree.Verdict.UNCERTAIN, reopened.processTree(id), "nenhum anotado vivo NAO e prova");
             assertFalse(reopened.occupied(), "a vaga local nao fica presa; a duvida e dita a quem pergunta");
             // a sessao do Windows acabou (simulado): a marca da execucao nao existe mais
-            WindowsSupervision.unmark(WindowsSupervision.name(id));
+            WindowsProcessGroup.unmark(WindowsProcessGroup.name(id));
             assertEquals(ProcessTree.Verdict.GONE, reopened.processTree(id));
             reopened.close();
         } finally {
             child.destroyForcibly();
-            WindowsSupervision.unmark(WindowsSupervision.name(id));
+            WindowsProcessGroup.unmark(WindowsProcessGroup.name(id));
         }
     }
 
