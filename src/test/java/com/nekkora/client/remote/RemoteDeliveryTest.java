@@ -1393,6 +1393,7 @@ class RemoteDeliveryTest {
         work.exitCode = null;
         gw.queueKeepingEarlier();
         m.pull();
+        gw.settle();
         assertEquals("RUNNING", gw.attemptState, "a tentativa nova foi recebida e esta em execucao");
         assertEquals(600, gw.earlierLogs.size(), "com tentativa ativa: UM lote dos registros guardados por consulta");
         assertEquals(1, gw.earlierLogBatches.get());
@@ -1401,14 +1402,17 @@ class RemoteDeliveryTest {
         // o pedido de cancelamento da tentativa ativa e obedecido na consulta em que chega - antes do lote guardado
         gw.cancelRequested = true;
         m.pull();
+        gw.settle();
         assertEquals(1, work.cancelled.size(), "a maquina mandou parar na mesma consulta");
         assertEquals(800, gw.earlierLogs.size(), "e o que estava guardado andou mais um lote, sem perder o lugar");
         assertTrue(gw.earlierResults.isEmpty());
         // a tentativa ativa termina: a maquina fica livre e o que estava guardado e entregue ate a confirmacao
         work.ends("CANCELLED", null);
         m.pull();
+        gw.settle();
         assertEquals("CANCELLED", gw.attemptState);
         m.pull();
+        gw.settle();
         assertEquals(850, gw.earlierLogs.size());
         assertEquals("850|0", gw.earlierLogsClosure);
         assertEquals("1|0", gw.earlierResultsClosure);
