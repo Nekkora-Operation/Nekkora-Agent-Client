@@ -217,7 +217,7 @@ public final class Runner implements AutoCloseable {
 
     /** {@code true} se ha uma execucao em andamento neste computador, local ou gerenciada. */
     public boolean busy() {
-        return controller.isRunning();
+        return controller.occupied();
     }
 
     /**
@@ -288,9 +288,17 @@ public final class Runner implements AutoCloseable {
      * descendentes vistos durante o acompanhamento? Falso tambem quando nao ha como saber (fim nao visto, posse incerta).
      */
     public boolean managedProcessGone(String id) {
-        if (!ExecutionId.valid(id)) return false;
+        return "GONE".equals(managedProcesses(id));
+    }
+
+    /**
+     * O que este computador sabe dos processos de uma execucao gerenciada: {@code GONE} (ha prova de que nenhum continua),
+     * {@code ALIVE} (em andamento, ou o processo principal terminou e ha descendentes vivos) ou {@code UNCERTAIN}.
+     */
+    public String managedProcesses(String id) {
+        if (!ExecutionId.valid(id)) return "UNCERTAIN";
         ExecutionId eid = new ExecutionId(id);
-        return controller.managed(eid) && controller.processTree(eid) == ProcessTree.Verdict.GONE;
+        return controller.managed(eid) ? controller.processTree(eid).name() : "UNCERTAIN";
     }
 
     /** Pede o cancelamento de uma execucao gerenciada em andamento. {@code false}: nao esta em andamento. */
@@ -336,8 +344,33 @@ public final class Runner implements AutoCloseable {
         discardManaged(key, null);
     }
 
+    /**
+     * Ha processo da execucao gerenciada desta pasta que ainda pode estar vivo? Nada dela e apagado enquanto isso: arquivo em
+     * uso por processo nao se apaga. Vale para as execucoes que tem o registro dos processos ({@link ProcessTree#FILE}); as de
+     * versoes anteriores do aplicativo, sem ele, seguem a regra antiga.
+     */
+    private boolean inUse(String key) {
+        Optional<Path> dir = managedDir(key);
+        if (dir.isEmpty()) return false;
+        Path out = dir.get().resolve("saida");
+        if (!Files.isDirectory(out, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return false;
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(out)) {
+            for (Path p : ds) {
+                String id = String.valueOf(p.getFileName());
+                if (!ExecutionId.valid(id)) continue;
+                ExecutionId eid = new ExecutionId(id);
+                if (!controller.managed(eid) || !controller.tracked(eid)) continue;
+                if (controller.processTree(eid) != ProcessTree.Verdict.GONE) return true;
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            return true;
+        }
+        return false;
+    }
+
     /** O mesmo, e tambem a copia que foi EXECUTADA ({@code id}: a execucao, terminada). O registro da execucao fica. */
     public void discardManaged(String key, String id) {
+        if (inUse(key)) return;
         managedDir(key).ifPresent(dir -> {
             try {
                 Files.deleteIfExists(dir.resolve("pacote.zip"));
@@ -352,6 +385,7 @@ public final class Runner implements AutoCloseable {
 
     /** Apaga o que a execucao gerenciada gravou na pasta de saida (quem chama ja tem a confirmacao de que tudo foi recebido). */
     public void discardManagedOutputs(String key) {
+        if (inUse(key)) return;
         managedDir(key).ifPresent(dir -> {
             RunStore.deleteTree(dir.resolve("saida"));
             try {
@@ -479,7 +513,7 @@ public final class Runner implements AutoCloseable {
      */
     public int sweepManaged(String keepKey) {
         Path root = managedRoot;
-        if (root == null || controller.isRunning() || !Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return 0;
+        if (root == null || controller.occupied() || !Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return 0;
         int n = 0;
         try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
             for (Path dir : ds) {
