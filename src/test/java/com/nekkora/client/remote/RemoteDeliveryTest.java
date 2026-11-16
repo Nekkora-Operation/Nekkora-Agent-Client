@@ -1311,6 +1311,47 @@ class RemoteDeliveryTest {
     }
 
     @Test
+    void filaGrandeEEnviadaEmFatiasSemSegurarAMaquinaEOFechamentoSoVemComTudoEnviado() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        // mais de dois lotes (o lote e de ate 200 linhas)
+        String[] many = new String[450];
+        for (int i = 0; i < many.length; i++) {
+            many[i] = "linha " + i;
+        }
+        writes(0, many);
+        work.outputs.put("saida.txt", "x".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        // fatia de tempo esgotada logo depois de um lote: a consulta do desfecho envia um lote ao informar e outro na passada
+        // normal dela, e devolve a vez - nao fica enviando ate o fim
+        m.heldSendBudgetMillis = 0;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertFalse(Files.exists(journal()), "a tentativa esta resolvida: a maquina nao fica presa ao envio");
+        assertEquals(400, gw.logs.size());
+        assertNull(gw.logsClosure, "com linhas por enviar, o envio nao e fechado");
+        assertNull(gw.resultsClosure, "os registros vao antes dos resultados");
+        assertEquals(List.of("SENDING"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        assertTrue(Files.exists(queueFile(attempt)));
+        long batches = gw.logBatches.get();
+        // a consulta seguinte continua de ONDE PAROU (nao recomeca do inicio), sem espera (nao foi falha), e a maquina pergunta
+        // por trabalho no meio
+        long asked = calls("/remote/next");
+        m.pull();
+        assertEquals(asked + 1, calls("/remote/next"));
+        assertEquals(450, gw.logs.size());
+        assertEquals(batches + 1, gw.logBatches.get(), "so o lote que faltava foi enviado");
+        assertEquals("450|0", gw.logsClosure);
+        assertEquals("1|0", gw.resultsClosure);
+        assertFalse(Files.exists(queueFile(attempt)));
+        assertEquals(List.of(attempt), work.outputsDiscarded);
+        // na ordem em que foram escritas, sem repeticao
+        assertEquals("STDOUT|false|linha 0", gw.logs.get(1));
+        assertEquals("STDOUT|false|linha 449", gw.logs.get(450));
+    }
+
+    @Test
     void impedimentoDeAutorizacaoFicaDitoComOMotivoENaoEContornado() throws Exception {
         RemoteMachine m = enabled(true);
         String attempt = gw.queue();
