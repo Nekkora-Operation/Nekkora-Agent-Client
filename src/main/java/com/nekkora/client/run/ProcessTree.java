@@ -23,7 +23,7 @@ import java.util.function.Function;
  * <ul>
  * <li>{@code <pid> <inicio>}: um processo da execucao visto vivo (PID + instante de inicio, para nao confundir com outro
  * programa que reaproveite o PID);</li>
- * <li>{@link #GROUP}: o processo lancado entrou no grupo supervisionado pelo Windows ({@link WindowsSupervision});</li>
+ * <li>{@link #GROUP}: o processo lancado entrou no grupo supervisionado pelo Windows ({@link WindowsProcessGroup});</li>
  * <li>{@link #MARK}: a marca da execucao foi gravada na sessao do Windows;</li>
  * <li>{@link #END}: o acompanhamento viu o processo principal terminar (ou o encerrou);</li>
  * <li>{@link #EMPTY}: o Windows informou que NENHUM processo do grupo esta vivo - a prova;</li>

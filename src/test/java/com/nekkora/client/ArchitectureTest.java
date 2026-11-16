@@ -158,7 +158,7 @@ class ArchitectureTest {
      * ou estado de uma execucao local chega ao canal da maquina, com o computador habilitado ou nao. So a tela e a raiz
      * (que monta o aplicativo) a referenciam;</li>
      * <li>codigo nativo (JNA) so na protecao da credencial da maquina e na supervisao dos processos da execucao gerenciada
-     * ({@code WindowsSupervision}; ver {@link #aSupervisaoDeProcessosSoChamaAsFuncoesDeclaradas}).</li>
+     * ({@code WindowsProcessGroup}; ver {@link #aSupervisaoDeProcessosSoChamaAsFuncoesDeclaradas}).</li>
      * </ul>
      */
     @Test
@@ -178,7 +178,7 @@ class ArchitectureTest {
             } else if (!"ui".equals(pkg) && !"client".equals(pkg)) {
                 achados.addAll(matches(f, c, remota, "so a tela e a raiz conhecem a camada remota"));
             }
-            if (!f.endsWith("WindowsKeyring.java") && !f.endsWith("WindowsSupervision.java")) {
+            if (!f.endsWith("WindowsKeyring.java") && !f.endsWith("WindowsProcessGroup.java")) {
                 achados.addAll(matches(f, c, nativo, "codigo nativo fora da protecao da credencial e da supervisao de processos"));
             }
         }
@@ -187,13 +187,13 @@ class ArchitectureTest {
     }
 
     /**
-     * A excecao de codigo nativo da camada de execucao (decisao da titular de 16/11) e RESTRITA: {@code WindowsSupervision} so
+     * A excecao de codigo nativo da camada de execucao (decisao da titular de 16/11) e RESTRITA: {@code WindowsProcessGroup} so
      * declara as funcoes do Windows desta lista - grupo de processos (Job Object) e marca da sessao (atomo global). Nenhuma
      * cria processo, executa comando, le memoria de outro processo ou abre shell. Acrescentar uma funcao exige mudar esta lista.
      */
     @Test
     void aSupervisaoDeProcessosSoChamaAsFuncoesDeclaradas() throws IOException {
-        Path f = MAIN.resolve("com/nekkora/client/run/WindowsSupervision.java");
+        Path f = MAIN.resolve("com/nekkora/client/run/WindowsProcessGroup.java");
         String c = Files.readString(f);
         Matcher api = Pattern.compile("(?s)private interface Api extends StdCallLibrary \\{(.*?)\n    \\}").matcher(c);
         assertTrue(api.find(), "a interface das funcoes do sistema");
