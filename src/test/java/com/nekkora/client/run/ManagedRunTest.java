@@ -210,4 +210,53 @@ class ManagedRunTest {
         assertEquals(id, managed.list().records().get(0).id());
         reopened.close();
     }
+
+    /**
+     * Decisao de 16/11: confirmar que o processo terminou considera os FILHOS. A automacao termina com sucesso e deixa um processo
+     * filho rodando: a execucao TERMINOU (o desfecho e o dela), mas a arvore nao e dada como ausente enquanto o filho viver - nem
+     * depois de reabrir o aplicativo. Quando o filho acaba, e so entao, ha prova.
+     */
+    @Test
+    void aArvoreSoEDadaComoAusenteQuandoOsFilhosDaExecucaoTambemAcabaram() throws Exception {
+        String main = String.join("\n",
+                "import json, os, pathlib, subprocess, sys, time",
+                "from comum import saida, sinal",
+                "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(pathlib.Path(__file__).with_name('filho.py'))],",
+                "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+                "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': filho.pid}), encoding='utf-8')",
+                "time.sleep(1.5)",
+                "sinal('BUSINESS_SUCCESS')",
+                "");
+        RunController.Request job = job("dez", main, null);
+        ExecutionId id = controller.startManaged(job).record().id();
+        assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id), "em andamento");
+        ExecutionRecord end = waitEnd(controller);
+        assertEquals(ExecutionState.SUCCEEDED, end.state());
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"filho\": *(\\d+)")
+                .matcher(Files.readString(job.outputRoot().resolve(id.value()).resolve("pids.json"), StandardCharsets.UTF_8));
+        assertTrue(m.find());
+        ProcessHandle child = ProcessHandle.of(Long.parseLong(m.group(1))).orElseThrow();
+        try {
+            assertTrue(child.isAlive(), "o filho sobreviveu ao processo principal");
+            assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id), "o principal terminou, o filho nao");
+            RunController reopened = controller();
+            assertEquals(ProcessTree.Verdict.ALIVE, reopened.processTree(id), "a anotacao esta no disco: vale depois de reabrir");
+            reopened.close();
+        } finally {
+            // so o processo deste teste, pelo PID que ele mesmo gravou
+            child.destroyForcibly();
+        }
+        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        while (child.isAlive() && System.nanoTime() < deadline) Thread.sleep(50);
+        assertFalse(child.isAlive());
+        // o host de console do filho sai logo depois dele, nao no mesmo instante: a conferencia e repetida, como no aplicativo
+        deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        while (controller.processTree(id) != ProcessTree.Verdict.GONE && System.nanoTime() < deadline) Thread.sleep(100);
+        StringBuilder vivos = new StringBuilder();
+        for (String line : Files.readAllLines(managed.dir(id).resolve(ProcessTree.FILE), StandardCharsets.UTF_8)) {
+            if (line.equals(ProcessTree.END)) continue;
+            ProcessHandle.of(Long.parseLong(line.split(" ")[0])).filter(ProcessHandle::isAlive).ifPresent(h -> vivos.append(line).append(" -> ").append(h.info().command().orElse("?")).append(" ").append(h.info().startInstant().map(java.time.Instant::toEpochMilli).orElse(-1L)).append("; "));
+        }
+        assertEquals(ProcessTree.Verdict.GONE, controller.processTree(id), vivos.toString());
+    }
 }

@@ -215,6 +215,14 @@ public final class RemoteMachine implements AutoCloseable {
         /** O que a execucao e agora. Vazio: este computador nao a conhece (mais). */
         Optional<Progress> progress(String run);
 
+        /**
+         * Este computador CONFERIU que nada da execucao continua em andamento nele - nem o processo lancado, nem os processos
+         * filhos dele? Falso quando resta algum vivo E quando nao ha como saber (identificacao incerta).
+         */
+        default boolean processGone(String run) {
+            return false;
+        }
+
         /** Pede que a execucao pare. */
         void cancel(String run);
 
@@ -490,6 +498,7 @@ public final class RemoteMachine implements AutoCloseable {
                 }
                 // o que tentativas ja terminadas deixaram aqui sem confirmacao continua sendo enviado, a parte do diario
                 deliverHeld(current, work, false, journal.load(current.agentId()).isPresent());
+                confirmAbsences(current, work);
             } catch (Refused e) {
                 if (e.problem() == Problem.LINK_ENDED || e.problem() == Problem.NOT_ENABLED) {
                     failed(e.problem());
@@ -544,6 +553,7 @@ public final class RemoteMachine implements AutoCloseable {
             }
             // o que tentativas anteriores deixaram guardado tambem nao pode mais ser enviado
             vault.losses().unlink(now);
+            vault.absences().clear();
         } catch (RuntimeException x) {
             // fica para a proxima consulta
         }
@@ -610,7 +620,13 @@ public final class RemoteMachine implements AutoCloseable {
                 keep(e);
             }
             if (e.phase() != AttemptJournal.Phase.RESULTS) {
-                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode(), processAbsent(e, w));
+                boolean absent = processAbsent(e, w);
+                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode(), absent);
+                if (!absent && w != null && e.phase() == AttemptJournal.Phase.RUNNING && e.run() != null && !"REFUSED".equals(e.report())) {
+                    // o fim foi informado SEM a afirmacao (resta processo filho vivo, ou nao deu para conferir): este computador
+                    // confere de novo a cada consulta e repete o relato quando houver prova
+                    vault.absences().note(e.attemptId(), e.token(), e.epoch(), e.run(), e.report(), e.exitCode(), clock.instant().getEpochSecond());
+                }
                 if (w == null || e.phase() != AttemptJournal.Phase.RUNNING) {
                     // nao chegou a executar: nao ha o que enviar
                     forget(e, w);
@@ -1228,13 +1244,55 @@ public final class RemoteMachine implements AutoCloseable {
      * Quando o aplicativo fechou entre pedir o inicio e registrar a execucao, ou o motor nao a conhece, nao ha o que conferir: falso.
      */
     private static boolean processAbsent(AttemptJournal.Entry e, Work w) {
-        if (!"ENDED_UNKNOWN".equals(e.report()) || e.phase() != AttemptJournal.Phase.RUNNING || w == null || e.run() == null) {
+        if (e.report() == null || "REFUSED".equals(e.report()) || e.phase() != AttemptJournal.Phase.RUNNING || w == null || e.run() == null) {
             return false;
         }
+        return gone(w, e.run());
+    }
+
+    /** O motor conhece a execucao, diz que ela nao esta em andamento E conferiu a arvore de processos dela (principal e filhos). */
+    private static boolean gone(Work w, String run) {
         try {
-            return w.progress(e.run()).map(p -> !"RUNNING".equals(p.state())).orElse(false);
+            return w.progress(run).map(p -> !"RUNNING".equals(p.state())).orElse(false) && w.processGone(run);
         } catch (RuntimeException x) {
             return false;
+        }
+    }
+
+    /**
+     * As tentativas cujo fim foi informado sem a afirmacao de processo ausente: confere de novo e, com prova, repete o MESMO
+     * relato com a afirmacao. Nada aqui muda o desfecho na Platform. Falha de rede: fica para a proxima consulta.
+     */
+    private void confirmAbsences(MachineVault.Link current, Work w) throws Refused {
+        if (w == null) {
+            return;
+        }
+        AbsenceLedger ledger = vault.absences();
+        for (AbsenceLedger.Entry a : ledger.all(clock.instant().getEpochSecond())) {
+            boolean known;
+            try {
+                known = w.progress(a.run()).isPresent();
+            } catch (RuntimeException x) {
+                continue;
+            }
+            if (!known) {
+                // este computador nao conhece mais a execucao: nao ha o que conferir, nunca
+                ledger.drop(a.attemptId());
+                continue;
+            }
+            if (!gone(w, a.run())) {
+                continue;
+            }
+            try {
+                channel.state(current.credential(), a.attemptId(), a.token(), a.epoch(), a.report(), null, a.exitCode() < 0 ? null : a.exitCode(), true);
+                ledger.drop(a.attemptId());
+            } catch (Refused x) {
+                if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
+                    ledger.drop(a.attemptId());
+                    continue;
+                }
+                throw x;
+            }
         }
     }
 

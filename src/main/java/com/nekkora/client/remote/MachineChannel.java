@@ -399,9 +399,9 @@ public final class MachineChannel {
     }
 
     /**
-     * {@code processAbsent}: junto de ENDED_UNKNOWN, este computador afirma que CONFERIU que o processo daquela tentativa nao esta
-     * mais em execucao aqui (o desfecho continua desconhecido). E o que reconcilia a tentativa "pela maquina": sem isso a Platform
-     * mantem a repeticao bloqueada e esta maquina indisponivel. So e enviado quando verdadeiro.
+     * {@code processAbsent}: junto de um estado FINAL, este computador afirma que CONFERIU que nada daquela tentativa continua em
+     * execucao aqui - o processo lancado e os processos filhos dele. E o que reconcilia a tentativa "pela maquina": sem isso a
+     * Platform mantem a repeticao bloqueada e esta maquina indisponivel. So e enviado quando verdadeiro.
      */
     AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason, Integer exitCode,
                         boolean processAbsent) throws Refused {
