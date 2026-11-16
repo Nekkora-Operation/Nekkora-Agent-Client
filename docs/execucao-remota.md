@@ -310,6 +310,17 @@ atalho que abre a Platform. A lista de ambientes é a da última publicação fe
 | Atividade e origem em cada fase; organização; código igual ao começo do identificador publicado; pasta nunca enviada | `RemoteDeliveryTest.aTelaSabeOQueEstaRodandoAgoraEDeQuemEEOCodigoDoAmbienteEOMesmoQueVaiAPlatform` |
 | Tela: textos, nada antes de habilitar, sem identificador | `RemoteDesktopTest.aTelaMostraOEstadoOperacionalEOCodigoDeCadaAmbienteSemMostrarConteudoDeExecucao` (`-Pdesktop`) |
 
+### O posto desta máquina (Worker)
+
+A tela "Execução remota" mostra, ao lado da organização, o **nome do Worker** a que este computador está associado na
+Platform: é para ele que as versões são autorizadas, e é em nome dele que as execuções chegam aqui. O nome vem da presença
+(é o atual de lá; trocado na Platform, a presença seguinte traz o novo), fica só em memória e passa por uma limpeza de
+caracteres de controle antes de ser exibido. Enquanto a Platform não o informa (API anterior, ou antes da primeira presença),
+a tela mostra só a organização — nunca um identificador.
+
+A regra de arquitetura que proíbe a palavra "worker" fora da camada `remote` ganhou **uma** exceção: o texto exibido
+`"Worker na Platform: "`, em `RemoteText`. Identificadores e chamadas com esse nome continuam proibidos fora de `remote`.
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
