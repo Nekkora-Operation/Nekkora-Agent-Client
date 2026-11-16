@@ -140,6 +140,89 @@ public final class FakeGateway implements AutoCloseable {
     /** Um nome que o "servidor" recusa por limite (409 remote_result_limit). */
     public volatile String resultOverLimit;
 
+    /** Registros recebidos: sequencia -> "canal|cortada|mensagem". */
+    public final Map<Integer, String> logs = new java.util.concurrent.ConcurrentSkipListMap<>();
+    /** O fechamento dos registros: "linhas|descartadas"; nulo = nao fechado. */
+    public volatile String logsClosure;
+    /** Respostas 503 para os proximos envios de registros (nada e processado). */
+    public volatile int failLogs;
+    /** Quantas linhas o "servidor" aceita por tentativa; lote que passaria: 409 remote_log_limit, nada gravado. */
+    public volatile int logLimit = Integer.MAX_VALUE;
+    /** O "servidor" aceita o fechamento dos registros mas responde com OUTRA contagem. */
+    public volatile boolean wrongLogsClosure;
+    /** Quantos lotes de registros chegaram (aceitos ou nao). */
+    public final java.util.concurrent.atomic.AtomicInteger logBatches = new java.util.concurrent.atomic.AtomicInteger();
+
+    @SuppressWarnings("unchecked")
+    private void logs(HttpExchange x, String path, String text) throws IOException {
+        String[] parts = path.substring("/agent/api/v1/remote/attempts/".length()).split("/");
+        if (!parts[0].equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        if (failLogs > 0) {
+            failLogs--;
+            respond(x, 503, "{\"error\":\"unavailable\"}");
+            return;
+        }
+        Map<String, Object> body = com.nekkora.client.auth.Json.object(text);
+        if (attemptToken == null || !attemptToken.equals(body.get("token")) || ((Number) body.get("epoch")).intValue() != attemptEpoch) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        boolean ended = List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ENDED_UNKNOWN").contains(attemptState);
+        if (parts.length == 3 && parts[2].equals("complete")) {
+            int lines = ((Number) body.get("lines")).intValue();
+            long dropped = ((Number) body.get("droppedLines")).longValue();
+            if (!ended) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            } else if ((logsClosure != null && !logsClosure.equals(lines + "|" + dropped)) || lines != logs.size()) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_log_conflict\"}");
+            } else {
+                logsClosure = lines + "|" + dropped;
+                respond(x, 200, "{\"lines\":" + (lines + (wrongLogsClosure ? 1 : 0)) + ",\"droppedLines\":" + dropped + "}");
+            }
+            return;
+        }
+        logBatches.incrementAndGet();
+        if (!ended && !"RUNNING".equals(attemptState)) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            return;
+        }
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) body.get("lines");
+        if (lines.isEmpty() || lines.size() > 200) {
+            respond(x, 400, "{\"error\":\"invalid_request\"}");
+            return;
+        }
+        if (logsClosure != null || ((Number) lines.get(0).get("sequence")).intValue() > logs.size() + 1) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_log_conflict\"}");
+            return;
+        }
+        Map<Integer, String> fresh = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> l : lines) {
+            int sequence = ((Number) l.get("sequence")).intValue();
+            String message = (String) l.get("message");
+            if (message.getBytes(StandardCharsets.UTF_8).length > 8192 || message.contains("\n") || !String.valueOf(l.get("capturedAt")).endsWith("Z")) {
+                respond(x, 400, "{\"error\":\"invalid_request\"}");
+                return;
+            }
+            String row = l.get("channel") + "|" + l.get("truncated") + "|" + message;
+            if (logs.containsKey(sequence)) {
+                if (!logs.get(sequence).equals(row)) {
+                    respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_log_conflict\"}");
+                    return;
+                }
+            } else if (sequence > logLimit) {
+                respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_log_limit\"}");
+                return;
+            } else {
+                fresh.put(sequence, row);
+            }
+        }
+        logs.putAll(fresh);
+        respond(x, 200, "{\"received\":" + lines.size() + ",\"stored\":" + fresh.size() + ",\"lastSequence\":" + logs.size() + "}");
+    }
+
     private void result(HttpExchange x, String path, String text, byte[] raw) throws IOException {
         String[] parts = path.substring("/agent/api/v1/remote/attempts/".length()).split("/");
         if (!parts[0].equals(attemptId)) {
@@ -227,6 +310,8 @@ public final class FakeGateway implements AutoCloseable {
         cancelRequested = false;
         results.clear();
         resultsClosure = null;
+        logs.clear();
+        logsClosure = null;
         return attemptId;
     }
 
@@ -435,6 +520,13 @@ public final class FakeGateway implements AutoCloseable {
         if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/package") && "GET".equals(x.getRequestMethod())) {
             if (authenticated(x, auth)) {
                 pack(x, path);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && (path.endsWith("/logs") || path.endsWith("/logs/complete"))
+                && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                logs(x, path, text);
             }
             return;
         }

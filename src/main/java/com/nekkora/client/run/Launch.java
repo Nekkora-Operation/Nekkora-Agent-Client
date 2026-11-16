@@ -64,7 +64,16 @@ public final class Launch {
      * nenhum argumento de fora (a pasta de saida e o sinal opcional chegam por variavel de ambiente).
      */
     public static Spec spec(ExecutionPackage pkg, Path python, Path copy) {
-        return new Spec(python, List.of("-E", "-s", "-B", pkg.entry()), copy);
+        return spec(pkg, python, copy, false);
+    }
+
+    /**
+     * O mesmo; com {@code unbuffered}, acrescenta {@code -u}: o Python entrega cada linha da saida quando ela e escrita, em vez
+     * de segurar tudo ate o fim. So muda QUANDO a saida chega a quem a le; nao muda o que o script faz. (A variavel de ambiente
+     * equivalente nao serviria: {@code -E} faz o Python ignora-la.)
+     */
+    public static Spec spec(ExecutionPackage pkg, Path python, Path copy, boolean unbuffered) {
+        return new Spec(python, unbuffered ? List.of("-E", "-s", "-B", "-u", pkg.entry()) : List.of("-E", "-s", "-B", pkg.entry()), copy);
     }
 
     /** O sinal que o script publicou na pasta de saida da execucao, ou {@code NONE}. */

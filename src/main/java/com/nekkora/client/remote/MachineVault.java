@@ -204,6 +204,46 @@ public final class MachineVault {
         return new AttemptJournal(dir, keyring);
     }
 
+    /** Por quanto tempo a fila de registros de uma tentativa ja resolvida fica no disco sem confirmacao de recebimento. */
+    static final java.time.Duration LOG_QUEUE_RETENTION = java.time.Duration.ofDays(7);
+
+    /** A fila de registros de uma tentativa (um arquivo protegido em {@code fila/}). {@code secrets}: o que nunca entra nela. */
+    LogQueue logQueue(String attemptId, java.util.List<String> secrets) {
+        if (attemptId == null || !attemptId.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) {
+            throw new IllegalArgumentException("tentativa");
+        }
+        return new LogQueue(dir.resolve("fila").resolve(attemptId + ".fila"), keyring, secrets);
+    }
+
+    /**
+     * Apaga as filas de registros que nao sao a da tentativa pendente e estao paradas ha mais de {@link #LOG_QUEUE_RETENTION}.
+     * So arquivos {@code <uuid>.fila} dentro de {@code fila/}. Devolve quantas apagou.
+     */
+    int sweepLogQueues(String keepAttemptId, java.time.Instant now) {
+        Path root = dir.resolve("fila");
+        if (!Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return 0;
+        }
+        int n = 0;
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root, "*.fila")) {
+            for (Path f : ds) {
+                String name = String.valueOf(f.getFileName());
+                String key = name.substring(0, name.length() - ".fila".length());
+                if (key.equals(keepAttemptId) || !key.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                        || !Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                if (Files.getLastModifiedTime(f, java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant().plus(LOG_QUEUE_RETENTION).isBefore(now)) {
+                    Files.deleteIfExists(f);
+                    n++;
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // fica para a proxima limpeza
+        }
+        return n;
+    }
+
     void clearPending() throws IOException {
         Files.deleteIfExists(dir.resolve(PENDING + ".novo"));
         Files.deleteIfExists(dir.resolve(PENDING));

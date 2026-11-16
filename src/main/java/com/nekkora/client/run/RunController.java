@@ -305,7 +305,7 @@ public final class RunController implements AutoCloseable {
      * {@code BLOCKED}, exceto quando outra execucao ja esta ativa: ai nenhum registro novo e criado).
      */
     public Snapshot start(Request req) throws ExecRefused {
-        return launch(req, false);
+        return launch(req, false, null);
     }
 
     /**
@@ -317,11 +317,19 @@ public final class RunController implements AutoCloseable {
      * sem registro.
      */
     public Snapshot startManaged(Request req) throws ExecRefused {
-        if (managedStore == null) throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
-        return launch(req, true);
+        return startManaged(req, null);
     }
 
-    private Snapshot launch(Request req, boolean managed) throws ExecRefused {
+    /**
+     * O mesmo, entregando a saida do processo, linha a linha, a {@code sink} (nulo: a saida e lida e desprezada). So a
+     * execucao gerenciada tem quem receba a saida: a que a pessoa inicia aqui continua sem entregar linha a ninguem.
+     */
+    public Snapshot startManaged(Request req, OutputLines.Sink sink) throws ExecRefused {
+        if (managedStore == null) throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
+        return launch(req, true, sink);
+    }
+
+    private Snapshot launch(Request req, boolean managed, OutputLines.Sink sink) throws ExecRefused {
         synchronized (lock) {
             if (active != null) throw new ExecRefused(ErrorCode.EXEC_ALREADY_RUNNING);
             flushUnsaved();
@@ -372,7 +380,8 @@ public final class RunController implements AutoCloseable {
             } catch (IOException e) {
                 throw finish(r, ExecutionState.BLOCKED, ErrorCode.EXEC_OUTPUT_INVALID);
             }
-            Launch.Spec spec = Launch.spec(pkg, probe.python(), copy);
+            // com quem receba a saida, o Python a entrega linha a linha (so a execucao gerenciada tem quem receba)
+            Launch.Spec spec = Launch.spec(pkg, probe.python(), copy, sink != null);
             Process p;
             try {
                 ProcessBuilder pb = new ProcessBuilder(spec.command()).directory(spec.workDir().toFile());
@@ -392,8 +401,8 @@ public final class RunController implements AutoCloseable {
             Active a = new Active(r, p, output, req.timeout());
             storeOf(id).event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
             persist(a);
-            drain(a, p.getInputStream(), "saida");
-            drain(a, p.getErrorStream(), "erros");
+            drain(a, p.getInputStream(), "saida", false, sink);
+            drain(a, p.getErrorStream(), "erros", true, sink);
             active = a;
             Thread t = new Thread(() -> watch(a), "nekkora-client-execucao");
             t.setDaemon(true);
@@ -478,16 +487,12 @@ public final class RunController implements AutoCloseable {
         return new ExecRefused(why);
     }
 
-    /** Le o fluxo ate o fim so contando bytes (sem guardar conteudo): o processo nunca trava por saida cheia. */
-    private static void drain(Active a, InputStream in, String name) {
-        Thread t = new Thread(() -> {
-            byte[] buf = new byte[8192];
-            try (in) {
-                for (int n; (n = in.read(buf)) >= 0; ) a.bytes.addAndGet(n);
-            } catch (IOException e) {
-                // fluxo fechado: o processo terminou
-            }
-        }, "nekkora-client-" + name);
+    /**
+     * Le o fluxo ate o fim: o processo nunca trava por saida cheia. Sem {@code sink}, so conta os bytes (nada e guardado); com
+     * ele, cada linha e entregue a quem pediu a execucao gerenciada.
+     */
+    private void drain(Active a, InputStream in, String name, boolean error, OutputLines.Sink sink) {
+        Thread t = new Thread(() -> OutputLines.pump(in, error, sink, a.bytes, clock), "nekkora-client-" + name);
         t.setDaemon(true);
         t.start();
         a.drains.add(t);

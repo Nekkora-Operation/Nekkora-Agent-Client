@@ -83,6 +83,10 @@ public final class MachineChannel {
         PACKAGE_UNAVAILABLE,
         /** O numero do resultado ja tem outro arquivo, ou o envio de resultados desta tentativa ja foi fechado. */
         RESULT_CONFLICT,
+        /** Registros: o envio ja foi fechado, ha buraco na sequencia ou a Platform tem outra coisa nessas linhas. */
+        LOG_CONFLICT,
+        /** Registros: a Platform chegou ao limite de linhas ou de tamanho desta tentativa. */
+        LOG_LIMIT,
         /** O arquivo faria a tentativa passar do limite total de resultados: nao foi guardado. */
         RESULT_LIMIT,
         UNEXPECTED
@@ -391,6 +395,71 @@ public final class MachineChannel {
         } catch (ArithmeticException | NumberFormatException e) {
             return -1;
         }
+    }
+
+    /**
+     * Envia um lote de linhas da saida do processo e devolve a ultima sequencia que a Platform tem. O token vai no corpo, nunca
+     * na URL. Repetir um lote ja aceito nao muda nada la.
+     */
+    int sendLogs(String credential, String attemptId, String token, int epoch, java.util.List<LogQueue.Line> lines) throws Refused {
+        if (!UUID.matcher(attemptId).matches() || lines.isEmpty()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        StringBuilder body = new StringBuilder("{\"token\":").append(Json.quote(token)).append(",\"epoch\":").append(epoch).append(",\"lines\":[");
+        for (int i = 0; i < lines.size(); i++) {
+            LogQueue.Line l = lines.get(i);
+            body.append(i == 0 ? "" : ",").append("{\"sequence\":").append(l.sequence()).append(",\"capturedAt\":")
+                    .append(Json.quote(java.time.Instant.ofEpochMilli(l.epochMillis()).toString())).append(",\"channel\":").append(Json.quote(l.channel()))
+                    .append(",\"truncated\":").append(l.truncated()).append(",\"message\":").append(Json.quote(l.message())).append('}');
+        }
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + "/logs", credential).POST(HttpRequest.BodyPublishers.ofString(body.append("]}").toString())));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                case "remote_log_conflict" -> Problem.LOG_CONFLICT;
+                case "remote_log_limit" -> Problem.LOG_LIMIT;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            // lote que a Platform nao aceita como esta: nao adianta repetir
+            throw new Refused(Problem.LOG_CONFLICT);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        long lastSequence = whole(o.get("lastSequence"));
+        if (lastSequence < lines.get(lines.size() - 1).sequence()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        return (int) Math.min(lastSequence, Integer.MAX_VALUE);
+    }
+
+    /** Fecha o envio dos registros. {@code true} so se a Platform devolveu as mesmas contagens. */
+    boolean completeLogs(String credential, String attemptId, String token, int epoch, int lines, long droppedLines) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        String body = "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"lines\":" + lines + ",\"droppedLines\":" + droppedLines + "}";
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + "/logs/complete", credential).POST(HttpRequest.BodyPublishers.ofString(body)));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                case "remote_log_conflict" -> Problem.LOG_CONFLICT;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        return whole(o.get("lines")) == lines && whole(o.get("droppedLines")) == droppedLines;
     }
 
     /** Fecha o envio de resultados: quantos arquivos foram enviados e quantos ficaram de fora por limite. */

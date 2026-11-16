@@ -3,6 +3,7 @@ package com.nekkora.client.remote;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -304,6 +305,145 @@ class RemoteDeliveryTest {
         assertFalse(Files.exists(journal()), "so depois do fechamento o diario some");
         // T04: com o recebimento de TUDO confirmado, a pasta de saida pode sair deste computador
         assertEquals(List.of(gw.attemptId), work.outputsDiscarded);
+    }
+
+    private Path queueFile(String attempt) {
+        return dir.resolve("fila").resolve(attempt + ".fila");
+    }
+
+    private long logCalls() {
+        return gw.calls.stream().filter(c -> c.path().endsWith("/logs") || c.path().endsWith("/logs/complete")).count();
+    }
+
+    @Test
+    void osRegistrosVaoEmLotesDuranteAExecucaoEAFilaSoEApagadaComOFechamentoConfirmado() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        RemoteMachine.LogSink log = work.jobs.get(0).log();
+        assertNotNull(log, "quem executa recebe para onde mandar a saida do processo");
+        assertEquals(0, logCalls(), "sem linha, nada e enviado");
+        // o processo escreve; na consulta seguinte, com a execucao AINDA em andamento, as linhas ja estao na Platform
+        log.line(false, 1_000, false, "iniciando");
+        log.line(true, 1_001, false, "aviso com o token " + gw.attemptToken + " e a credencial " + gw.credential);
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals("STDOUT|false|iniciando", gw.logs.get(1));
+        assertEquals("STDERR|false|aviso com o token [removido] e a credencial [removido]", gw.logs.get(2), "STDERR e canal; segredos nunca saem");
+        assertNull(gw.logsClosure, "em andamento, o envio nao e fechado");
+        assertTrue(Files.exists(queueFile(attempt)));
+        String onDisk = new String(Files.readAllBytes(queueFile(attempt)), StandardCharsets.ISO_8859_1);
+        assertFalse(onDisk.contains("iniciando") || onDisk.contains(gw.attemptToken) || onDisk.contains(gw.credential), "a fila no disco e protegida");
+        // nem o token nem a credencial aparecem no texto de linha nenhuma enviada; o token nunca vai na URL
+        assertTrue(gw.calls.stream().filter(c -> c.path().endsWith("/logs")).noneMatch(c -> c.path().contains(gw.attemptToken)
+                || c.body().contains("credencial " + gw.credential) || c.body().split("\"lines\"", 2)[1].contains(gw.attemptToken)));
+        // sem rede para os registros: a execucao nao e interrompida e nada e perdido
+        gw.failLogs = 5;
+        log.line(false, 1_002, true, "terceira (cortada pela captura)");
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals(2, gw.logs.size());
+        assertTrue(work.cancelled.isEmpty());
+        gw.failLogs = 0;
+        // o robo FALHA: o desfecho e o dele; depois vao o que faltava e o fechamento, e so entao a fila e apagada
+        log.line(false, 1_003, false, "ultima");
+        work.ends("FAILED", 3);
+        m.pull();
+        assertEquals("FAILED", gw.attemptState);
+        assertEquals(4, gw.logs.size());
+        assertEquals("STDOUT|true|terceira (cortada pela captura)", gw.logs.get(3));
+        assertEquals("4|0", gw.logsClosure);
+        assertFalse(Files.exists(queueFile(attempt)), "confirmado pela Platform: a fila sai deste computador");
+        assertFalse(Files.exists(journal()));
+        long after = logCalls();
+        m.pull();
+        assertEquals(after, logCalls(), "nada e reenviado depois de resolvido");
+    }
+
+    @Test
+    void semConfirmacaoDoFechamentoAFilaFicaAteOPrazoEOResultadoDoRoboNaoMuda() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        RemoteMachine.LogSink log = work.jobs.get(0).log();
+        log.line(false, 1, false, "um");
+        log.line(false, 2, false, "dois");
+        work.ends("SUCCEEDED", 0);
+        // o fechamento volta com OUTRA contagem: nao e a confirmacao desta entrega
+        gw.wrongLogsClosure = true;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState, "registro nao muda o resultado");
+        assertEquals("2|0", gw.logsClosure);
+        assertTrue(Files.exists(queueFile(attempt)), "sem confirmacao, a fila nao e apagada");
+        assertFalse(Files.exists(journal()), "a tentativa esta resolvida mesmo assim");
+        // a limpeza respeita o prazo de guarda: dentro dele fica; vencido, sai
+        m.sweep();
+        assertTrue(Files.exists(queueFile(attempt)));
+        Files.setLastModifiedTime(queueFile(attempt), java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(MachineVault.LOG_QUEUE_RETENTION).minusSeconds(60)));
+        // arquivo que nao e fila nao e tocado
+        Path other = Files.writeString(dir.resolve("fila").resolve("anotacao.txt"), "x");
+        Files.setLastModifiedTime(other, java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofDays(90))));
+        m.sweep();
+        assertFalse(Files.exists(queueFile(attempt)));
+        assertTrue(Files.exists(other));
+        assertEquals(java.time.Duration.ofDays(7), MachineVault.LOG_QUEUE_RETENTION);
+    }
+
+    @Test
+    void aplicativoReabertoNoMeioDaExecucaoAFilaVoltaEALacunaFicaDita() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        RemoteMachine.LogSink log = work.jobs.get(0).log();
+        log.line(false, 1, false, "antes de fechar, enviada");
+        m.pull();
+        assertEquals(1, gw.logs.size());
+        log.line(false, 2, false, "antes de fechar, ainda nao enviada");
+        m.close();
+        // o aplicativo abre de novo com a execucao em andamento (adotada por quem executa)
+        RemoteMachine again = machine(true);
+        again.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals(3, gw.logs.size(), "o que estava na fila foi enviado, sem duplicar a linha ja aceita");
+        assertEquals("STDOUT|false|antes de fechar, enviada", gw.logs.get(1));
+        assertEquals("STDOUT|false|antes de fechar, ainda nao enviada", gw.logs.get(2));
+        assertTrue(gw.logs.get(3).startsWith("EXECUTOR|false|O aplicativo deste computador foi reaberto durante a execução"), gw.logs.get(3));
+        work.ends("UNKNOWN", null);
+        again.pull();
+        assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertEquals("3|0", gw.logsClosure);
+        assertFalse(Files.exists(queueFile(attempt)));
+    }
+
+    @Test
+    void limiteDaPlatformOQueCabeVaiOQueNaoCabeEContadoETentativaQueNaoExecutouNaoTemRegistro() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        RemoteMachine.LogSink log = work.jobs.get(0).log();
+        for (int i = 1; i <= 5; i++) {
+            log.line(false, i, false, "linha " + i);
+        }
+        gw.logLimit = 3;
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState, "limite de registro nao vira falha do robo");
+        assertEquals(3, gw.logs.size());
+        assertEquals("3|2", gw.logsClosure, "o que nao coube e dito no fechamento");
+        assertFalse(Files.exists(queueFile(attempt)));
+
+        // tentativa recusada antes de iniciar: nenhuma fila, nenhuma chamada de registros
+        long before = logCalls();
+        gw.logLimit = Integer.MAX_VALUE;
+        String refused = gw.queue();
+        work.refusal = "DEPENDENCIES_MISSING";
+        work.state = "RUNNING";
+        m.pull();
+        m.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertEquals(before, logCalls());
+        assertFalse(Files.exists(queueFile(refused)));
     }
 
     @Test
