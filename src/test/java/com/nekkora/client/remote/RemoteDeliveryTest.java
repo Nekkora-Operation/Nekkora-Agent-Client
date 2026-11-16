@@ -1130,6 +1130,7 @@ class RemoteDeliveryTest {
         m.pull();
         assertEquals("SUCCEEDED", gw.attemptState);
         assertEquals("ACTIVE", gw.lastProcessTree, "ha processo da automacao vivo: o desfecho vai, a prova nao");
+        assertEquals(RemoteMachine.Activity.REMOTE_FINISHING, m.activity(), "a tela diz: finalizando");
         // os processos continuam: nada e repetido
         m.pull();
         m.pull();
@@ -1144,6 +1145,7 @@ class RemoteDeliveryTest {
         again.pull();
         again.pull();
         assertEquals(List.of("SUCCEEDED+UNCERTAIN"), gw.afterEnd);
+        assertEquals(RemoteMachine.Activity.REMOTE_UNCERTAIN, again.activity(), "a tela passa a dizer: ocupacao incerta");
         // ha prova (o grupo esvaziou, ou a sessao do Windows acabou): afirma uma vez
         work.processes = "GONE";
         again.pull();
@@ -1151,6 +1153,7 @@ class RemoteDeliveryTest {
         assertEquals("SUCCEEDED", gw.attemptState);
         again.pull();
         assertEquals(2, gw.afterEnd.size(), "afirma uma vez");
+        assertEquals(RemoteMachine.Activity.IDLE, again.activity());
 
         // com prova ja no fim: ABSENT junto do desfecho, e nada fica pendente
         gw.afterEnd.clear();
