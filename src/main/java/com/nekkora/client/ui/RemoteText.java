@@ -31,6 +31,15 @@ final class RemoteText {
                 : count == 1 ? "1 instalação de Python informada à Platform (só a versão)." : count + " instalações de Python informadas à Platform (só a versão).";
     }
 
+    /** Resultados de execuções remotas que ficaram neste computador porque a Platform não confirmou o recebimento. */
+    static String held(int attempts, int files, long bytes, boolean outOfLimit, String removeDay, String folder) {
+        String size = bytes < 1024 * 1024 ? Math.max(1, bytes / 1024) + " KB" : String.format(java.util.Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0)).replace('.', ',') + " MB";
+        return "Resultados pendentes neste computador: " + (files == 1 ? "1 arquivo" : files + " arquivos") + " (" + size + ") de "
+                + (attempts == 1 ? "1 execução remota" : attempts + " execuções remotas") + ". "
+                + (outOfLimit ? "A Platform não recebeu todos: há arquivo acima do limite de envio. " : "A Platform não confirmou o recebimento. ")
+                + "Eles ficam guardados em " + folder + " e são removidos deste computador a partir de " + removeDay + ". Copie o que precisar antes dessa data.";
+    }
+
     static final String CODE_FIELD = "Código de habilitação";
     static final String CONFIRM = "Confirmo que este computador poderá receber execuções solicitadas pela Platform.";
     static final String ENABLE = "Habilitar este computador";

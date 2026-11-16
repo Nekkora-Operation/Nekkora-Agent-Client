@@ -225,6 +225,94 @@ class RemoteWorkTest {
     }
 
     @Test
+    void resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa() throws Exception {
+        // o que NUNCA pode ser removido: projeto original, registros de execucoes locais, pasta pessoal, o Python
+        Path project = Files.createDirectories(tmp.resolve("projeto-original"));
+        Files.writeString(project.resolve("main.py"), "print('meu projeto')");
+        Path personal = Files.createDirectories(tmp.resolve("pasta-pessoal"));
+        Files.writeString(personal.resolve("documento.txt"), "meu");
+        Path localRuns = Files.createDirectories(RunStore.defaultRoot(data).resolve("ex-" + "9".repeat(32)));
+        Files.writeString(localRuns.resolve("estado.json"), "{}");
+
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_800_000_000L);
+        runner.setManagedClock(new Clock() {
+            @Override
+            public java.time.ZoneId getZone() {
+                return java.time.ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(java.time.ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public java.time.Instant instant() {
+                return java.time.Instant.ofEpochSecond(now.get());
+            }
+        });
+        RemoteMachine.Job job = job(OK, List.of());
+        String run = work.start(job);
+        assertEquals("SUCCEEDED", waitEnd(run).state());
+        work.discard(job.attemptId(), run);
+        Path out = Path.of(job.dir()).resolve("saida").resolve(run).resolve("resultado.txt");
+        assertTrue(Files.exists(out));
+        assertTrue(work.held(job.attemptId()).isEmpty(), "a tentativa ainda em envio nao e pendencia");
+
+        // sem confirmacao: marcada, com o motivo, a contagem e a data de remocao
+        work.holdOutputs(job.attemptId(), "OUT_OF_LIMIT");
+        List<RemoteMachine.Held> held = work.held(null);
+        assertEquals(1, held.size());
+        assertEquals(job.attemptId(), held.get(0).attemptId());
+        assertEquals("OUT_OF_LIMIT", held.get(0).reason());
+        assertEquals(1, held.get(0).files());
+        assertEquals(2, held.get(0).bytes());
+        assertEquals(now.get(), held.get(0).sinceEpochSecond());
+        assertEquals(now.get() + Runner.MANAGED_OUTPUT_RETENTION.toSeconds(), held.get(0).removeAtEpochSecond());
+        assertEquals(java.time.Duration.ofDays(7), Runner.MANAGED_OUTPUT_RETENTION);
+        // marcar de novo nao renova o prazo
+        now.addAndGet(3600);
+        work.holdOutputs(job.attemptId(), "NOT_CONFIRMED");
+        assertEquals(now.get() - 3600, work.held(null).get(0).sinceEpochSecond());
+        assertEquals("OUT_OF_LIMIT", work.held(null).get(0).reason());
+
+        // dentro do prazo, a limpeza nao apaga
+        now.addAndGet(Runner.MANAGED_OUTPUT_RETENTION.toSeconds() - 3601);
+        assertEquals(0, work.sweep(null));
+        assertTrue(Files.exists(out));
+        // prazo vencido: a pasta de saida sai, e a pasta da tentativa some junto
+        now.addAndGet(1);
+        assertEquals(1, work.sweep(null));
+        assertFalse(Files.exists(Path.of(job.dir())));
+        assertTrue(work.held(null).isEmpty());
+
+        // sobra sem marca (queda antes de marcar): o prazo comeca quando ela e vista, nunca antes
+        RemoteMachine.Job crashed = job(OK, List.of());
+        Path leftover = Files.createDirectories(Path.of(crashed.dir()).resolve("saida").resolve("ex-" + "3".repeat(32)));
+        Files.writeString(leftover.resolve("sem-marca.txt"), "abc");
+        now.addAndGet(100L * 24 * 3600);
+        assertEquals(1, work.sweep(null), "o codigo sai");
+        assertTrue(Files.exists(leftover.resolve("sem-marca.txt")), "o resultado fica: o prazo comecou agora");
+        assertEquals("NOT_CONFIRMED", work.held(null).get(0).reason());
+        assertEquals(now.get(), work.held(null).get(0).sinceEpochSecond());
+        // saida vazia nao e pendencia
+        RemoteMachine.Job empty = job(OK, List.of());
+        Files.createDirectories(Path.of(empty.dir()).resolve("saida"));
+        work.holdOutputs(empty.attemptId(), "NOT_CONFIRMED");
+        assertEquals(1, work.held(null).size());
+
+        // nada fora das pastas de tentativa foi tocado em momento algum
+        now.addAndGet(100L * 24 * 3600);
+        work.sweep(null);
+        assertTrue(work.held(null).isEmpty());
+        assertTrue(Files.exists(project.resolve("main.py")));
+        assertTrue(Files.exists(personal.resolve("documento.txt")));
+        assertTrue(Files.exists(localRuns.resolve("estado.json")), "registro de execucao local");
+        assertTrue(Files.exists(python), "o Python do computador");
+        assertTrue(Files.exists(data.resolve("remota").resolve("execucoes").resolve(run).resolve("estado.json")), "o registro da execucao remota fica");
+    }
+
+    @Test
     void codigoDeSaidaCancelamentoEUmaPorVez() throws Exception {
         String failed = work.start(job(EXIT_3, List.of()));
         RemoteMachine.Progress end = waitEnd(failed);

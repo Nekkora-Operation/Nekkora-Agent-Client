@@ -126,9 +126,10 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 | O quê | Quando sai deste computador |
 |---|---|
 | **Código da tentativa**: o ZIP baixado, a cópia extraída e a cópia que foi executada | sempre, quando a tentativa está resolvida com a Platform (qualquer desfecho). O registro da execução fica |
-| **Pasta de saída** (o que a automação gravou) | **só** depois que a Platform confirmou o recebimento de **todos** os arquivos (envio fechado, nenhum de fora) |
-| Pasta de saída com arquivo fora do limite, envio não confirmado, ou fechado por outra entrega | **não é apagada**: o arquivo pode existir só aqui |
-| Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo, a varredura tira o **código** das tentativas que não são a pendente. **Nunca apaga pasta de saída** |
+| **Pasta de saída** (o que a automação gravou) | **só** com a confirmação de recebimento conferida: cada arquivo confirmado pela Platform com o mesmo número, tamanho e SHA-256; fechamento desta tentativa aceito com as mesmas contagens; nenhum arquivo de fora; e a pasta, relida e recalculada antes de apagar, igual ao que foi confirmado |
+| Pasta de saída com arquivo fora do limite (`OUT_OF_LIMIT`), envio não confirmado (`NOT_CONFIRMED`) ou alterada depois do envio (`CHANGED_AFTER_SEND`) | **fica guardada**, marcada como pendente (`pendente.txt`: início e motivo). Aparece na tela "Execução remota" com a quantidade, o tamanho, a pasta e a data de remoção. É removida **7 dias** depois da marca (`Runner.MANAGED_OUTPUT_RETENTION`) |
+| Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo e de hora em hora, a varredura tira o **código** das tentativas que não são a pendente. A pasta de saída que sobrou sem marca é marcada nesse momento: o prazo de 7 dias começa aí, nunca antes |
+| O que a limpeza **nunca** alcança | só pastas de tentativa (nome no formato de UUID) dentro de `remota/tentativas`. Projeto original, ambiente Python, registros de execuções locais, registro da execução remota e qualquer pasta pessoal ficam fora do alcance |
 
 - **Execução interrompida não é duplicada.** Se o aplicativo fecha com a execução em andamento, ao reabrir o motor
   reconhece o processo pelo registro (identificador, início e executável), o **adota** e ocupa a vaga; o canal continua a
@@ -180,6 +181,7 @@ temporária.
 | Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (20; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
 | Resultados: ordem, nome relativo, limites contados, retomada sem duplicar, fechamento, nada para o que não executou | `RemoteDeliveryTest` (3 dos 19) |
 | Limpeza e recuperação: resultado pendente não é apagado antes da confirmação; varredura preserva a pendente e os resultados; processo adotado ao reabrir, nada relançado; código sai, saída só quando pedida | `RemoteDeliveryTest.resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento`, `RemoteWorkTest.aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro`, `RemoteWorkTest.limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado` |
+| Confirmação que corresponde ao enviado; pendência marcada, visível e com prazo; nada fora da tentativa é tocado | `RemoteDeliveryTest.aPastaDeSaidaSoSaiQuandoAConfirmacaoCorrespondeATentativaEAosArquivosEnviados`, `RemoteWorkTest.resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa`, `RemoteDesktopTest.resultadoGuardadoSemConfirmacaoApareceNaTelaComAPastaEADataDeRemocao` |
 | A ponte com o motor: ZIP real, conferência, execução gerenciada por Python real, código de saída, cancelamento, uma por vez, cada recusa | `RemoteWorkTest` (exige `NEKKORA_TEST_PYTHON`) |
 | O motor: execução gerenciada | `ManagedRunTest` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
