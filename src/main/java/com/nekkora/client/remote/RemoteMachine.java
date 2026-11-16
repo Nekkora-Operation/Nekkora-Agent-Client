@@ -99,6 +99,14 @@ public final class RemoteMachine implements AutoCloseable {
         }
     }
 
+    /**
+     * O nome, na Platform, do Worker a que este computador esta associado: e em nome dele que a maquina recebe trabalho. Vem da
+     * presenca (o nome atual de la) e fica so em memoria. Vazio sem vinculo, ou enquanto a Platform ainda nao o informou.
+     */
+    public synchronized Optional<String> seatName() {
+        return link == null || ended ? Optional.empty() : Optional.ofNullable(workerName);
+    }
+
     /** A organizacao para a qual este computador esta habilitado (o identificador; quem mostra o nome e a tela). Vazio sem vinculo. */
     public synchronized Optional<String> organizationId() {
         return link == null || ended ? Optional.empty() : Optional.of(link.organizationId());
@@ -136,6 +144,8 @@ public final class RemoteMachine implements AutoCloseable {
     private MachineVault.Link link;
     private boolean ended;
     private boolean inContact;
+    /** O nome do Worker desta maquina, como a ultima presenca aceita o trouxe (nulo: ainda nao veio). */
+    private String workerName;
     /** Resposta perdida no resgate: o mesmo codigo e repetido com o MESMO segredo. So em memoria. */
     private String pendingCode;
     private String pendingSecret;
@@ -1284,6 +1294,7 @@ public final class RemoteMachine implements AutoCloseable {
                 link = null;
                 ended = false;
                 inContact = false;
+                workerName = null;
                 pendingUnlink = null;
                 published = null;
                 inventoryNotBefore = java.time.Instant.MIN;
@@ -1309,6 +1320,16 @@ public final class RemoteMachine implements AutoCloseable {
             try {
                 MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, work != null, journal.load(current.agentId()).isPresent() || (work != null && work.busy()));
                 MachineVault.Link next = current.withPaused(p.paused());
+                boolean renamed;
+                synchronized (this) {
+                    renamed = p.workerName() != null && !p.workerName().equals(workerName);
+                    if (renamed) {
+                        workerName = p.workerName();
+                    }
+                }
+                if (renamed) {
+                    changed();
+                }
                 try {
                     next = next.withExpiry(p.credentialExpiresAt());
                 } catch (IllegalArgumentException e) {

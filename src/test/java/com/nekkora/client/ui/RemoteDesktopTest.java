@@ -318,6 +318,24 @@ class RemoteDesktopTest {
             assertTrue(RemoteText.activity(a).contains("solicitada pela Platform"), a.name());
         }
         assertTrue(RemoteText.SEE_ON_PLATFORM.contains("Este aplicativo não mostra esse conteúdo."));
+        // o Worker desta maquina: enquanto a Platform nao informa o nome, a tela nao inventa nada (nem mostra identificador)
+        assertTrue(machine.seatName().isEmpty());
+        assertFalse(read(p::organizationText).contains("Worker"));
+        edt(() -> window.closeRemote());
+        // a presenca traz o nome atual do Worker; caracteres de controle nao chegam a tela
+        gw.workerName = "Worker financeiro";
+        machine.beat();
+        assertEquals("Worker  financeiro", machine.seatName().orElseThrow());
+        RemotePanel named = openDialog();
+        assertEquals(RemoteText.organization("") + " " + RemoteText.seat("Worker  financeiro"), read(named::organizationText));
+        assertTrue(RemoteText.seat("W-01").startsWith("Worker na Platform: W-01."));
+        edt(() -> window.closeRemote());
+        // o nome trocado na Platform chega na presenca seguinte; desabilitado o computador, nao ha mais Worker
+        gw.workerName = "Worker fiscal";
+        machine.beat();
+        assertEquals("Worker fiscal", machine.seatName().orElseThrow());
+        machine.disable();
+        assertTrue(machine.seatName().isEmpty());
     }
 
     @Test
