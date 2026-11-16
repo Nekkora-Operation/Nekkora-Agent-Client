@@ -64,6 +64,11 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
+    public boolean processGone(String run) {
+        return runner.managedProcessGone(run);
+    }
+
+    @Override
     public void cancel(String run) {
         runner.cancelManaged(run);
     }
