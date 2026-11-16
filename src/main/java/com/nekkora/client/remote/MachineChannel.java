@@ -280,7 +280,62 @@ public final class MachineChannel {
     }
 
     /** O que ha para esta maquina: uma tentativa a receber, ou o aviso de cancelamento de uma ja recebida, ou nada (os dois nulos). */
-    record Next(Offer offer, String cancelAttemptId) {
+    record Next(Offer offer, String cancelAttemptId, Check check) {
+    }
+
+    /**
+     * Um pedido da Platform para CONFERIR (nao instalar, nao executar) as dependencias de uma automacao no ambiente Python que foi
+     * escolhido para ela nesta maquina. {@code pythonEnvironmentId}: o identificador opaco que esta maquina publicou.
+     */
+    record Check(String checkId, String pythonEnvironmentId, java.util.List<String> dependencies) {
+    }
+
+    static final String CHECKS = "/agent/api/v1/remote/dependency-checks/";
+
+    /** O pedido de verificacao que veio numa resposta, se veio e esta no formato; fora do formato, e como se nao viesse. */
+    private static Check check(Object raw) {
+        if (!(raw instanceof Map<?, ?> m) || !(m.get("checkId") instanceof String id) || !UUID.matcher(id).matches()
+                || !(m.get("pythonEnvironmentId") instanceof String env) || !AttemptJournal.ENVIRONMENT.matcher(env).matches()
+                || !(m.get("dependencies") instanceof java.util.List<?> list) || list.size() > AttemptJournal.MAX_DEPENDENCIES) {
+            return null;
+        }
+        java.util.List<String> deps = new java.util.ArrayList<>();
+        for (Object d : list) {
+            if (!(d instanceof String t) || t.isBlank() || t.length() > 512) {
+                return null;
+            }
+            deps.add(t);
+        }
+        return new Check(id, env, java.util.List.copyOf(deps));
+    }
+
+    /** O pedido de verificacao pendente desta maquina, para quando ela nao esta perguntando por trabalho. Nulo: nao ha. */
+    Check pendingCheck(String credential) throws Refused {
+        return check(ok(authenticated(send(request(CHECKS + "pending", credential).GET()))).get("dependencyCheck"));
+    }
+
+    /**
+     * Responde a verificacao: {@code SATISFIED}, {@code MISSING} (com o que falta, do que foi perguntado), {@code ENVIRONMENT_GONE}
+     * ou {@code NOT_VERIFIED}. Nada do que esta instalado vai junto. Pedido que a Platform ja fechou (respondido, ou fora do
+     * prazo) ou nao reconhece: nao ha o que fazer, e nada e lancado.
+     */
+    void answerCheck(String credential, String checkId, String outcome, java.util.List<String> missing) throws Refused {
+        if (!UUID.matcher(checkId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        StringBuilder body = new StringBuilder("{\"outcome\":").append(Json.quote(outcome));
+        if (missing != null && !missing.isEmpty()) {
+            body.append(",\"missing\":[");
+            for (int i = 0; i < missing.size(); i++) {
+                body.append(i == 0 ? "" : ",").append(Json.quote(missing.get(i)));
+            }
+            body.append(']');
+        }
+        HttpResponse<String> r = send(request(CHECKS + checkId + "/answer", credential).POST(HttpRequest.BodyPublishers.ofString(body.append('}').toString())));
+        if (r.statusCode() == 409 || r.statusCode() == 404 || r.statusCode() == 400) {
+            return;
+        }
+        ok(authenticated(r));
     }
 
     /** {@code proceed}: {@code false} quando a maquina NAO deve seguir (o servidor recusou o inicio ou a tentativa ja terminou). */
@@ -330,7 +385,7 @@ public final class MachineChannel {
         } else if (o.get("cancel") != null) {
             throw new Refused(Problem.UNEXPECTED);
         }
-        return new Next(offer, cancel);
+        return new Next(offer, cancel, check(o.get("dependencyCheck")));
     }
 
     /** Confirma que a tentativa foi RECEBIDA (ja gravada no diario daqui). Repetir com o mesmo token e epoca nao muda nada. */

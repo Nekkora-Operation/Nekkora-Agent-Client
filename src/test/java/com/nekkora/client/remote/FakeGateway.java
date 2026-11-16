@@ -361,38 +361,53 @@ public final class FakeGateway implements AutoCloseable {
         return (UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", "").substring(0, 43);
     }
 
+    /** Um pedido de verificacao de dependencias pendente (o objeto JSON, como a Platform o entrega); nulo = nao ha. */
+    public volatile String dependencyCheck;
+    /** As respostas de verificacao recebidas: {@code verificacao|corpo}. */
+    public final List<String> checkAnswers = new CopyOnWriteArrayList<>();
+    /** Respostas 503 para as proximas respostas de verificacao. */
+    public volatile int failCheckAnswers;
+
+    private String withCheck(String json) {
+        String check = dependencyCheck;
+        if (check == null) {
+            return json;
+        }
+        return json.equals("{}") ? "{\"dependencyCheck\":" + check + "}" : json.substring(0, json.length() - 1) + ",\"dependencyCheck\":" + check + "}";
+    }
+
     private void next(HttpExchange x) throws IOException {
         if (!enabled) {
             respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_execution_not_enabled\"}");
             return;
         }
         if (attemptId == null) {
-            respond(x, 200, "{}");
+            respond(x, 200, withCheck("{}"));
             return;
         }
         if (attemptState.equals("QUEUED") || attemptState.equals("OFFERED")) {
             if (cancelRequested) {
                 attemptState = "CANCELLED";
-                respond(x, 200, "{}");
+                respond(x, 200, withCheck("{}"));
                 return;
             }
             if (paused || !declaredRun) {
-                respond(x, 200, "{}");
+                respond(x, 200, withCheck("{}"));
                 return;
             }
             attemptToken = newToken();
             attemptEpoch++;
             attemptState = "OFFERED";
-            respond(x, 200, "{\"attempt\":{\"attemptId\":\"" + attemptId + "\",\"remoteExecutionId\":\"" + remoteExecutionId + "\",\"attemptNumber\":1,"
+            respond(x, 200, withCheck("{\"attempt\":{\"attemptId\":\"" + attemptId + "\",\"remoteExecutionId\":\"" + remoteExecutionId + "\",\"attemptNumber\":1,"
                     + "\"automationId\":\"" + automationId + "\",\"automationVersionId\":\"" + automationVersionId + "\",\"packageFingerprint\":\""
                     + "c".repeat(64) + "\",\"packageFingerprintRule\":\"" + offerRule + "\",\"dependencies\":[\"requests==2.32.3\"],"
                     + (offerWorkspace ? "\"workspaceId\":\"" + workspaceId + "\"," : "")
                     + (offerPython == null ? "" : "\"pythonEnvironmentId\":\"" + offerPython + "\",")
-                    + "\"token\":\"" + (malformedOffer ? "nao e um token" : attemptToken) + "\",\"epoch\":" + attemptEpoch + ",\"leaseSeconds\":90}}");
+                    + "\"token\":\"" + (malformedOffer ? "nao e um token" : attemptToken) + "\",\"epoch\":" + attemptEpoch + ",\"leaseSeconds\":90}}"));
             return;
         }
         boolean live = List.of("RECEIVED", "PREPARING", "STARTING", "RUNNING").contains(attemptState);
-        respond(x, 200, live && cancelRequested ? "{\"cancel\":{\"attemptId\":\"" + attemptId + "\"}}" : "{}");
+        respond(x, 200, withCheck(live && cancelRequested ? "{\"cancel\":{\"attemptId\":\"" + attemptId + "\"}}" : "{}"));
     }
 
     private void attempt(HttpExchange x, String path, String text) throws IOException {
@@ -556,6 +571,31 @@ public final class FakeGateway implements AutoCloseable {
         if (get && "1.0".equals(x.getRequestHeaders().getFirst("Nekkora-Agent-Contract"))) {
             if (authenticated(x, auth)) {
                 next(x);
+            }
+            return;
+        }
+        if (path.equals("/agent/api/v1/remote/dependency-checks/pending") && "GET".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                respond(x, 200, withCheck("{}"));
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/dependency-checks/") && path.endsWith("/answer") && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                if (failCheckAnswers > 0) {
+                    failCheckAnswers--;
+                    respond(x, 503, "{\"error\":\"unavailable\"}");
+                    return;
+                }
+                String id = path.substring("/agent/api/v1/remote/dependency-checks/".length(), path.length() - "/answer".length());
+                String pending = dependencyCheck;
+                if (pending == null || !pending.contains(id)) {
+                    respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_dependency_check_closed\"}");
+                    return;
+                }
+                checkAnswers.add(id + "|" + text);
+                dependencyCheck = null;
+                respond(x, 200, "{\"checkId\":\"" + id + "\",\"outcome\":\"ok\"}");
             }
             return;
         }

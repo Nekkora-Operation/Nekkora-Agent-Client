@@ -418,4 +418,39 @@ class RemoteWorkTest {
         assertFalse(work.busy());
         assertFalse(Files.exists(ApprovalLedger.defaultFile(data)));
     }
+
+    /** A versao instalada de um pacote no Python do teste, perguntada ao proprio Python; vazio se ele nao o tem. */
+    private String installedVersion(String name) throws Exception {
+        Process pr = new ProcessBuilder(python.toString(), "-c", "import importlib.metadata as m; print(m.version('" + name + "'))").redirectErrorStream(true).start();
+        String out = new String(pr.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).strip();
+        return pr.waitFor() == 0 && out.matches("[0-9][0-9A-Za-z.+!-]*") ? out : "";
+    }
+
+    /** Plano 5.9: a conferencia sob demanda e a MESMA de antes de iniciar, sem iniciar nada e sem instalar nada. */
+    @Test
+    void aConferenciaSobDemandaDizSoOQueFaltaDoQueFoiPerguntadoENaoInstalaNemExecutaNada() throws Exception {
+        Path managed = data.resolve("remota");
+        boolean managedBefore = Files.exists(managed.resolve("execucoes")) || Files.exists(managed.resolve("tentativas"));
+        // nada a conferir: satisfeito
+        assertEquals(new RemoteMachine.Verified("SATISFIED", List.of()), work.verify(pythonId(), List.of()));
+        // um pacote que nao existe e um fora do formato: faltam, e sao ditos exatamente como foram perguntados
+        RemoteMachine.Verified missing = work.verify(pythonId(), List.of("nekkora-pacote-que-nao-existe==9.9.9", "requests>=2"));
+        assertEquals("MISSING", missing.outcome());
+        assertEquals(java.util.Set.of("nekkora-pacote-que-nao-existe==9.9.9", "requests>=2"), java.util.Set.copyOf(missing.missing()));
+        // a versao e conferida exatamente: o pip que este Python TEM satisfaz na versao dele e falta em qualquer outra
+        String pip = installedVersion("pip");
+        Assumptions.assumeFalse(pip.isEmpty(), "o Python do teste nao tem pip: a parte de versao exata nao roda");
+        assertEquals(new RemoteMachine.Verified("SATISFIED", List.of()), work.verify(pythonId(), List.of("pip==" + pip)));
+        RemoteMachine.Verified other = work.verify(pythonId(), List.of("pip==" + pip, "pip-que-nao-existe-aqui==1.0.0", "PIP==0.0.1"));
+        assertEquals("MISSING", other.outcome());
+        assertFalse(other.missing().contains("pip==" + pip));
+        assertTrue(other.missing().contains("pip-que-nao-existe-aqui==1.0.0"));
+        // o Python indicado nao esta (mais) neste computador: dito assim, sem escolher outro
+        assertEquals(new RemoteMachine.Verified("ENVIRONMENT_GONE", List.of()), work.verify("computador:c:\\nao-existe\\python.exe", List.of("pip==" + pip)));
+        assertEquals("ENVIRONMENT_GONE", work.verify(null, List.of()).outcome());
+        // conferir nao instala (o que faltava continua faltando), nao executa nada e nao ocupa a vaga de execucao
+        assertEquals("MISSING", work.verify(pythonId(), List.of("nekkora-pacote-que-nao-existe==9.9.9")).outcome());
+        assertEquals(managedBefore, Files.exists(managed.resolve("execucoes")) || Files.exists(managed.resolve("tentativas")), "nenhuma execucao, nenhuma pasta de tentativa");
+        assertFalse(work.busy());
+    }
 }
