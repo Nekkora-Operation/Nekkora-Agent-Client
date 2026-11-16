@@ -117,10 +117,29 @@ class RemoteDeliveryTest {
             outputsDiscarded.add(attemptId);
         }
 
+        /** As pastas de saida guardadas, como o motor as informaria. */
+        final List<RemoteMachine.Held> heldNow = new java.util.concurrent.CopyOnWriteArrayList<>();
+        volatile int retentionDays = -1;
+        /** O relogio da limpeza deste motor de teste (segundos). */
+        volatile long sweepNow = java.time.Instant.now().getEpochSecond();
+
+        @Override
+        public List<RemoteMachine.Held> held(String exceptAttemptId) {
+            return heldNow.stream().filter(h -> !h.attemptId().equals(exceptAttemptId)).toList();
+        }
+
+        @Override
+        public void retentionDays(int days) {
+            retentionDays = days;
+        }
+
         @Override
         public int sweep(String keepAttemptId) {
             swept.add(String.valueOf(keepAttemptId));
-            return 0;
+            // como o motor real: a pasta guardada sai quando o prazo dela venceu, e nunca a da tentativa pendente
+            int before = heldNow.size();
+            heldNow.removeIf(h -> !h.attemptId().equals(keepAttemptId) && h.removeAtEpochSecond() <= sweepNow);
+            return before - heldNow.size();
         }
 
         @Override
@@ -380,14 +399,167 @@ class RemoteDeliveryTest {
         // a limpeza respeita o prazo de guarda: dentro dele fica; vencido, sai
         m.sweep();
         assertTrue(Files.exists(queueFile(attempt)));
-        Files.setLastModifiedTime(queueFile(attempt), java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(MachineVault.LOG_QUEUE_RETENTION).minusSeconds(60)));
+        Files.setLastModifiedTime(queueFile(attempt), java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofDays(7)).minusSeconds(60)));
         // arquivo que nao e fila nao e tocado
         Path other = Files.writeString(dir.resolve("fila").resolve("anotacao.txt"), "x");
         Files.setLastModifiedTime(other, java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofDays(90))));
         m.sweep();
         assertFalse(Files.exists(queueFile(attempt)));
         assertTrue(Files.exists(other));
-        assertEquals(java.time.Duration.ofDays(7), MachineVault.LOG_QUEUE_RETENTION);
+        assertEquals(7, MachineVault.DEFAULT_RETENTION_DAYS);
+    }
+
+    private static void age(Path file, java.time.Duration howOld) throws Exception {
+        Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(howOld)));
+    }
+
+    private void retentionFile(String content) throws Exception {
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve(MachineVault.RETENTION_FILE), content, StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void oPrazoDeGuardaEConfiguravelPorArquivoEValorInvalidoNaoEncurtaNemAlongaAGuarda() throws Exception {
+        MachineVault vault = new MachineVault(dir, new WindowsKeyring());
+        assertEquals(7, vault.retentionDays(), "sem arquivo: o padrao");
+        for (String ok : new String[] {"14", "14\n", "  14  \r\ncomentario na segunda linha", "1", "90"}) {
+            retentionFile(ok);
+            assertEquals(Integer.parseInt(ok.strip().split("\\R")[0].strip()), vault.retentionDays(), ok);
+        }
+        for (String bad : new String[] {"", "0", "91", "-3", "7 dias", "sete", "3.5", "007", "1".repeat(100)}) {
+            retentionFile(bad);
+            assertEquals(7, vault.retentionDays(), "valor invalido volta ao padrao: [" + bad + "]");
+        }
+        // o prazo chega a quem guarda a pasta de saida, e e lido de novo a cada limpeza (sem reabrir o aplicativo)
+        RemoteMachine m = enabled(true);
+        retentionFile("3");
+        m.sweep();
+        assertEquals(3, work.retentionDays);
+        assertEquals(3, m.retentionDays());
+        retentionFile("30");
+        m.heldResults();
+        assertEquals(30, work.retentionDays);
+    }
+
+    @Test
+    void filaRemovidaPeloPrazoDeixaRegistroDaPerdaEAPlatformEAvisadaQuandoPossivel() throws Exception {
+        RemoteMachine m = enabled(true);
+        retentionFile("2");
+        String attempt = gw.queue();
+        m.pull();
+        RemoteMachine.LogSink log = work.jobs.get(0).log();
+        log.line(false, 1, false, "um");
+        log.line(false, 2, false, "dois");
+        log.line(true, 3, false, "tres");
+        // com a execucao EM ANDAMENTO o prazo nao conta: a fila da tentativa pendente nunca e removida, por mais antiga que seja
+        m.pull();
+        age(queueFile(attempt), java.time.Duration.ofDays(400));
+        m.sweep();
+        assertTrue(Files.exists(queueFile(attempt)), "execucao em andamento: fora da contagem do prazo");
+        assertTrue(m.heldLogs().isEmpty(), "a fila da tentativa pendente nao e pendencia de guarda");
+        assertTrue(m.lost().isEmpty());
+        // termina; o fechamento nao e confirmado: a fila fica, e a pendencia e visivel com a data de remocao (prazo de 2 dias)
+        work.ends("SUCCEEDED", 0);
+        gw.wrongLogsClosure = true;
+        m.pull();
+        assertTrue(Files.exists(queueFile(attempt)));
+        List<RemoteMachine.HeldLogs> held = m.heldLogs();
+        assertEquals(1, held.size());
+        assertEquals(attempt, held.get(0).attemptId());
+        assertEquals(held.get(0).sinceEpochSecond() + 2 * 86_400L, held.get(0).removeAtEpochSecond(), "a data de remocao e conhecida antes");
+        assertTrue(m.lost().isEmpty(), "guardado nao e perdido");
+        // dentro do prazo: fica, e nada e avisado
+        age(queueFile(attempt), java.time.Duration.ofDays(2).minusMinutes(5));
+        m.sweep();
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertTrue(gw.losses.isEmpty());
+        // vencido, e sem rede para o aviso: a fila sai, o registro minimo fica dizendo o que houve, e a Platform ainda nao sabe
+        age(queueFile(attempt), java.time.Duration.ofDays(2).plusMinutes(5));
+        gw.failLoss = 1;
+        m.sweep();
+        assertFalse(Files.exists(queueFile(attempt)));
+        assertTrue(m.heldLogs().isEmpty());
+        List<RemoteMachine.Lost> lost = m.lost();
+        assertEquals(1, lost.size());
+        assertEquals(new RemoteMachine.Lost(attempt, true, 3, lost.get(0).lostAtEpochSecond(), "PENDING"), lost.get(0));
+        assertTrue(gw.losses.isEmpty());
+        // o registro no disco e protegido: nem o token nem a tentativa em claro
+        Path record = dir.resolve("guarda").resolve(attempt + ".guarda");
+        String raw = new String(Files.readAllBytes(record), StandardCharsets.ISO_8859_1);
+        assertFalse(raw.contains(gw.attemptToken) || raw.contains(attempt) || raw.contains("PENDING"), "registro de guarda em claro");
+        // na limpeza seguinte o aviso chega: diz quanto HAVIA aqui (3 linhas), nao o conteudo
+        m.sweep();
+        assertEquals(List.of(attempt + "|LOGS|3"), gw.losses);
+        assertEquals("SENT", m.lost().get(0).notice());
+        assertTrue(gw.calls.stream().filter(c -> c.path().endsWith("/retention-loss")).noneMatch(c -> c.body().contains("um") && c.body().contains("dois")));
+        // avisado: o token sai do registro, e nada mais e enviado
+        assertEquals("", new MachineVault(dir, new WindowsKeyring()).losses().load(attempt).orElseThrow().token());
+        long calls = gw.calls.stream().filter(c -> c.path().endsWith("/retention-loss")).count();
+        m.sweep();
+        m.sweep();
+        assertEquals(calls, gw.calls.stream().filter(c -> c.path().endsWith("/retention-loss")).count());
+        assertEquals("SUCCEEDED", gw.attemptState, "nada disto muda o resultado da execucao");
+    }
+
+    @Test
+    void pastaDeSaidaRemovidaPeloPrazoDeixaRegistroEOAvisoImpossivelFicaDito() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        work.outputs.put("um.txt", "1".getBytes(StandardCharsets.UTF_8));
+        work.outputs.put("dois.txt", "22".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        // o fechamento dos resultados nao e confirmado: a pasta fica guardada, com data de remocao conhecida
+        gw.wrongClosure = true;
+        m.pull();
+        assertEquals("NOT_CONFIRMED", work.outputsHeld.get(attempt));
+        long now = java.time.Instant.now().getEpochSecond();
+        work.heldNow.add(new RemoteMachine.Held(attempt, "NOT_CONFIRMED", work.root.resolve(attempt).resolve("saida").toString(), 2, 3, now, now + 7 * 86_400L));
+        assertEquals(1, m.heldResults().size());
+        // dentro do prazo: nada sai, nada e perdido
+        m.sweep();
+        assertEquals(1, m.heldResults().size());
+        assertTrue(m.lost().isEmpty());
+        // a pessoa apaga a pasta por conta propria, de outra tentativa: sumir fora do prazo NAO e perda por prazo de guarda
+        // (aqui: a mesma tentativa continua guardada, entao nada muda)
+        // vence o prazo: o motor remove a pasta; fica o registro com quantos arquivos havia
+        work.heldNow.clear();
+        work.heldNow.add(new RemoteMachine.Held(attempt, "NOT_CONFIRMED", work.root.resolve(attempt).resolve("saida").toString(), 2, 3, now - 8 * 86_400L, now - 86_400L));
+        // a Platform nao reconhece mais esta atribuicao (ja ha outra tentativa na fila dela): o aviso e impossivel, e isso fica dito
+        gw.attemptToken = "outro-token-que-nao-e-o-da-atribuicao";
+        m.sweep();
+        assertTrue(m.heldResults().isEmpty());
+        List<RemoteMachine.Lost> lost = m.lost();
+        assertEquals(1, lost.size());
+        assertEquals(new RemoteMachine.Lost(attempt, false, 2, lost.get(0).lostAtEpochSecond(), "IMPOSSIBLE"), lost.get(0));
+        assertTrue(gw.losses.isEmpty(), "nada foi dado como entregue nem como avisado");
+        long calls = gw.calls.stream().filter(c -> c.path().endsWith("/retention-loss")).count();
+        m.sweep();
+        assertEquals(calls, gw.calls.stream().filter(c -> c.path().endsWith("/retention-loss")).count(), "aviso impossivel nao e repetido");
+        // desabilitar o computador nao apaga o registro da perda (o token ja saiu dele)
+        m.disable();
+        assertEquals(1, m.lost().size());
+        assertEquals("", new MachineVault(dir, new WindowsKeyring()).losses().load(attempt).orElseThrow().token());
+    }
+
+    @Test
+    void pastaGuardadaQueSomeAntesDoPrazoNaoViraPerdaPorPrazo() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        work.outputs.put("um.txt", "1".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        gw.wrongClosure = true;
+        m.pull();
+        long now = java.time.Instant.now().getEpochSecond();
+        RemoteMachine.Held h = new RemoteMachine.Held(attempt, "NOT_CONFIRMED", work.root.resolve(attempt).resolve("saida").toString(), 1, 1, now, now + 7 * 86_400L);
+        work.heldNow.add(h);
+        m.sweep();
+        // a pessoa copiou e apagou a pasta: ela some da lista, mas o prazo nao venceu - nao ha perda por prazo a registrar nem a avisar
+        work.heldNow.clear();
+        m.sweep();
+        assertTrue(m.lost().isEmpty());
+        assertTrue(gw.losses.isEmpty());
     }
 
     @Test

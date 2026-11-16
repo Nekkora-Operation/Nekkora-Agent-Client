@@ -33,11 +33,47 @@ final class RemoteText {
 
     /** Resultados de execuções remotas que ficaram neste computador porque a Platform não confirmou o recebimento. */
     static String held(int attempts, int files, long bytes, boolean outOfLimit, String removeDay, String folder) {
+        return held(attempts, files, bytes, outOfLimit, removeDay, folder, 7);
+    }
+
+    private static String days(int days) {
+        return days == 1 ? "1 dia" : days + " dias";
+    }
+
+    private static String runs(int n) {
+        return n == 1 ? "1 execução remota" : n + " execuções remotas";
+    }
+
+    /** O mesmo, dizendo o MOTIVO da remoção: o prazo de guarda vigente, em dias. */
+    static String held(int attempts, int files, long bytes, boolean outOfLimit, String removeDay, String folder, int retentionDays) {
         String size = bytes < 1024 * 1024 ? Math.max(1, bytes / 1024) + " KB" : String.format(java.util.Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0)).replace('.', ',') + " MB";
         return "Resultados pendentes neste computador: " + (files == 1 ? "1 arquivo" : files + " arquivos") + " (" + size + ") de "
                 + (attempts == 1 ? "1 execução remota" : attempts + " execuções remotas") + ". "
                 + (outOfLimit ? "A Platform não recebeu todos: há arquivo acima do limite de envio. " : "A Platform não confirmou o recebimento. ")
-                + "Eles ficam guardados em " + folder + " e são removidos deste computador a partir de " + removeDay + ". Copie o que precisar antes dessa data.";
+                + "Eles ficam guardados em " + folder + " e são removidos deste computador a partir de " + removeDay + ": é quando vence o prazo de guarda de "
+                + days(retentionDays) + " sem confirmação de recebimento. Copie o que precisar antes dessa data.";
+    }
+
+    /** Registros (saída do processo) de execuções remotas que ficaram neste computador sem confirmação. Nada do conteúdo. */
+    static String heldLogs(int attempts, String removeDay, int retentionDays) {
+        return "Registros pendentes neste computador: a Platform não confirmou o recebimento de toda a saída do processo de " + runs(attempts)
+                + ". O que falta fica guardado aqui, protegido, e não é mostrado nesta tela. É removido deste computador a partir de " + removeDay
+                + ": é quando vence o prazo de guarda de " + days(retentionDays) + " sem confirmação de recebimento. O que já chegou continua na Platform.";
+    }
+
+    /**
+     * O que este computador removeu pelo prazo de guarda sem a Platform ter confirmado o recebimento. {@code notice}: 0 = a
+     * Platform foi avisada de tudo; 1 = ainda falta avisar; 2 = não há mais como avisar de tudo.
+     */
+    static String lost(int resultRuns, int resultFiles, int logRuns, int logLines, String lastDay, int notice) {
+        String results = resultRuns == 0 ? "" : (resultFiles == 1 ? "1 arquivo de resultado" : resultFiles + " arquivos de resultado") + " de " + runs(resultRuns);
+        String logs = logRuns == 0 ? "" : "registros (" + (logLines == 1 ? "1 linha capturada" : logLines + " linhas capturadas") + ") de " + runs(logRuns);
+        return "Removido deste computador pelo prazo de guarda, sem confirmação de recebimento pela Platform: " + results
+                + (results.isEmpty() || logs.isEmpty() ? "" : " e ") + logs + ". Última remoção em " + lastDay
+                + ". Esse conteúdo não foi entregue por inteiro e não pode mais ser recuperado daqui. "
+                + (notice == 0 ? "A Platform foi avisada."
+                        : notice == 1 ? "A Platform ainda não foi avisada de tudo: o aviso é tentado de novo a cada hora, com este computador habilitado."
+                                : "Não foi possível avisar a Platform de tudo: ela não reconhece mais a atribuição dessas execuções.");
     }
 
     static final String CODE_FIELD = "Código de habilitação";

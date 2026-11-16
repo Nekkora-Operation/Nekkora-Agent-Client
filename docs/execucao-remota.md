@@ -127,8 +127,8 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 |---|---|
 | **Código da tentativa**: o ZIP baixado, a cópia extraída e a cópia que foi executada | sempre, quando a tentativa está resolvida com a Platform (qualquer desfecho). O registro da execução fica |
 | **Pasta de saída** (o que a automação gravou) | **só** com a confirmação de recebimento conferida: cada arquivo confirmado pela Platform com o mesmo número, tamanho e SHA-256; fechamento desta tentativa aceito com as mesmas contagens; nenhum arquivo de fora; e a pasta, relida e recalculada antes de apagar, igual ao que foi confirmado |
-| Pasta de saída com arquivo fora do limite (`OUT_OF_LIMIT`), envio não confirmado (`NOT_CONFIRMED`) ou alterada depois do envio (`CHANGED_AFTER_SEND`) | **fica guardada**, marcada como pendente (`pendente.txt`: início e motivo). Aparece na tela "Execução remota" com a quantidade, o tamanho, a pasta e a data de remoção. É removida **7 dias** depois da marca (`Runner.MANAGED_OUTPUT_RETENTION`) |
-| Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo e de hora em hora, a varredura tira o **código** das tentativas que não são a pendente. A pasta de saída que sobrou sem marca é marcada nesse momento: o prazo de 7 dias começa aí, nunca antes |
+| Pasta de saída com arquivo fora do limite (`OUT_OF_LIMIT`), envio não confirmado (`NOT_CONFIRMED`) ou alterada depois do envio (`CHANGED_AFTER_SEND`) | **fica guardada**, marcada como pendente (`pendente.txt`: início e motivo). Aparece na tela "Execução remota" com a quantidade, o tamanho, a pasta e a data de remoção. É removida quando vence o **prazo de guarda** (padrão 7 dias, configurável; ver "Prazo de guarda"), contado da marca |
+| Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo e de hora em hora, a varredura tira o **código** das tentativas que não são a pendente. A pasta de saída que sobrou sem marca é marcada nesse momento: o prazo de guarda começa aí, nunca antes |
 | O que a limpeza **nunca** alcança | só pastas de tentativa (nome no formato de UUID) dentro de `remota/tentativas`. Projeto original, ambiente Python, registros de execuções locais, registro da execução remota e qualquer pasta pessoal ficam fora do alcance |
 
 - **Execução interrompida não é duplicada.** Se o aplicativo fecha com a execução em andamento, ao reabrir o motor
@@ -157,6 +157,37 @@ não executa, ou entrega sem o ambiente ou o Python).
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
 
+### Prazo de guarda do que a Platform não confirmou
+
+Vale para a **pasta de saída** e para a **fila de registros** de uma tentativa já terminada cujo recebimento a Platform
+não confirmou. É retenção **local**; não substitui a retenção do servidor, que continua pendente.
+
+| Ponto | Como é |
+|---|---|
+| Padrão | **7 dias** (`MachineVault.DEFAULT_RETENTION_DAYS`) |
+| Como mudar, sem alterar o programa | um arquivo de texto `prazo-de-guarda.txt` na pasta `remota` dos dados do aplicativo (`%LOCALAPPDATA%\Nekkora\AgentClient\remota\`), com um número inteiro de dias na primeira linha, de **1 a 90** |
+| Valor inválido | arquivo ausente, vazio, com texto, zero, negativo ou acima de 90: vale o padrão. Um valor inválido nunca encurta nem alonga a guarda |
+| Quando passa a valer | é lido a cada limpeza (ao abrir e de hora em hora) e a cada vez que a tela é montada. Não é preciso reabrir o aplicativo |
+| O que não entra na contagem | a tentativa **pendente**: em andamento, ou terminada e ainda enviando. A fila e a pasta dela nunca são removidas pelo prazo. Com uma execução em andamento, a limpeza das pastas não roda |
+| De quando conta | pasta de saída: da marca de pendência, gravada quando o envio termina sem confirmação. Fila de registros: da última gravação do arquivo |
+| Aviso prévio | a tela "Execução remota" mostra, enquanto a pendência existe, **a data** de remoção e **o motivo** ("é quando vence o prazo de guarda de N dias sem confirmação de recebimento"). Para resultados, também a quantidade, o tamanho e a pasta |
+| O que já foi confirmado | sai antes, na hora da confirmação. O prazo é só para o que não foi confirmado |
+
+**Depois do descarte** fica um registro mínimo, por tentativa, em `remota/guarda/` (protegido pelo Windows): o tipo
+(registros ou resultados), quanto havia (linhas capturadas ou arquivos) e quando foi removido. Nada do conteúdo.
+
+- A tela passa a mostrar a perda como perda: "Removido deste computador pelo prazo de guarda, sem confirmação de
+  recebimento pela Platform…", com o que a Platform sabe disso. Nunca como entregue.
+- O aplicativo **avisa a Platform** (`POST …/attempts/{t}/retention-loss`), ao abrir e de hora em hora, com o computador
+  habilitado. O aviso leva a tentativa, o tipo e quanto havia aqui; nenhum conteúdo.
+- Para o aviso, o registro guarda o token da atribuição. Ele sai do registro quando o aviso é aceito, quando a Platform
+  não reconhece mais a atribuição (aviso impossível, e isso fica dito na tela) ou quando o computador é desabilitado.
+- O registro da perda fica 30 dias depois dela (`LossLedger.KEEP_DAYS`) e então sai.
+- Pasta guardada que some **antes** do prazo (a pessoa copiou e apagou) não é perda por prazo: nada é registrado nem avisado.
+
+Limites: o aviso depende de o aplicativo voltar a rodar com o computador habilitado. Sobra de uma queda, sem registro
+de guarda, é removida no prazo sem aviso à Platform (não há token para avisar).
+
 ## Registros: a saída do processo (T05)
 
 **Captura de stdout/stderr é funcionalidade nova.** Antes desta missão o aplicativo lia a saída do processo e a
@@ -169,7 +200,7 @@ descartava.
 | O que o aplicativo mostra | **nada do conteúdo.** A tela continua mostrando só o estado da máquina |
 | Fila local | um arquivo por tentativa em `remota/fila/`, só para a entrega. Cada bloco gravado passa pela proteção do Windows (o mesmo usuário, neste computador) |
 | Quando a fila é apagada | quando a Platform confirma o fechamento do envio com as mesmas contagens. Tentativa que não iniciou não tem fila |
-| Sem confirmação | a fila fica no disco e é apagada **7 dias** depois de parada (`MachineVault.LOG_QUEUE_RETENTION`) |
+| Sem confirmação | a fila fica no disco, aparece na tela como pendência (sem o conteúdo) e é apagada quando vence o **prazo de guarda** (padrão 7 dias, configurável), contado da última gravação dela |
 | Segredos | antes de entrar na fila saem do texto: a credencial da máquina, o token da atribuição, códigos de habilitação e valores de cabeçalho de autorização |
 | `STDERR` | é um **canal**, não um nível. Nada é classificado pelo texto |
 | Limite por linha | 8 KiB; o excedente da linha é lido e desprezado, e a linha vai marcada como cortada |
@@ -249,6 +280,11 @@ temporária.
 | Resultados: ordem, nome relativo, limites contados, retomada sem duplicar, fechamento, nada para o que não executou | `RemoteDeliveryTest` (3 dos 19) |
 | Limpeza e recuperação: resultado pendente não é apagado antes da confirmação; varredura preserva a pendente e os resultados; processo adotado ao reabrir, nada relançado; código sai, saída só quando pedida | `RemoteDeliveryTest.resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento`, `RemoteWorkTest.aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro`, `RemoteWorkTest.limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado` |
 | Confirmação que corresponde ao enviado; pendência marcada, visível e com prazo; nada fora da tentativa é tocado | `RemoteDeliveryTest.aPastaDeSaidaSoSaiQuandoAConfirmacaoCorrespondeATentativaEAosArquivosEnviados`, `RemoteWorkTest.resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa`, `RemoteDesktopTest.resultadoGuardadoSemConfirmacaoApareceNaTelaComAPastaEADataDeRemocao` |
+| Prazo de guarda: configurável por arquivo, valor inválido volta ao padrão, lido a cada limpeza | `RemoteDeliveryTest.oPrazoDeGuardaEConfiguravelPorArquivoEValorInvalidoNaoEncurtaNemAlongaAGuarda`, `RemoteWorkTest.resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa` |
+| Prazo de guarda: execução em andamento fora da contagem; data conhecida antes; fila removida deixa registro; aviso à Platform com rede e sem rede; nada reenviado; resultado inalterado | `RemoteDeliveryTest.filaRemovidaPeloPrazoDeixaRegistroDaPerdaEAPlatformEAvisadaQuandoPossivel` |
+| Prazo de guarda: pasta de saída removida deixa registro; aviso impossível fica dito; desabilitar não apaga o registro; sumir antes do prazo não é perda | `RemoteDeliveryTest.pastaDeSaidaRemovidaPeloPrazoDeixaRegistroEOAvisoImpossivelFicaDito`, `.pastaGuardadaQueSomeAntesDoPrazoNaoViraPerdaPorPrazo` |
+| Registro de guarda: protegido no disco, token só enquanto há aviso a dar, some 30 dias depois da perda | `LossLedgerTest` (DPAPI real) |
+| Tela: data e motivo antes da remoção; registros pendentes sem conteúdo; texto da perda | `RemoteDesktopTest` (`-Pdesktop`) |
 | Registros: leitura linha a linha, corte, página de código, quem recebe falhando | `OutputLinesTest` |
 | Codificação: caractere de 2, 3 e 4 bytes dividido entre leituras (pedaços de 1 a 7 bytes); linha com byte inválido lida inteira na página de código; sequências UTF-8 malformadas; uma linha não contamina a outra | `OutputLinesTest.caractereDivididoEntreLeiturasChegaInteiroEmQualquerPontoDeCorte`, `OutputLinesTest.aDecisaoDeCodificacaoEPorLinhaInteiraEUmaLinhaNaoContaminaAOutra` |
 | Saída da execução local: formato, canais, linha cortada, segredos, limite de linhas e de tamanho, falha de disco | `OutputTextTest` |
@@ -271,8 +307,10 @@ temporária.
   padrão do Windows), sem busca e sem filtro. O arquivo não é protegido além das permissões da pasta do usuário.
 - A execução local passou a ser lançada com `-u` (antes, sem). Um script que dependia de a saída só aparecer no fim não
   muda de resultado, mas escreve com mais chamadas ao sistema.
-- Registros: sem nível (tudo `UNKNOWN`); sem limite de espaço total da fila; a fila que não pôde ser confirmada não aparece
-  na tela (o aplicativo não mostra conteúdo de registro remoto); até 1 segundo de saída pode se perder se o aplicativo cair.
+- Registros: sem nível (tudo `UNKNOWN`); sem limite de espaço total da fila; até 1 segundo de saída pode se perder se o
+  aplicativo cair. A fila que não pôde ser confirmada aparece na tela como pendência, sem o conteúdo.
+- O que ficou pendente **não é reenviado** depois que a tentativa é dada por resolvida: fica guardado para a pessoa copiar
+  (resultados) e sai no prazo. O prazo de guarda é configurado por arquivo, não pela tela.
 - Depois de o aplicativo ser reaberto no meio de uma execução, a saída do processo **não é mais capturada** (o fluxo ficou
   sem leitor); a lacuna fica dita nos registros.
 - Não há aviso de espaço em disco para pasta de saída ou fila pendentes.

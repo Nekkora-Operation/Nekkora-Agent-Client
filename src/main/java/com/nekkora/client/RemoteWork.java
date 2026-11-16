@@ -89,6 +89,11 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
+    public void retentionDays(int days) {
+        runner.setManagedKeep(java.time.Duration.ofDays(days));
+    }
+
+    @Override
     public void holdOutputs(String attemptId, String reason) {
         runner.holdManagedOutputs(attemptId, reason);
     }

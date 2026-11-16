@@ -286,6 +286,24 @@ class RemoteWorkTest {
         assertFalse(Files.exists(Path.of(job.dir())));
         assertTrue(work.held(null).isEmpty());
 
+        // prazo configurado (2 dias): vale para a data anunciada e para a remocao; valor fora de 1 a 90 dias nao muda nada
+        RemoteMachine.Job two = job(OK, List.of());
+        Path kept = Files.createDirectories(Path.of(two.dir()).resolve("saida").resolve("ex-" + "2".repeat(32)));
+        Files.writeString(kept.resolve("dois-dias.txt"), "abc");
+        work.retentionDays(2);
+        work.holdOutputs(two.attemptId(), "NOT_CONFIRMED");
+        assertEquals(now.get() + 2 * 86_400L, work.held(null).get(0).removeAtEpochSecond());
+        work.retentionDays(0);
+        work.retentionDays(91);
+        assertEquals(now.get() + 2 * 86_400L, work.held(null).get(0).removeAtEpochSecond(), "prazo invalido e ignorado");
+        now.addAndGet(2 * 86_400L - 1);
+        work.sweep(null);
+        assertTrue(Files.exists(kept.resolve("dois-dias.txt")));
+        now.addAndGet(1);
+        work.sweep(null);
+        assertFalse(Files.exists(kept.resolve("dois-dias.txt")));
+        work.retentionDays(7);
+
         // sobra sem marca (queda antes de marcar): o prazo comeca quando ela e vista, nunca antes
         RemoteMachine.Job crashed = job(OK, List.of());
         Path leftover = Files.createDirectories(Path.of(crashed.dir()).resolve("saida").resolve("ex-" + "3".repeat(32)));

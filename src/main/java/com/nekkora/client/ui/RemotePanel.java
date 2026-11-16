@@ -49,6 +49,8 @@ final class RemotePanel extends JPanel {
     private final WrappedText reportsPython = new WrappedText(WIDTH).alignLeft();
     private final WrappedText pythonReported = new WrappedText(WIDTH).alignLeft();
     private final Notice held = new Notice(WIDTH);
+    private final Notice heldLogs = new Notice(WIDTH);
+    private final Notice lost = new Notice(WIDTH);
     private final GhostButton refreshPython = GhostButton.text(RemoteText.REFRESH_PYTHON);
     private final JLabel codeLabel = new JLabel(RemoteText.CODE_FIELD);
     private final JTextField code = new JTextField(20);
@@ -109,11 +111,11 @@ final class RemotePanel extends JPanel {
         footer.setOpaque(false);
         footer.add(close);
 
-        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, held, enableSection, enabledSection,
-                disableSection, result, footer};
+        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, held, heldLogs, lost, enableSection,
+                enabledSection, disableSection, result, footer};
         int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
-                ClientTheme.SPACE_4, 0};
+                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -252,15 +254,35 @@ final class RemotePanel extends JPanel {
         pythonReported.setVisible(!reported.isEmpty());
         refreshPython.setVisible(linked);
         // pendencia visivel em qualquer estado da habilitacao: o que ficou neste computador sem confirmacao de recebimento
+        // a data e o motivo da remocao sao ditos ANTES de ela acontecer: o prazo de guarda vigente e o dia em que ele vence
+        int keepDays = machine.retentionDays();
         java.util.List<RemoteMachine.Held> pending = machine.heldResults();
         if (pending.isEmpty()) {
             held.clear();
         } else {
             long first = pending.stream().mapToLong(RemoteMachine.Held::removeAtEpochSecond).min().orElse(0);
             held.show(Notice.Kind.WARNING, RemoteText.held(pending.size(), pending.stream().mapToInt(RemoteMachine.Held::files).sum(),
-                    pending.stream().mapToLong(RemoteMachine.Held::bytes).sum(), pending.stream().anyMatch(h -> "OUT_OF_LIMIT".equals(h.reason())),
-                    java.time.Instant.ofEpochSecond(first).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                    RemoteMachine.heldFolder(pending)));
+                    pending.stream().mapToLong(RemoteMachine.Held::bytes).sum(), pending.stream().anyMatch(h -> "OUT_OF_LIMIT".equals(h.reason())), day(first),
+                    RemoteMachine.heldFolder(pending), keepDays));
+        }
+        java.util.List<RemoteMachine.HeldLogs> queues = machine.heldLogs();
+        if (queues.isEmpty()) {
+            heldLogs.clear();
+        } else {
+            heldLogs.show(Notice.Kind.WARNING, RemoteText.heldLogs(queues.size(),
+                    day(queues.stream().mapToLong(RemoteMachine.HeldLogs::removeAtEpochSecond).min().orElse(0)), keepDays));
+        }
+        // o que ja foi removido pelo prazo nunca aparece como entregue: fica dito aqui, com o que a Platform sabe disso
+        java.util.List<RemoteMachine.Lost> gone = machine.lost();
+        if (gone.isEmpty()) {
+            lost.clear();
+        } else {
+            java.util.List<RemoteMachine.Lost> files = gone.stream().filter(l -> !l.logs()).toList();
+            java.util.List<RemoteMachine.Lost> lines = gone.stream().filter(RemoteMachine.Lost::logs).toList();
+            int notice = gone.stream().anyMatch(l -> "PENDING".equals(l.notice())) ? 1 : gone.stream().anyMatch(l -> "IMPOSSIBLE".equals(l.notice())) ? 2 : 0;
+            lost.show(Notice.Kind.ERROR, RemoteText.lost(files.size(), files.stream().mapToInt(RemoteMachine.Lost::count).sum(), lines.size(),
+                    lines.stream().mapToInt(RemoteMachine.Lost::count).sum(),
+                    day(gone.stream().mapToLong(RemoteMachine.Lost::lostAtEpochSecond).max().orElse(0)), notice));
         }
         what.setVisible(s == Status.NOT_ENABLED);
         enableSection.setVisible(s == Status.NOT_ENABLED);
@@ -376,6 +398,18 @@ final class RemotePanel extends JPanel {
 
     Notice resultNotice() {
         return result;
+    }
+
+    Notice heldLogsNotice() {
+        return heldLogs;
+    }
+
+    Notice lostNotice() {
+        return lost;
+    }
+
+    private static String day(long epochSecond) {
+        return java.time.Instant.ofEpochSecond(epochSecond).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
     }
 
     Notice heldNotice() {
