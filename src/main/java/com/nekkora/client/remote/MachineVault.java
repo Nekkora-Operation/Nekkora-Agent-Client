@@ -204,8 +204,73 @@ public final class MachineVault {
         return new AttemptJournal(dir, keyring);
     }
 
-    /** Por quanto tempo a fila de registros de uma tentativa ja resolvida fica no disco sem confirmacao de recebimento. */
-    static final java.time.Duration LOG_QUEUE_RETENTION = java.time.Duration.ofDays(7);
+    /** O prazo de guarda quando nada foi configurado, em dias. */
+    public static final int DEFAULT_RETENTION_DAYS = 7;
+    /** O arquivo, na pasta {@code remota/}, onde o prazo de guarda pode ser configurado: um numero inteiro de dias, de 1 a 90. */
+    public static final String RETENTION_FILE = "prazo-de-guarda.txt";
+    static final int MAX_RETENTION_DAYS = 90;
+
+    /**
+     * Por quantos dias fica neste computador o que a Platform nao confirmou ter recebido (a fila de registros e a pasta de
+     * saida de uma tentativa ja terminada). Configuravel SEM mudar o programa: a primeira linha de {@link #RETENTION_FILE}, um
+     * inteiro de 1 a 90. Arquivo ausente, ilegivel ou com outro conteudo: {@link #DEFAULT_RETENTION_DAYS} - um valor invalido
+     * nunca encurta nem alonga a guarda. E lido a cada uso: mudar o arquivo vale a partir da limpeza seguinte.
+     */
+    public int retentionDays() {
+        try {
+            Path f = dir.resolve(RETENTION_FILE);
+            if (!Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.size(f) > 64) {
+                return DEFAULT_RETENTION_DAYS;
+            }
+            String first = Files.readString(f, java.nio.charset.StandardCharsets.UTF_8).strip().split("\\R", 2)[0].strip();
+            if (!first.matches("[0-9]{1,2}")) {
+                return DEFAULT_RETENTION_DAYS;
+            }
+            int days = Integer.parseInt(first);
+            return days >= 1 && days <= MAX_RETENTION_DAYS ? days : DEFAULT_RETENTION_DAYS;
+        } catch (IOException | RuntimeException e) {
+            return DEFAULT_RETENTION_DAYS;
+        }
+    }
+
+    java.time.Duration retention() {
+        return java.time.Duration.ofDays(retentionDays());
+    }
+
+    /** O registro minimo do que ficou sem confirmacao e do que foi removido pelo prazo (ver {@link LossLedger}). */
+    LossLedger losses() {
+        return new LossLedger(dir.resolve("guarda"), keyring);
+    }
+
+    /** Uma fila de registros parada no disco, sem confirmacao. {@code removeAt}: a partir de quando a limpeza a remove. */
+    record QueueHeld(String attemptId, long sinceEpochSecond, long removeAtEpochSecond) {
+    }
+
+    /** As filas de registros guardadas (fora a da tentativa pendente). O prazo conta da ultima gravacao do arquivo. */
+    java.util.List<QueueHeld> heldLogQueues(String keepAttemptId) {
+        java.util.List<QueueHeld> out = new java.util.ArrayList<>();
+        Path root = dir.resolve("fila");
+        if (!Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return out;
+        }
+        long keep = retention().toSeconds();
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root, "*.fila")) {
+            for (Path f : ds) {
+                String name = String.valueOf(f.getFileName());
+                String key = name.substring(0, name.length() - ".fila".length());
+                if (key.equals(keepAttemptId) || !key.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                        || !Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                long since = Files.getLastModifiedTime(f, java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant().getEpochSecond();
+                out.add(new QueueHeld(key, since, since + keep));
+            }
+        } catch (IOException | RuntimeException e) {
+            // o que ja foi lido vale
+        }
+        out.sort(java.util.Comparator.comparing(QueueHeld::sinceEpochSecond).thenComparing(QueueHeld::attemptId));
+        return out;
+    }
 
     /** A fila de registros de uma tentativa (um arquivo protegido em {@code fila/}). {@code secrets}: o que nunca entra nela. */
     LogQueue logQueue(String attemptId, java.util.List<String> secrets) {
@@ -216,15 +281,17 @@ public final class MachineVault {
     }
 
     /**
-     * Apaga as filas de registros que nao sao a da tentativa pendente e estao paradas ha mais de {@link #LOG_QUEUE_RETENTION}.
-     * So arquivos {@code <uuid>.fila} dentro de {@code fila/}. Devolve quantas apagou.
+     * Apaga as filas de registros que nao sao a da tentativa pendente e estao paradas ha mais que o prazo de guarda
+     * ({@link #retentionDays}). A fila da tentativa pendente (em andamento, ou ainda enviando) nunca entra na conta. So arquivos
+     * {@code <uuid>.fila} dentro de {@code fila/}. Devolve as tentativas cujas filas apagou.
      */
-    int sweepLogQueues(String keepAttemptId, java.time.Instant now) {
+    java.util.List<String> sweepLogQueues(String keepAttemptId, java.time.Instant now) {
+        java.util.List<String> n = new java.util.ArrayList<>();
         Path root = dir.resolve("fila");
         if (!Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-            return 0;
+            return n;
         }
-        int n = 0;
+        java.time.Duration keep = retention();
         try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root, "*.fila")) {
             for (Path f : ds) {
                 String name = String.valueOf(f.getFileName());
@@ -233,9 +300,9 @@ public final class MachineVault {
                         || !Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                     continue;
                 }
-                if (Files.getLastModifiedTime(f, java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant().plus(LOG_QUEUE_RETENTION).isBefore(now)) {
+                if (Files.getLastModifiedTime(f, java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant().plus(keep).isBefore(now)) {
                     Files.deleteIfExists(f);
-                    n++;
+                    n.add(key);
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -251,6 +318,8 @@ public final class MachineVault {
 
     /** Remove o vinculo deste computador. Depois disso a maquina nao consegue mais se autenticar. */
     public void clear() throws IOException {
+        // os tokens das atribuicoes nao servem mais: o registro de perda fica (sem token), o resto sai
+        losses().unlink(java.time.Instant.now().getEpochSecond());
         clearPending();
         journal().clear();
         Files.deleteIfExists(dir.resolve(SALT));
