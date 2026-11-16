@@ -59,6 +59,11 @@ class LogQueueTest {
         assertEquals("credencial [removido] e token [removido]", batch.get(2).message());
         assertTrue(batch.get(2).truncated());
         assertEquals("codigo [removido] fim", batch.get(3).message());
+        // a Platform remove de novo ao receber: repetir a remocao nao pode mudar o que ja saiu limpo daqui
+        for (LogQueue.Line l : batch) {
+            assertEquals(l.message(), q.redact(l.message()), "remocao repetida");
+        }
+        assertEquals("cabecalho Authorization: [removido] e o resto", q.redact(q.redact("cabecalho Authorization: Bearer abcdefghijklmnop e o resto")));
         // o aplicativo fecha e abre: a fila volta do disco, na mesma ordem, e continua a sequencia
         LogQueue again = open();
         assertTrue(again.existed());
