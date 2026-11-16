@@ -84,6 +84,85 @@ class OutputLinesTest {
         assertTrue(big.text().getBytes(StandardCharsets.UTF_8).length <= OutputLines.MAX_LINE_BYTES);
     }
 
+    /** Entrega {@code data} em pedacos do tamanho pedido: cada {@code read} devolve no maximo {@code chunk} bytes. */
+    private static java.io.InputStream chunks(byte[] data, int chunk) {
+        return new java.io.InputStream() {
+            private int at;
+
+            @Override
+            public int read() {
+                return at < data.length ? data[at++] & 0xff : -1;
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) {
+                if (at >= data.length) return -1;
+                int n = Math.min(Math.min(len, chunk), data.length - at);
+                System.arraycopy(data, at, b, off, n);
+                at += n;
+                return n;
+            }
+        };
+    }
+
+    @Test
+    void caractereDivididoEntreLeiturasChegaInteiroEmQualquerPontoDeCorte() {
+        // 2 bytes (ç, ã), 3 bytes (€, ✓) e 4 bytes (😀) por caractere, em duas linhas e com fim de linha do Windows
+        String first = "ação nº 1 custa 10 € ✓ 😀";
+        String second = "coração à mão 😀😀";
+        byte[] data = (first + "\r\n" + second + "\n").getBytes(StandardCharsets.UTF_8);
+        for (int chunk = 1; chunk <= 7; chunk++) {
+            List<Seen> seen = new ArrayList<>();
+            AtomicLong bytes = new AtomicLong();
+            OutputLines.pump(chunks(data, chunk), false, (e, at, cut, text) -> seen.add(new Seen(e, cut, text)), bytes, Clock.systemUTC());
+            assertEquals(List.of(new Seen(false, false, first), new Seen(false, false, second)), seen, "pedacos de " + chunk + " byte(s)");
+            assertEquals(data.length, bytes.get());
+        }
+        // o mesmo na pagina de codigo do sistema (um byte por caractere acentuado, quando ela os tem): nada se perde nem se junta
+        if (OutputLines.NATIVE.newEncoder().canEncode("ação à mão") && !OutputLines.NATIVE.equals(StandardCharsets.UTF_8)) {
+            byte[] local = "ação à mão\r\nsegunda\n".getBytes(OutputLines.NATIVE);
+            List<Seen> seen = new ArrayList<>();
+            OutputLines.pump(chunks(local, 1), false, (e, at, cut, text) -> seen.add(new Seen(e, cut, text)), new AtomicLong(), Clock.systemUTC());
+            assertEquals(List.of(new Seen(false, false, "ação à mão"), new Seen(false, false, "segunda")), seen);
+        }
+    }
+
+    @Test
+    void aDecisaoDeCodificacaoEPorLinhaInteiraEUmaLinhaNaoContaminaAOutra() {
+        // linha 1: UTF-8 valido. linha 2: UTF-8 valido seguido de um byte que nao e UTF-8. linha 3: UTF-8 valido de novo.
+        ByteArrayOutputStream data = new ByteArrayOutputStream();
+        data.writeBytes("válida\n".getBytes(StandardCharsets.UTF_8));
+        byte[] mixed = concat("é".getBytes(StandardCharsets.UTF_8), new byte[] {(byte) 0xff});
+        data.writeBytes(mixed);
+        data.write('\n');
+        data.writeBytes("também válida\n".getBytes(StandardCharsets.UTF_8));
+        // sequencias UTF-8 malformadas: continuacao solta, inicio sem continuacao, forma longa demais, substituto codificado
+        byte[][] malformed = {{(byte) 0x80}, {(byte) 0xc3}, {(byte) 0xc0, (byte) 0xaf}, {(byte) 0xed, (byte) 0xa0, (byte) 0x80}, {(byte) 0xf0, (byte) 0x9f, (byte) 0x98}};
+        for (byte[] m : malformed) {
+            data.writeBytes(m);
+            data.write('\n');
+        }
+        List<Seen> seen = pump(data.toByteArray(), false, new AtomicLong());
+        assertEquals(3 + malformed.length, seen.size());
+        assertEquals("válida", seen.get(0).text());
+        // a linha com byte invalido e lida INTEIRA na pagina de codigo do sistema: o "é" em UTF-8 vira dois caracteres dela
+        assertEquals(OutputLines.clean(new String(mixed, OutputLines.NATIVE)), seen.get(1).text());
+        assertEquals("também válida", seen.get(2).text(), "a linha seguinte volta a ser lida como UTF-8");
+        for (int i = 0; i < malformed.length; i++) {
+            Seen s = seen.get(3 + i);
+            assertEquals(OutputLines.clean(new String(malformed[i], OutputLines.NATIVE)), s.text(), "malformada " + i);
+            assertFalse(s.truncated());
+            // nunca lanca, nunca some: toda linha lida vira uma linha de texto, sem caractere de controle
+            assertTrue(s.text().chars().noneMatch(c -> (c < 0x20 && c != '\t') || c == 0x7f), s.text());
+        }
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        byte[] out = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
     @Test
     void semQuemRecebaASaidaELidaEDesprezadaEQuemRecebeFalhandoNaoParaALeitura() {
         AtomicLong bytes = new AtomicLong();

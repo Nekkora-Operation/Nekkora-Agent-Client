@@ -89,6 +89,11 @@ class ManagedRunTest {
         assertTrue(controller.managed(s.record().id()));
         ExecutionRecord end = waitEnd(controller);
         assertEquals(ExecutionState.SUCCEEDED, end.state());
+        // T05: a execucao gerenciada NAO grava a saida do processo em arquivo local (ela e entregue a quem pediu, ou desprezada)
+        assertTrue(controller.outputText(end.id()).isEmpty());
+        try (java.util.stream.Stream<Path> all = Files.walk(tmp)) {
+            assertTrue(all.noneMatch(f -> f.getFileName().toString().equals(RunController.OUTPUT_TEXT)), "nenhum arquivo de saida do processo");
+        }
         // a aprovacao local nao foi consultada nem criada: o mesmo pacote, pelo caminho local, continua nao aprovado
         assertFalse(approvals.approved(job.context().fingerprint()));
         assertFalse(Files.exists(ApprovalLedger.defaultFile(dataDir)));
