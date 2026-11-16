@@ -892,12 +892,17 @@ class RemoteDeliveryTest {
         m.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
         assertNull(gw.attemptExit);
+        // o motor conhece a execucao e diz que ela nao esta em andamento: este computador CONFERIU que o processo nao esta mais
+        // aqui, e afirma isso junto do desfecho desconhecido - e o que reconcilia a tentativa pela maquina
+        assertTrue(gw.lastProcessAbsent);
         gw.queue();
         work.state = "RUNNING";
         m.pull();
         work.known = false;
         m.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        // o motor NAO conhece mais a execucao: nao ha o que conferir, e nada e afirmado
+        assertFalse(gw.lastProcessAbsent);
         assertFalse(Files.exists(journal()));
     }
 
@@ -1115,6 +1120,7 @@ class RemoteDeliveryTest {
         RemoteMachine second = machine(true);
         second.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertFalse(gw.lastProcessAbsent, "fechou antes de registrar a execucao: nao ha processo conhecido para conferir, e nada e afirmado");
         assertEquals(1, work.jobs.size(), "nada foi lancado de novo");
         assertFalse(Files.exists(journal()));
     }

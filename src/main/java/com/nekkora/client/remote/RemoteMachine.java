@@ -610,7 +610,7 @@ public final class RemoteMachine implements AutoCloseable {
                 keep(e);
             }
             if (e.phase() != AttemptJournal.Phase.RESULTS) {
-                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode());
+                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode(), processAbsent(e, w));
                 if (w == null || e.phase() != AttemptJournal.Phase.RUNNING) {
                     // nao chegou a executar: nao ha o que enviar
                     forget(e, w);
@@ -1218,6 +1218,23 @@ public final class RemoteMachine implements AutoCloseable {
                 return false;
             }
             throw x;
+        }
+    }
+
+    /**
+     * Junto de "terminou sem prova do resultado": este computador CONFERIU que o processo daquela tentativa nao esta mais em
+     * execucao? So quando a execucao chegou a ser lancada aqui (ha o identificador dela) e o motor a conhece e diz que nao esta em
+     * andamento - o motor so fecha uma execucao que ele nao viu terminar depois de conferir que o processo dela nao existe mais.
+     * Quando o aplicativo fechou entre pedir o inicio e registrar a execucao, ou o motor nao a conhece, nao ha o que conferir: falso.
+     */
+    private static boolean processAbsent(AttemptJournal.Entry e, Work w) {
+        if (!"ENDED_UNKNOWN".equals(e.report()) || e.phase() != AttemptJournal.Phase.RUNNING || w == null || e.run() == null) {
+            return false;
+        }
+        try {
+            return w.progress(e.run()).map(p -> !"RUNNING".equals(p.state())).orElse(false);
+        } catch (RuntimeException x) {
+            return false;
         }
     }
 

@@ -229,6 +229,16 @@ de trabalho novo passam pela mesma vez; por isso ela é limitada.
   consulta e nenhum arquivo de resultado. O estado da tentativa ativa e o cancelamento são tratados antes, em toda consulta.
 - Limite conhecido: um arquivo grande numa conexão lenta ainda atrasa a presença, porque ela usa a mesma vez.
 
+### Resultado não confirmado: quando este computador confirma que o processo acabou
+
+"Terminou sem prova do resultado" bloqueia, na Platform, a repetição da solicitação e deixa esta máquina indisponível até a
+tentativa ser reconciliada. O aplicativo reconcilia a tentativa **ele mesmo** quando pode: junto do desfecho desconhecido, afirma
+que conferiu que o processo daquela execução não está mais em execução aqui. Isso só acontece quando a execução chegou a ser
+lançada e o motor a conhece — ele confere o processo que lançou (PID, início e executável) antes de fechá-la.
+
+Não afirma nada quando o aplicativo fechou entre pedir o início e registrar a execução, ou quando o motor não a conhece mais.
+Nesses casos só a declaração de um ORG_ADMIN, na Platform, libera uma nova tentativa — e esta máquina continua indisponível.
+
 ### Vínculo novo não herda o anterior
 
 No fim de um vínculo o token de cada atribuição é descartado e o que ficou guardado passa a "não pode mais ser enviado: vínculo
