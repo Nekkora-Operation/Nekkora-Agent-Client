@@ -86,6 +86,8 @@ public final class FakeGateway implements AutoCloseable {
     // ---- entrega (T02): no maximo uma tentativa, como no servidor real
     /** A tentativa desta maquina; nula = nao ha. */
     public volatile String attemptId;
+    /** O ultimo relato de estado afirmou que o processo da tentativa nao esta mais em execucao na maquina? */
+    public volatile boolean lastProcessAbsent;
     /** QUEUED, OFFERED, RECEIVED, REFUSED, CANCELLED... */
     public volatile String attemptState;
     public volatile String attemptReason;
@@ -519,6 +521,7 @@ public final class FakeGateway implements AutoCloseable {
             String wanted = field(text, "state");
             String reason = field(text, "refusalReason");
             reported.add(wanted);
+            lastProcessAbsent = text.contains("\"processAbsent\":true");
             java.util.regex.Matcher exit = java.util.regex.Pattern.compile("\"exitCode\":(-?\\d+)").matcher(text);
             // as mesmas transicoes do servidor real (046)
             List<String> next = switch (attemptState) {

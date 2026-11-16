@@ -395,9 +395,19 @@ public final class MachineChannel {
 
     /** Informa o estado da tentativa e renova o prazo da comunicacao. {@code refusalReason}: so com REFUSED. */
     AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason, Integer exitCode) throws Refused {
+        return state(credential, attemptId, token, epoch, state, refusalReason, exitCode, false);
+    }
+
+    /**
+     * {@code processAbsent}: junto de ENDED_UNKNOWN, este computador afirma que CONFERIU que o processo daquela tentativa nao esta
+     * mais em execucao aqui (o desfecho continua desconhecido). E o que reconcilia a tentativa "pela maquina": sem isso a Platform
+     * mantem a repeticao bloqueada e esta maquina indisponivel. So e enviado quando verdadeiro.
+     */
+    AttemptStatus state(String credential, String attemptId, String token, int epoch, String state, String refusalReason, Integer exitCode,
+                        boolean processAbsent) throws Refused {
         return attempt(credential, attemptId, "/state", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"state\":" + Json.quote(state)
                 + (refusalReason == null ? "" : ",\"refusalReason\":" + Json.quote(refusalReason)) + (exitCode == null ? "" : ",\"exitCode\":" + exitCode)
-                + "}");
+                + (processAbsent ? ",\"processAbsent\":true" : "") + "}");
     }
 
     /** Limites dos resultados de uma tentativa (os mesmos da Platform; pontos de partida de laboratorio). */
