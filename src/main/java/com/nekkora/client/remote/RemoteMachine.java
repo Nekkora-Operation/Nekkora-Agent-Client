@@ -934,6 +934,18 @@ public final class RemoteMachine implements AutoCloseable {
     private final java.util.Map<String, long[]> heldRetry = new java.util.HashMap<>();
     static final long HELD_RETRY_FIRST_SECONDS = 30;
     static final long HELD_RETRY_MAX_SECONDS = 900;
+    /**
+     * Por quanto tempo, no maximo, uma consulta fica enviando registros guardados antes de devolver a vez (milissegundos). Uma
+     * fila grande (dezenas de milhares de linhas) leva minutos para chegar a Platform: enviada de uma vez, seguraria a maquina -
+     * a presenca e a consulta de trabalho - por todo esse tempo. O que falta segue na consulta seguinte, sem espera.
+     */
+    long heldSendBudgetMillis = 10_000;
+    /**
+     * As filas de registros de tentativas terminadas que ainda estao sendo enviadas, abertas neste processo. A fila so sabe em
+     * memoria ate onde a Platform confirmou: reabri-la a cada consulta recomecaria o envio do inicio. Com o aplicativo reaberto,
+     * o envio recomeca uma vez (a Platform ignora o que ja tem e diz qual e a ultima linha dela).
+     */
+    private final java.util.Map<String, LogQueue> heldQueues = new java.util.HashMap<>();
 
     /** Para testes: esquece as esperas da entrega continuada (a proxima consulta tenta de novo ja). */
     void forgetHeldWaits() {
@@ -964,6 +976,8 @@ public final class RemoteMachine implements AutoCloseable {
         long at = clock.instant().getEpochSecond();
         LossLedger ledger = vault.losses();
         boolean any = false;
+        // fila que nao esta mais guardada (confirmada, impedida ou removida pelo prazo) sai da memoria
+        heldQueues.keySet().removeIf(id -> ledger.load(id).filter(x -> x.logsHeld() && x.logsBlock() == LossLedger.Block.NONE).isEmpty());
         for (LossLedger.Entry e : ledger.all(at)) {
             if (!e.deliverable()) {
                 continue;
@@ -973,8 +987,12 @@ public final class RemoteMachine implements AutoCloseable {
                 continue;
             }
             try {
-                if (e.logsHeld() && e.logsBlock() == LossLedger.Block.NONE) {
-                    sendHeldLogs(current, e, ledger);
+                if (e.logsHeld() && e.logsBlock() == LossLedger.Block.NONE && !sendHeldLogs(current, e, ledger)) {
+                    // a fatia de tempo desta consulta acabou com linhas por enviar: segue na proxima, sem espera; os registros
+                    // vao antes dos resultados
+                    heldRetry.remove(e.attemptId());
+                    any = true;
+                    continue;
                 }
                 e = ledger.load(e.attemptId()).orElse(null);
                 if (e != null && e.resultsHeld() && e.resultsBlock() == LossLedger.Block.NONE) {
@@ -1032,22 +1050,28 @@ public final class RemoteMachine implements AutoCloseable {
         holdReason(w, e.attemptId(), pending);
     }
 
-    /** Os registros guardados de uma tentativa terminada: envia o que falta, fecha, e so com o fechamento confirmado apaga a fila. */
-    private void sendHeldLogs(MachineVault.Link current, LossLedger.Entry e, LossLedger ledger) throws Refused {
+    /**
+     * Os registros guardados de uma tentativa terminada: envia o que falta, fecha, e so com o fechamento confirmado apaga a fila.
+     * {@code false}: a fatia de tempo desta consulta acabou e ainda ha linhas por enviar (nada foi fechado, nada foi apagado).
+     */
+    private boolean sendHeldLogs(MachineVault.Link current, LossLedger.Entry e, LossLedger ledger) throws Refused {
         long at = clock.instant().getEpochSecond();
         boolean mine = e.attemptId().equals(queueAttempt) && queue != null;
         LogQueue q;
         try {
-            q = mine ? queue : vault.logQueue(e.attemptId(), List.of(current.credential(), e.token()));
+            LogQueue open = heldQueues.get(e.attemptId());
+            q = mine ? queue : open != null ? open : vault.logQueue(e.attemptId(), List.of(current.credential(), e.token()));
+            heldQueues.put(e.attemptId(), q);
         } catch (RuntimeException x) {
             // este computador nao consegue abrir a fila (outro usuario, arquivo cortado): nao ha o que enviar
             ledger.logsHeld(e.attemptId(), e.token(), e.epoch(), at, e.logLines(), LossLedger.Block.CONFLICT);
-            return;
+            return true;
         }
-        if (!mine && !q.existed()) {
+        if (!mine && !q.existed() && q.lines() == 0) {
             // nao ha fila (a tentativa nao capturou nada, ou a fila ja saiu): nada a esperar deste tipo
+            heldQueues.remove(e.attemptId());
             ledger.logsSettled(e.attemptId());
-            return;
+            return true;
         }
         // quantas linhas a fila tem fica dito JA: se o prazo de guarda vencer com o envio ainda sendo tentado, a perda e
         // registrada (e avisada a Platform) com a quantidade verdadeira, nao com zero
@@ -1057,15 +1081,21 @@ public final class RemoteMachine implements AutoCloseable {
         // o prazo de guarda conta do desfecho, nao da ultima tentativa de envio: a data do arquivo e preservada
         java.nio.file.attribute.FileTime since = vault.logQueueTime(e.attemptId());
         try {
-            if (closeLogs(current.credential(), q, e.attemptId(), e.token(), e.epoch())) {
+            Boolean closed = closeLogs(current.credential(), q, e.attemptId(), e.token(), e.epoch());
+            if (closed == null) {
+                return false;
+            }
+            heldQueues.remove(e.attemptId());
+            if (closed) {
                 q.delete();
                 if (mine) {
                     dropQueue(false);
                 }
                 ledger.logsSettled(e.attemptId());
-                return;
+                return true;
             }
             ledger.logsHeld(e.attemptId(), e.token(), e.epoch(), at, q.lines(), LossLedger.Block.CONFLICT);
+            return true;
         } finally {
             vault.logQueueTime(e.attemptId(), since);
         }
@@ -1073,21 +1103,29 @@ public final class RemoteMachine implements AutoCloseable {
 
     /**
      * Envia tudo o que a fila tem e ainda nao foi confirmado e fecha o envio. {@code true}: a Platform confirmou o fechamento com
-     * as mesmas contagens. {@code false}: nao ha como confirmar (ela tem outra coisa nessas linhas, ou outro fechamento). Falha
-     * passageira: lanca, e a fila fica como esta.
+     * as mesmas contagens. {@code false}: nao ha como confirmar (ela tem outra coisa nessas linhas, ou outro fechamento).
+     * {@code null}: a fatia de tempo ({@link #heldSendBudgetMillis}) acabou com linhas por enviar - nada foi fechado; segue na
+     * consulta seguinte. Falha passageira: lanca, e a fila fica como esta.
      */
-    private boolean closeLogs(String credential, LogQueue q, String attemptId, String token, int epoch) throws Refused {
+    private Boolean closeLogs(String credential, LogQueue q, String attemptId, String token, int epoch) throws Refused {
         try {
             q.flush();
         } catch (IOException x) {
             // o que esta na memoria ainda pode ser enviado
         }
+        long until = clock.millis() + heldSendBudgetMillis;
+        boolean first = true;
         try {
             while (true) {
                 List<LogQueue.Line> batch = q.batch();
                 if (batch.isEmpty()) {
                     break;
                 }
+                if (!first && clock.millis() >= until) {
+                    // pelo menos um lote por consulta; passou da fatia, devolve a vez
+                    return null;
+                }
+                first = false;
                 try {
                     q.acked(channel.sendLogs(credential, attemptId, token, epoch, batch));
                 } catch (Refused x) {
