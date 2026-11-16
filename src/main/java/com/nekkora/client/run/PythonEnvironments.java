@@ -166,6 +166,42 @@ public final class PythonEnvironments {
         return new Discovery(List.copyOf(out), List.copyOf(failed), unanswered, cancelled);
     }
 
+    /**
+     * Uma instalacao (ou ambiente virtual) que a descoberta limitada achou e que respondeu a sondagem. {@code id} e a mesma
+     * identidade usada na escolha local (tipo + caminho real): fica neste computador.
+     */
+    public record Installed(String id, boolean virtual, String version) {}
+
+    /**
+     * As instalacoes de Python deste computador, SEM conferir pacote nenhum: a mesma descoberta limitada e a mesma sondagem
+     * de {@link #discover}, so com a versao. Quem nao respondeu fica de fora. Bloqueia (processos, com prazo).
+     */
+    public List<Installed> installed(PythonProbe.Cancel cancel) {
+        Map<String, Path> candidates = new LinkedHashMap<>();
+        for (PythonSources.Found found : safeCandidates(cancel, new ArrayList<>())) {
+            for (Path p : found.paths()) {
+                if (p == null || !p.isAbsolute() || PythonSources.storeAlias(p)) continue;
+                Path real = real(p);
+                if (real == null || PythonSources.storeAlias(real)) continue;
+                candidates.putIfAbsent(key(real), real);
+            }
+        }
+        Map<String, Installed> byPrefix = new LinkedHashMap<>();
+        for (Path python : candidates.values()) {
+            if (cancel.cancelled()) break;
+            try {
+                PythonProbe.Info info = PythonProbe.run(python, List.of(), workDir, probeTimeout, cancel);
+                Kind kind = info.virtual() ? Kind.VIRTUAL : Kind.INSTALLED;
+                byPrefix.putIfAbsent(kind + "|" + info.prefix().toLowerCase(Locale.ROOT), new Installed(id(kind, info.python()), info.virtual(), info.version()));
+            } catch (PythonProbe.Failed e) {
+                if (e.failure() == PythonProbe.Failure.CANCELLED) break;
+            } catch (RuntimeException e) {
+                // candidato que nao e um Python utilizavel: fica de fora
+            }
+        }
+        return List.copyOf(byPrefix.values());
+    }
+
     private List<PythonSources.Found> safeCandidates(PythonProbe.Cancel cancel, List<String> failed) {
         try {
             return sources.candidates(cancel);

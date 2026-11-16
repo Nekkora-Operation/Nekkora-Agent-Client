@@ -176,6 +176,11 @@ public final class Runner implements AutoCloseable {
      * As instalacoes de Python deste computador, cada uma conferida contra o pacote (versao e dependencias declaradas).
      * Descoberta LIMITADA as fontes do sistema; nada e instalado nem alterado. Bloqueia: fora da linha de eventos.
      */
+    /** As instalacoes de Python deste computador (so identidade local, tipo e versao), sem conferir pacote nenhum. */
+    public List<PythonEnvironments.Installed> installedPythons() {
+        return environments.installed(PythonProbe.Cancel.NEVER);
+    }
+
     public PythonList pythons(UUID organization, UUID workspace, String fingerprint, PythonProbe.Cancel cancel) throws Refused {
         ExecutionPackage pkg = inspected(organization, workspace, fingerprint);
         PythonEnvironments.Discovery d = environments.discover(pkg, cancel);

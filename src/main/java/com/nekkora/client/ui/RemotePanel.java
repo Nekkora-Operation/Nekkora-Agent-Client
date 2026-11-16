@@ -46,6 +46,9 @@ final class RemotePanel extends JPanel {
     private final WrappedText local = new WrappedText(WIDTH).alignLeft();
     private final Notice notYet = new Notice(WIDTH);
     private final WrappedText validity = new WrappedText(WIDTH).alignLeft();
+    private final WrappedText reportsPython = new WrappedText(WIDTH).alignLeft();
+    private final WrappedText pythonReported = new WrappedText(WIDTH).alignLeft();
+    private final GhostButton refreshPython = GhostButton.text(RemoteText.REFRESH_PYTHON);
     private final JLabel codeLabel = new JLabel(RemoteText.CODE_FIELD);
     private final JTextField code = new JTextField(20);
     private final JCheckBox confirm = new JCheckBox(RemoteText.CONFIRM);
@@ -93,6 +96,9 @@ final class RemotePanel extends JPanel {
         enableSection.add(row(enable));
 
         enabledSection.add(row(toggle, disable));
+        enabledSection.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
+        enabledSection.add(row(refreshPython));
+        reportsPython.setText(RemoteText.REPORTS_PYTHON);
 
         disableSection.add(disableWarning);
         disableSection.add(Box.createVerticalStrut(ClientTheme.SPACE_3));
@@ -102,9 +108,10 @@ final class RemotePanel extends JPanel {
         footer.setOpaque(false);
         footer.add(close);
 
-        JComponent[] all = {title, status, contact, what, local, notYet, validity, enableSection, enabledSection, disableSection, result, footer};
-        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
-                ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
+        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, enableSection, enabledSection, disableSection,
+                result, footer};
+        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -132,6 +139,7 @@ final class RemotePanel extends JPanel {
             render();
         });
         disableConfirm.addActionListener(e -> attempt(disableConfirm, machine::disable, RemoteText.DISABLED_NOW));
+        refreshPython.addActionListener(e -> attempt(null, machine::publishInventory, RemoteText.PYTHON_REFRESHED));
         close.addActionListener(e -> onClose.run());
         machine.addListener(() -> SwingUtilities.invokeLater(() -> {
             if (!disposed && !busy) {
@@ -237,6 +245,10 @@ final class RemotePanel extends JPanel {
         String until = linked ? v.credentialExpiresAt().map(RemotePanel::day).orElse("") : "";
         validity.setText(until.isEmpty() ? "" : RemoteText.validUntil(until));
         validity.setVisible(!until.isEmpty());
+        String reported = linked ? v.pythonEnvironments().map(RemoteText::pythonReported).orElse("") : "";
+        pythonReported.setText(reported);
+        pythonReported.setVisible(!reported.isEmpty());
+        refreshPython.setVisible(linked);
         what.setVisible(s == Status.NOT_ENABLED);
         enableSection.setVisible(s == Status.NOT_ENABLED);
         enabledSection.setVisible((linked || s == Status.ENDED) && !confirmingDisable);
@@ -247,7 +259,7 @@ final class RemotePanel extends JPanel {
         disable.setText(s == Status.ENDED ? RemoteText.REMOVE : RemoteText.DISABLE);
         disable.getAccessibleContext().setAccessibleName(disable.getText());
         disableWarning.show(Notice.Kind.WARNING, RemoteText.DISABLE_WARNING);
-        for (JComponent c : new JComponent[] {code, confirm, enable, toggle, disable, disableConfirm, keep}) {
+        for (JComponent c : new JComponent[] {code, confirm, enable, toggle, disable, disableConfirm, keep, refreshPython}) {
             c.setEnabled(!busy);
         }
         relayout();
@@ -296,7 +308,7 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local, validity}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -351,6 +363,18 @@ final class RemotePanel extends JPanel {
 
     Notice resultNotice() {
         return result;
+    }
+
+    String pythonReportedText() {
+        return pythonReported.isVisible() ? pythonReported.getText() : "";
+    }
+
+    String reportsPythonText() {
+        return reportsPython.getText();
+    }
+
+    GhostButton refreshPythonButton() {
+        return refreshPython;
     }
 
     String validityText() {

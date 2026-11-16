@@ -133,7 +133,7 @@ class ArchitectureTest {
             }
         }
         assertEquals(new TreeSet<>(Set.of("/agent/api/v1/enrollments/redeem", "/agent/api/v1/heartbeat", "/agent/api/v1/remote/receiving",
-                "/agent/api/v1/link/unlink", "/agent/api/v1/remote/credential/renew")), rotas);
+                "/agent/api/v1/link/unlink", "/agent/api/v1/remote/credential/renew", "/agent/api/v1/remote/python-environments")), rotas);
     }
 
     /**

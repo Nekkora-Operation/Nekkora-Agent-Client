@@ -41,8 +41,26 @@ public final class RemoteMachine implements AutoCloseable {
     }
 
     /** {@code inContact}: a ultima presenca foi aceita; {@code false} antes da primeira ou depois de uma falha de rede. */
-    public record View(Status status, boolean inContact, Optional<String> credentialExpiresAt) {
+    public record View(Status status, boolean inContact, Optional<String> credentialExpiresAt, Optional<Integer> pythonEnvironments) {
     }
+
+    /**
+     * Uma instalacao de Python que este computador achou. {@code localId} identifica o ambiente AQUI (inclui o caminho) e
+     * nunca sai do computador: o que vai para a Platform e um identificador opaco derivado dele.
+     */
+    public record PythonSeen(String localId, boolean virtual, String version) {
+    }
+
+    /** Quem descobre o Python deste computador (entregue por quem monta o aplicativo; esta camada nao cria processos). */
+    public interface PythonFinder {
+        List<PythonSeen> find();
+    }
+
+    static final int MAX_ENVIRONMENTS = 32;
+    static final Pattern PYTHON_VERSION = Pattern.compile("^3\\.[0-9]{1,2}\\.[0-9]{1,3}([abc]|rc)?[0-9]{0,2}$");
+    /** O inventario e publicado ao habilitar, na primeira presenca de cada abertura e, depois, a cada 6 horas. */
+    static final long INVENTORY_EVERY_SECONDS = 6 * 3600;
+    static final long INVENTORY_RETRY_SECONDS = 600;
 
     static final Pattern CODE = Pattern.compile("^nkp1\\.[0-9a-f-]{36}\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{43}$");
     static final long BEAT_SECONDS = 60;
@@ -70,6 +88,10 @@ public final class RemoteMachine implements AutoCloseable {
     private String pendingUnlink;
     private ScheduledExecutorService beats;
     private final java.time.Clock clock;
+    /** Inventario de Python: quem descobre (nulo = este aplicativo nao publica), quantos foram publicados e quando tentar de novo. */
+    private volatile PythonFinder pythons;
+    private Integer published;
+    private java.time.Instant inventoryNotBefore = java.time.Instant.MIN;
     /** Renovacao: quando tentar de novo depois de uma falha passageira, e a espera da proxima. So em memoria. */
     private java.time.Instant renewNotBefore = java.time.Instant.MIN;
     private long renewWaitSeconds = RENEW_RETRY_FIRST_SECONDS;
@@ -93,12 +115,77 @@ public final class RemoteMachine implements AutoCloseable {
 
     public synchronized View view() {
         if (ended) {
-            return new View(Status.ENDED, false, Optional.empty());
+            return new View(Status.ENDED, false, Optional.empty(), Optional.empty());
         }
         if (link == null) {
-            return new View(vault.available() ? Status.NOT_ENABLED : Status.UNAVAILABLE, false, Optional.empty());
+            return new View(vault.available() ? Status.NOT_ENABLED : Status.UNAVAILABLE, false, Optional.empty(), Optional.empty());
         }
-        return new View(link.paused() ? Status.PAUSED : Status.RECEIVING, inContact, Optional.of(link.credentialExpiresAt()));
+        return new View(link.paused() ? Status.PAUSED : Status.RECEIVING, inContact, Optional.of(link.credentialExpiresAt()), Optional.ofNullable(published));
+    }
+
+    /** Liga a publicacao do inventario de Python (quem monta o aplicativo entrega a descoberta). */
+    public void setPythonFinder(PythonFinder finder) {
+        this.pythons = finder;
+    }
+
+    /**
+     * Publica agora o retrato do Python deste computador. Para a Platform vao so um identificador opaco por ambiente, a
+     * versao, o tipo e o instante: nenhum caminho, nome de pasta ou lista de pacotes. Sem vinculo utilizavel, nao faz nada.
+     * A descoberta (processos, com prazo) roda FORA da trava das operacoes, para nao segurar pausar ou desabilitar.
+     */
+    public View publishInventory() throws Refused {
+        PythonFinder finder = pythons;
+        if (finder == null || usable() == null) {
+            return view();
+        }
+        String observedAt = java.time.OffsetDateTime.ofInstant(clock.instant(), java.time.ZoneOffset.UTC).withNano(0).toString();
+        List<PythonSeen> seen;
+        try {
+            seen = finder.find();
+        } catch (RuntimeException | LinkageError e) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        synchronized (operation) {
+            MachineVault.Link current = usable();
+            if (current == null) {
+                return view();
+            }
+            List<MachineChannel.Published> out = new java.util.ArrayList<>();
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            try {
+                javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                mac.init(new javax.crypto.spec.SecretKeySpec(vault.inventorySalt(), "HmacSHA256"));
+                for (PythonSeen s : seen) {
+                    if (s == null || s.localId() == null || s.version() == null || !PYTHON_VERSION.matcher(s.version()).matches() || out.size() >= MAX_ENVIRONMENTS) {
+                        continue;
+                    }
+                    String id = Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(s.localId().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                    if (ids.add(id)) {
+                        out.add(new MachineChannel.Published(id, s.version(), s.virtual(), observedAt));
+                    }
+                }
+            } catch (IOException | java.security.GeneralSecurityException e) {
+                throw new Refused(Problem.STORAGE);
+            }
+            int count;
+            try {
+                count = channel.publishInventory(current.credential(), out);
+            } catch (Refused e) {
+                synchronized (this) {
+                    inventoryNotBefore = clock.instant().plusSeconds(INVENTORY_RETRY_SECONDS);
+                }
+                if (e.problem() == Problem.LINK_ENDED || e.problem() == Problem.NOT_ENABLED) {
+                    failed(e.problem());
+                }
+                throw e;
+            }
+            synchronized (this) {
+                published = count;
+                inventoryNotBefore = clock.instant().plusSeconds(INVENTORY_EVERY_SECONDS);
+            }
+            changed();
+            return view();
+        }
     }
 
     public void addListener(Runnable listener) {
@@ -237,6 +324,8 @@ public final class RemoteMachine implements AutoCloseable {
                 ended = false;
                 inContact = false;
                 pendingUnlink = null;
+                published = null;
+                inventoryNotBefore = java.time.Instant.MIN;
             }
             changed();
             return view();
@@ -267,6 +356,19 @@ public final class RemoteMachine implements AutoCloseable {
                 store(next, !next.equals(current));
             } catch (Refused e) {
                 failed(e.problem());
+                return;
+            }
+        }
+        // com a presenca aceita, o inventario de Python e publicado quando for a hora (fora da trava: a descoberta demora)
+        boolean dueNow;
+        synchronized (this) {
+            dueNow = pythons != null && !clock.instant().isBefore(inventoryNotBefore);
+        }
+        if (dueNow) {
+            try {
+                publishInventory();
+            } catch (Refused e) {
+                // fica para a proxima; a presenca nao depende do inventario
             }
         }
     }

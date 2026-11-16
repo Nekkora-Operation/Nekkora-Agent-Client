@@ -28,6 +28,7 @@ public final class MachineVault {
     static final String FILE = "maquina.json";
     /** Renovacao em curso: o segredo NOVO, protegido, e a credencial que ele vai substituir. */
     static final String PENDING = "renovacao.json";
+    static final String SALT = "inventario.sal";
     private static final int MAX_FILE = 16 * 1024;
     private static final Pattern UUID = Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     private static final Pattern SECRET = Pattern.compile("^[A-Za-z0-9_-]{43}$");
@@ -181,6 +182,23 @@ public final class MachineVault {
         }
     }
 
+    /**
+     * O sal deste computador para os identificadores opacos do inventario (32 bytes aleatorios, criado na primeira vez). Com
+     * ele, o mesmo ambiente tem sempre o mesmo identificador NESTA maquina, e ninguem de fora chega do identificador ao
+     * caminho. Nao e uma credencial; sai junto com o vinculo.
+     */
+    byte[] inventorySalt() throws IOException {
+        Path f = dir.resolve(SALT);
+        if (Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS) && Files.size(f) == 32) {
+            return Files.readAllBytes(f);
+        }
+        byte[] salt = new byte[32];
+        new java.security.SecureRandom().nextBytes(salt);
+        Files.createDirectories(dir);
+        Files.write(f, salt);
+        return salt;
+    }
+
     void clearPending() throws IOException {
         Files.deleteIfExists(dir.resolve(PENDING + ".novo"));
         Files.deleteIfExists(dir.resolve(PENDING));
@@ -189,6 +207,7 @@ public final class MachineVault {
     /** Remove o vinculo deste computador. Depois disso a maquina nao consegue mais se autenticar. */
     public void clear() throws IOException {
         clearPending();
+        Files.deleteIfExists(dir.resolve(SALT));
         Files.deleteIfExists(dir.resolve(FILE + ".novo"));
         Files.deleteIfExists(dir.resolve(FILE));
     }
