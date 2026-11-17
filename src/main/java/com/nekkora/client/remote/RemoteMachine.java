@@ -178,6 +178,14 @@ public final class RemoteMachine implements AutoCloseable {
         return link == null || ended ? Optional.empty() : Optional.ofNullable(workerName);
     }
 
+    /**
+     * Quando a Platform aceitou o ultimo contato deste computador, nesta abertura do aplicativo (segundos desde 1970). Vazio sem
+     * vinculo ou enquanto nenhum contato foi aceito. Ter o vinculo (a credencial guardada) NAO comprova contato: este e o fato.
+     */
+    public synchronized java.util.OptionalLong lastContactEpochSecond() {
+        return link == null || lastContactEpochSecond == 0 ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(lastContactEpochSecond);
+    }
+
     /** A organizacao para a qual este computador esta habilitado (o identificador; quem mostra o nome e a tela). Vazio sem vinculo. */
     public synchronized Optional<String> organizationId() {
         return link == null || ended ? Optional.empty() : Optional.of(link.organizationId());
@@ -215,6 +223,8 @@ public final class RemoteMachine implements AutoCloseable {
     private MachineVault.Link link;
     private boolean ended;
     private boolean inContact;
+    /** O instante (segundos) do ultimo contato que a Platform ACEITOU nesta abertura do aplicativo; 0: nenhum ainda. So em memoria. */
+    private long lastContactEpochSecond;
     /** O nome do Worker desta maquina, como a ultima presenca aceita o trouxe (nulo: ainda nao veio). */
     private String workerName;
     /** Resposta perdida no resgate: o mesmo codigo e repetido com o MESMO segredo. So em memoria. */
@@ -1558,6 +1568,7 @@ public final class RemoteMachine implements AutoCloseable {
                 link = created;
                 ended = false;
                 inContact = true;
+                lastContactEpochSecond = clock.instant().getEpochSecond();
                 pendingCode = null;
                 pendingSecret = null;
             }
@@ -1639,6 +1650,7 @@ public final class RemoteMachine implements AutoCloseable {
                 link = null;
                 ended = false;
                 inContact = false;
+                lastContactEpochSecond = 0;
                 workerName = null;
                 pendingUnlink = null;
                 published = null;
@@ -1959,6 +1971,7 @@ public final class RemoteMachine implements AutoCloseable {
             notify = !next.equals(link) || !inContact;
             link = next;
             inContact = true;
+            lastContactEpochSecond = clock.instant().getEpochSecond();
         }
         if (notify) {
             changed();

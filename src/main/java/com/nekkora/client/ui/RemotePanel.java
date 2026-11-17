@@ -43,6 +43,7 @@ final class RemotePanel extends JPanel {
     private final JLabel title = new JLabel(RemoteText.TITLE);
     private final Notice status = new Notice(WIDTH);
     private final Notice contact = new Notice(WIDTH);
+    private final WrappedText link = new WrappedText(WIDTH).alignLeft();
     private final WrappedText what = new WrappedText(WIDTH).alignLeft();
     private final WrappedText local = new WrappedText(WIDTH).alignLeft();
     private final Notice notYet = new Notice(WIDTH);
@@ -123,9 +124,9 @@ final class RemotePanel extends JPanel {
         footer.add(close);
 
         seeOnPlatform.setText(RemoteText.SEE_ON_PLATFORM);
-        JComponent[] all = {title, status, organization, contact, activity, what, local, reportsPython, notYet, seeOnPlatform, validity, pythonReported,
+        JComponent[] all = {title, status, link, organization, contact, activity, what, local, reportsPython, notYet, seeOnPlatform, validity, pythonReported,
                 pythonHere, held, heldLogs, lost, enableSection, enabledSection, disableSection, result, footer};
-        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
+        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
                 ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2,
                 ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
@@ -250,8 +251,12 @@ final class RemotePanel extends JPanel {
             case UNAVAILABLE -> Notice.Kind.ERROR;
             default -> Notice.Kind.INFO;
         }, RemoteText.status(s));
-        if (linked && !v.inContact()) {
-            contact.show(Notice.Kind.WARNING, RemoteText.NO_CONTACT);
+        // vinculo e comunicacao em linhas separadas: a credencial guardada nao comprova contato de agora
+        link.setText(RemoteText.link(s));
+        link.setVisible(linked);
+        if (linked) {
+            String last = machine.lastContactEpochSecond().isPresent() ? time(machine.lastContactEpochSecond().getAsLong()) : "";
+            contact.show(v.inContact() ? Notice.Kind.SUCCESS : Notice.Kind.WARNING, RemoteText.connection(v.inContact(), last));
         } else {
             contact.clear();
         }
@@ -356,6 +361,11 @@ final class RemotePanel extends JPanel {
         }
     }
 
+    /** A hora, no fuso deste computador, como HH:mm:ss. */
+    private static String time(long epochSecond) {
+        return java.time.Instant.ofEpochSecond(epochSecond).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+    }
+
     private static JPanel column() {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
@@ -382,7 +392,7 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere, link}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -429,6 +439,10 @@ final class RemotePanel extends JPanel {
 
     Notice contactNotice() {
         return contact;
+    }
+
+    String linkText() {
+        return link.isVisible() ? link.getText() : "";
     }
 
     Notice resultNotice() {
