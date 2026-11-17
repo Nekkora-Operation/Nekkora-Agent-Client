@@ -245,8 +245,17 @@ final class RemoteText {
         };
     }
 
-    /** Tela principal, segunda linha: organizacao, posto na Platform e a atividade de agora. Sem vinculo, so a atividade. */
-    static String summaryWhere(boolean linked, String organizationName, String seatName, com.nekkora.client.remote.RemoteMachine.Activity a) {
+    /** Tela principal, segunda linha: organizacao e posto na Platform. Vazio sem vinculo. */
+    static String summaryWhere(boolean linked, String organizationName, String seatName) {
+        if (!linked) {
+            return "";
+        }
+        return "Organização: " + (organizationName == null || organizationName.isBlank() ? "fora da sua lista" : organizationName)
+                + " · " + SEAT_LABEL + (seatName == null || seatName.isBlank() ? "ainda não informado" : seatName);
+    }
+
+    /** Tela principal, terceira linha: a atividade de agora, em poucas palavras. */
+    static String summaryActivity(com.nekkora.client.remote.RemoteMachine.Activity a) {
         String now = switch (a) {
             case IDLE -> "nenhuma execução em andamento";
             case LOCAL_RUNNING -> "execução local em andamento";
@@ -256,11 +265,7 @@ final class RemoteText {
             case REMOTE_FINISHING, LOCAL_FINISHING -> "finalizando (processos da automação ainda ativos)";
             case REMOTE_UNCERTAIN, LOCAL_UNCERTAIN -> "ocupação incerta";
         };
-        if (!linked) {
-            return "Atividade: " + now + ".";
-        }
-        return "Organização: " + (organizationName == null || organizationName.isBlank() ? "fora da sua lista" : organizationName)
-                + " · " + SEAT_LABEL + (seatName == null || seatName.isBlank() ? "ainda não informado" : seatName) + " · " + now + ".";
+        return "Atividade: " + now + ".";
     }
 
     private RemoteText() {

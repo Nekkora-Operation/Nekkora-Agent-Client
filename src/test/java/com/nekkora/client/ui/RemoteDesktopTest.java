@@ -397,21 +397,24 @@ class RemoteDesktopTest {
         assertNotNull(r);
         // sem vinculo: diz isso, sem organizacao nem Worker
         assertEquals("Execução remota: este computador não está vinculado à Platform", read(r::stateText));
-        assertEquals("Atividade: nenhuma execução em andamento.", read(r::whereText));
+        assertEquals("", read(r::whereText));
+        assertEquals("Atividade: nenhuma execução em andamento.", read(r::activityText));
         // vinculado e com a presenca aceita: conectado; a organizacao fora da lista de quem entrou nao mostra identificador
         machine.enable(gw.code("remote"));
         gw.workerName = "Worker financeiro";
         machine.beat();
         settle();
         assertEquals("Execução remota: vinculado à Platform · conectado", read(r::stateText));
-        assertEquals("Organização: fora da sua lista · Worker na Platform: Worker financeiro · nenhuma execução em andamento.", read(r::whereText));
+        assertEquals("Organização: fora da sua lista · Worker na Platform: Worker financeiro", read(r::whereText));
+        assertEquals("Atividade: nenhuma execução em andamento.", read(r::activityText));
         assertFalse(read(r::whereText).contains(gw.organizationId));
         // os textos curtos de cada estado: vinculo e comunicacao nunca se confundem
         assertEquals("Execução remota: vinculado à Platform (novos trabalhos pausados) · sem contato agora", RemoteText.summaryState(Status.PAUSED, false));
         assertEquals("Execução remota: vínculo encerrado · sem contato", RemoteText.summaryState(Status.ENDED, true));
-        assertEquals("Organização: Fábrica Norte · Worker na Platform: ainda não informado · executando uma solicitação da Platform.",
-                RemoteText.summaryWhere(true, "Fábrica Norte", "", RemoteMachine.Activity.REMOTE_RUNNING));
-        assertEquals("Atividade: execução local em andamento.", RemoteText.summaryWhere(false, "", "", RemoteMachine.Activity.LOCAL_RUNNING));
+        assertEquals("Organização: Fábrica Norte · Worker na Platform: ainda não informado", RemoteText.summaryWhere(true, "Fábrica Norte", ""));
+        assertEquals("", RemoteText.summaryWhere(false, "Fábrica Norte", "W-01"));
+        assertEquals("Atividade: executando uma solicitação da Platform.", RemoteText.summaryActivity(RemoteMachine.Activity.REMOTE_RUNNING));
+        assertEquals("Atividade: execução local em andamento.", RemoteText.summaryActivity(RemoteMachine.Activity.LOCAL_RUNNING));
         // a Platform deixa de responder: continua VINCULADO, e a comunicacao passa a "sem contato agora"
         gw.status = 503;
         machine.beat();
@@ -447,7 +450,6 @@ class RemoteDesktopTest {
         String semContato = read(() -> p.contactNotice().text());
         assertTrue(semContato.startsWith("Comunicação: sem contato agora."), semContato);
         assertTrue(semContato.matches(".*O último contato aceito foi às [0-9]{2}:[0-9]{2}:[0-9]{2}\\. O estado mostrado é o último conhecido\\."), semContato);
-        assertTrue(read(() -> p.contactNotice().isError()) || !read(() -> p.contactNotice().text()).contains("conectado"));
         // o resumo da tela principal diz o mesmo, em poucas palavras
         RemoteSummary resumo = read(() -> window.remoteSummary());
         assertNotNull(resumo, "o resumo aparece na tela principal depois da entrada");

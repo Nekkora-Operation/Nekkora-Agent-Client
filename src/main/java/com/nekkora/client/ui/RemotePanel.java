@@ -283,7 +283,8 @@ final class RemotePanel extends JPanel {
         link.setVisible(linked);
         if (linked) {
             String last = machine.lastContactEpochSecond().isPresent() ? time(machine.lastContactEpochSecond().getAsLong()) : "";
-            contact.show(v.inContact() ? Notice.Kind.SUCCESS : Notice.Kind.WARNING, RemoteText.connection(v.inContact(), last));
+            // conectado: texto de apoio, sem rotulo ("Concluido" nao descreve uma comunicacao); sem contato: aviso
+            contact.show(v.inContact() ? Notice.Kind.PLAIN : Notice.Kind.WARNING, RemoteText.connection(v.inContact(), last));
         } else {
             contact.clear();
         }
