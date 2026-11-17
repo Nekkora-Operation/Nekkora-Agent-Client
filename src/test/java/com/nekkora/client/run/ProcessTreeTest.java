@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -21,9 +20,32 @@ class ProcessTreeTest {
     Path tmp;
 
     private static final long DEAD = 4_000_000_003L;
-    private static final Function<String, Boolean> MARCA_EXISTE = n -> true;
-    private static final Function<String, Boolean> MARCA_SUMIU = n -> false;
-    private static final Function<String, Boolean> SEM_RESPOSTA = n -> null;
+
+    /** Evidencias simuladas: a marca existe?; a tabela de marcas funciona?; a sessao acabou (pelos processos)? */
+    private static ProcessTree.Evidence ev(Boolean marked, boolean working, Boolean ended) {
+        return new ProcessTree.Evidence() {
+            @Override
+            public Boolean marked(String name) {
+                return marked;
+            }
+
+            @Override
+            public boolean working() {
+                return working;
+            }
+
+            @Override
+            public Boolean sessionEnded(int session, long sinceMillis) {
+                return ended;
+            }
+        };
+    }
+
+    private static final ProcessTree.Evidence MARCA_EXISTE = ev(true, true, false);
+    /** A marca sumiu, a tabela funciona e nenhum processo e daquela sessao: a sessao acabou. */
+    private static final ProcessTree.Evidence SESSAO_ENCERRADA = ev(false, true, true);
+
+    private static final String N = "\n";
 
     private static long ownStart() {
         return ProcessHandle.current().info().startInstant().map(Instant::toEpochMilli).orElseThrow();
@@ -39,7 +61,7 @@ class ProcessTreeTest {
         return new ProcessOwner(DEAD, 1_000L, ProcessOwner.digest("C:\\x\\python.exe"));
     }
 
-    private ProcessTree.Verdict v(String text, Function<String, Boolean> mark) throws Exception {
+    private ProcessTree.Verdict v(String text, ProcessTree.Evidence mark) throws Exception {
         return ProcessTree.verdict(dead(), file(text), mark, "NekkoraClient-teste");
     }
 
@@ -54,15 +76,28 @@ class ProcessTreeTest {
         assertEquals(ProcessTree.Verdict.UNCERTAIN, v("FIM\nVAZIO\n", MARCA_EXISTE));
     }
 
+    /**
+     * Decisao de 16/11: o fim da sessao do Windows que hospedava a execucao encerra a duvida sobre os processos - desde que
+     * COMPROVADO. A falta da marca, sozinha, nao libera: pode ser falha de leitura, remocao ou gravacao incompleta.
+     */
     @Test
-    void aSessaoDoWindowsEncerradaAcabaComADuvidaSobreOsProcessos() throws Exception {
-        // o aplicativo estava fechado quando o processo principal terminou: sem "vazio"; a marca da sessao sumiu = sessao encerrada
-        assertEquals(ProcessTree.Verdict.GONE, v("GRUPO\nMARCA\n" + (DEAD - 4) + " 2000\n", MARCA_SUMIU));
-        assertEquals(ProcessTree.Verdict.GONE, v("FALHA\nMARCA\n", MARCA_SUMIU));
-        // a marca nunca foi gravada: a falta dela nao prova nada; o Windows nao respondeu: tambem nao
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\n" + (DEAD - 4) + " 2000\n", MARCA_SUMIU));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n", SEM_RESPOSTA));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n", MARCA_EXISTE));
+    void oFimDaSessaoSoContaComTodasAsEvidenciasDeAcordo() throws Exception {
+        String lancada = "GRUPO" + N + "SESSAO 1" + N + "MARCA" + N + (DEAD - 4) + " 2000" + N;
+        assertEquals(ProcessTree.Verdict.GONE, v(lancada, SESSAO_ENCERRADA));
+        assertEquals(ProcessTree.Verdict.GONE, v("FALHA" + N + "SESSAO 1" + N + "MARCA" + N, SESSAO_ENCERRADA));
+        // a marca sumiu, mas ha processo daquela sessao desde antes do lancamento: a sessao e a MESMA - a marca foi removida por
+        // outro programa. Nada e liberado
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v(lancada, ev(false, true, false)));
+        // a marca "sumiu" e a tabela de marcas nao funciona agora: e falha de leitura
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v(lancada, ev(false, false, true)));
+        // o Windows nao respondeu sobre a marca, ou nao da para saber da sessao pelos processos
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v(lancada, ev(null, true, true)));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v(lancada, ev(false, true, null)));
+        // inicializacao incompleta: a marca nunca foi gravada e conferida, ou a sessao do lancamento nao foi anotada
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO" + N + "SESSAO 1" + N + (DEAD - 4) + " 2000" + N, SESSAO_ENCERRADA));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO" + N + "MARCA" + N + (DEAD - 4) + " 2000" + N, SESSAO_ENCERRADA));
+        // a marca existe: a sessao continua
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v(lancada, MARCA_EXISTE));
     }
 
     @Test
@@ -70,10 +105,10 @@ class ProcessTreeTest {
         // fim visto e nenhum anotado vivo, mas sem o grupo vazio: um descendente de processo ja terminado nao aparece em lista nenhuma
         assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n" + (DEAD - 4) + " 2000\nFIM\n", MARCA_EXISTE));
         assertEquals(ProcessTree.Verdict.UNCERTAIN, v("", MARCA_EXISTE));
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), tmp.resolve("nao-existe.txt"), MARCA_SUMIU, "x"));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(dead(), tmp.resolve("nao-existe.txt"), SESSAO_ENCERRADA, "x"));
         assertEquals(ProcessTree.Verdict.UNCERTAIN, ProcessTree.verdict(null, file("FIM\n"), MARCA_EXISTE, "x"));
         // arquivo cortado ou alterado: nem "vazio" nem a marca valem
-        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nMARCA\n123\nFIM\nVAZIO\n", MARCA_SUMIU));
+        assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nSESSAO 1\nMARCA\n123\nFIM\nVAZIO\n", SESSAO_ENCERRADA));
         assertEquals(ProcessTree.Verdict.UNCERTAIN, v("GRUPO\nabc 1\nVAZIO\n", MARCA_EXISTE));
     }
 

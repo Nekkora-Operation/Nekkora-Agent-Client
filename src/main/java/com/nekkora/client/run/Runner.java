@@ -212,7 +212,65 @@ public final class Runner implements AutoCloseable {
 
     /** O caminho de {@link #managedDir}, em texto. */
     public Optional<String> managedFolder(String key) {
+        // reserva de espaco: com o disco perto do fim nenhum trabalho novo e aceito - antes de esgotar, e sem apagar nada do que
+        // esta guardado (resultados sem confirmacao, pastas de execucoes com processos sem prova de encerramento)
+        if (managedFree.getAsLong() < managedReserveBytes) return Optional.empty();
         return managedDir(key).map(Path::toString);
+    }
+
+    /** Quanto espaco livre tem de sobrar no disco das execucoes da Platform para um trabalho novo ser aceito. */
+    public static final long MANAGED_RESERVE_BYTES = 1024L * 1024 * 1024;
+    private volatile long managedReserveBytes = MANAGED_RESERVE_BYTES;
+    private volatile java.util.function.LongSupplier managedFree = () -> {
+        Path root = managedRoot;
+        try {
+            Path at = root;
+            while (at != null && !Files.exists(at)) at = at.getParent();
+            return at == null ? Long.MAX_VALUE : Files.getFileStore(at).getUsableSpace();
+        } catch (java.io.IOException | RuntimeException e) {
+            return Long.MAX_VALUE;
+        }
+    };
+
+    /** So para teste: de onde vem o espaco livre e qual a reserva. */
+    public void managedSpace(java.util.function.LongSupplier free, long reserveBytes) {
+        this.managedFree = free;
+        this.managedReserveBytes = reserveBytes;
+    }
+
+    /** O espaco livre esta abaixo da reserva: nenhum trabalho novo da Platform e aceito ate haver espaco. */
+    public boolean managedSpaceLow() {
+        return managedFree.getAsLong() < managedReserveBytes;
+    }
+
+    /**
+     * As pastas de tentativa MANTIDAS porque os processos da execucao delas nao tem prova de encerramento: quantas sao e quanto
+     * ocupam. Nada delas e apagado automaticamente.
+     */
+    public long[] managedProtected() {
+        long[] n = new long[2];
+        Path root = managedRoot;
+        if (root == null || !Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return n;
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+            for (Path dir : ds) {
+                String key = String.valueOf(dir.getFileName());
+                if (managedDir(key).isEmpty() || !inUse(key)) continue;
+                n[0]++;
+                try (java.util.stream.Stream<Path> walk = Files.walk(dir, 20)) {
+                    for (Path p : walk.limit(50_000).toList()) {
+                        if (Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) n[1] += Files.size(p);
+                    }
+                }
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // o que ja foi contado vale
+        }
+        return n;
+    }
+
+    /** Por que o computador esta ocupado por execucao LOCAL: {@code RUNNING}, {@code FINISHING}, {@code UNCERTAIN} ou vazio. */
+    public String localHold() {
+        return controller.hold(true);
     }
 
     /** {@code true} se ha uma execucao em andamento neste computador, local ou gerenciada. */
@@ -254,7 +312,7 @@ public final class Runner implements AutoCloseable {
             return controller.startManaged(new RunController.Request(pkg.dir(), run, python, out, null), output).record().id().value();
         } catch (ExecRefused e) {
             throw new ManagedRefused(switch (e.code()) {
-                case EXEC_ALREADY_RUNNING -> ManagedRefusal.BUSY;
+                case EXEC_ALREADY_RUNNING, EXEC_PROCESSES_PENDING -> ManagedRefusal.BUSY;
                 case EXEC_SESSION_UNAVAILABLE, EXEC_SESSION_LOCKED, EXEC_UNSUPPORTED_OS -> ManagedRefusal.SESSION_UNAVAILABLE;
                 case EXEC_PYTHON_INVALID -> ManagedRefusal.ENVIRONMENT_GONE;
                 case EXT_ENVIRONMENT_INCOMPATIBLE -> ManagedRefusal.ENVIRONMENT_INCOMPATIBLE;

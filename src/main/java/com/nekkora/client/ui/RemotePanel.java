@@ -266,8 +266,10 @@ final class RemotePanel extends JPanel {
         organization.setText(org);
         organization.setVisible(!org.isEmpty());
         RemoteMachine.Activity now = machine.activity();
-        if (linked || now != RemoteMachine.Activity.IDLE) {
-            activity.show(now == RemoteMachine.Activity.IDLE ? Notice.Kind.PLAIN : Notice.Kind.INFO, RemoteText.activity(now));
+        String keptHere = RemoteText.kept(machine.kept());
+        if (linked || now != RemoteMachine.Activity.IDLE || !keptHere.isEmpty()) {
+            activity.show(now == RemoteMachine.Activity.IDLE && keptHere.isEmpty() ? Notice.Kind.PLAIN : keptHere.isEmpty() ? Notice.Kind.INFO : Notice.Kind.WARNING,
+                    RemoteText.activity(now) + keptHere);
         } else {
             activity.clear();
         }

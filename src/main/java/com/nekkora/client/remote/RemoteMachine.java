@@ -82,7 +82,28 @@ public final class RemoteMachine implements AutoCloseable {
         /** O processo principal da execucao pedida pela Platform terminou, e ha processos da automacao ainda ativos aqui. */
         REMOTE_FINISHING,
         /** Uma execucao pedida pela Platform terminou e este computador nao tem como dizer se restou processo dela. */
-        REMOTE_UNCERTAIN
+        REMOTE_UNCERTAIN,
+        /** O processo principal de uma execucao iniciada AQUI terminou, e ha processos dela ainda ativos. Nada dela vai a Platform. */
+        LOCAL_FINISHING,
+        /** Uma execucao iniciada AQUI terminou e nao ha como dizer se restou processo dela. Nada dela vai a Platform. */
+        LOCAL_UNCERTAIN
+    }
+
+    /**
+     * O que este computador MANTEM sem apagar: pastas de execucoes cujos processos nao tem prova de encerramento ({@code folders},
+     * {@code bytes}); e se o espaco livre esta abaixo da reserva ({@code spaceLow}: nenhum trabalho novo e aceito).
+     */
+    public record Kept(int folders, long bytes, boolean spaceLow) {
+    }
+
+    /** Nunca lanca. */
+    public Kept kept() {
+        Work w = work;
+        try {
+            return w == null ? new Kept(0, 0, false) : w.kept();
+        } catch (RuntimeException x) {
+            return new Kept(0, 0, false);
+        }
     }
 
     /** A atividade de agora e a origem dela. Nunca lanca. */
@@ -110,7 +131,16 @@ public final class RemoteMachine implements AutoCloseable {
                     return Activity.REMOTE_UNCERTAIN;
                 }
             }
-            return w != null && w.busy() ? Activity.LOCAL_RUNNING : Activity.IDLE;
+            if (w == null || !w.busy()) {
+                return Activity.IDLE;
+            }
+            // ocupado sem tentativa da Platform no diario: uma execucao iniciada aqui - em andamento, finalizando ou incerta
+            return switch (w.localHold()) {
+                case "FINISHING" -> Activity.LOCAL_FINISHING;
+                case "UNCERTAIN" -> Activity.LOCAL_UNCERTAIN;
+                case "RUNNING" -> Activity.LOCAL_RUNNING;
+                default -> Activity.REMOTE_UNCERTAIN;
+            };
         } catch (RuntimeException x) {
             return Activity.IDLE;
         }
@@ -238,6 +268,20 @@ public final class RemoteMachine implements AutoCloseable {
          */
         default String processes(String run) {
             return "UNCERTAIN";
+        }
+
+        /**
+         * Por que este computador esta ocupado por uma execucao iniciada AQUI: {@code RUNNING}, {@code FINISHING} (o processo
+         * principal terminou e ha processos dela vivos), {@code UNCERTAIN} (sem prova de que terminaram) ou vazio. So o estado:
+         * nada do conteudo de uma execucao local passa por aqui.
+         */
+        default String localHold() {
+            return busy() ? "RUNNING" : "";
+        }
+
+        /** O que este computador mantem sem apagar, e se o espaco livre esta abaixo da reserva. */
+        default Kept kept() {
+            return new Kept(0, 0, false);
         }
 
         /** Pede que a execucao pare. */

@@ -24,7 +24,10 @@ import com.sun.jna.win32.StdCallLibrary;
  * processo do grupo nao consegue sair dele (o grupo nao permite).</li>
  * <li><b>Marca da sessao do Windows</b> ({@code GlobalAddAtom}, {@code GlobalFindAtom}, {@code GlobalDeleteAtom}): um nome
  * gravado na tabela da sessao, que so deixa de existir quando a sessao acaba (saida do usuario ou reinicio do Windows) - e
- * quando ela acaba, nenhum processo dela continua vivo. Nao depende do relogio nem de PID.</li>
+ * quando ela acaba, nenhum processo dela continua vivo. A FALTA da marca, sozinha, nao prova nada (pode ser falha de leitura,
+ * remocao por outro programa ou gravacao incompleta): ela so conta junto das outras provas de {@link ProcessTree}.</li>
+ * <li><b>Numero da sessao de um processo</b> ({@code ProcessIdToSessionId}): para conferir, pelos processos que existem agora,
+ * se a sessao que hospedava a execucao acabou.</li>
  * </ul>
  *
  * <p>O que sobrevive ao encerramento do aplicativo: enquanto o processo PRINCIPAL da execucao viver, o grupo continua
@@ -58,6 +61,8 @@ final class WindowsProcessGroup {
         short GlobalFindAtomW(WString name);
 
         short GlobalDeleteAtom(short atom);
+
+        boolean ProcessIdToSessionId(int pid, IntByReference session);
     }
 
     private static final int JOB_ASSIGN = 0x0001;
@@ -123,13 +128,86 @@ final class WindowsProcessGroup {
         }
     }
 
-    /** Grava a marca da execucao na sessao do Windows. Falso: nao gravou (a marca nao podera provar nada). */
+    /**
+     * Grava a marca da execucao na sessao do Windows e CONFERE que ela ficou legivel. Falso: nao gravou, ou gravou e nao leu de
+     * volta (a marca nao podera provar nada).
+     */
     static boolean mark(String name) {
         Api a = api();
         try {
-            return a != null && a.GlobalAddAtomW(new WString(name)) != 0;
+            return a != null && a.GlobalAddAtomW(new WString(name)) != 0 && a.GlobalFindAtomW(new WString(name)) != 0;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /**
+     * A tabela de marcas da sessao esta FUNCIONANDO agora? Grava uma marca de sonda, le de volta e a retira. Sem isso, "a marca
+     * nao existe" pode ser so uma falha de leitura.
+     */
+    static boolean working() {
+        Api a = api();
+        if (a == null) return false;
+        try {
+            WString probe = new WString("NekkoraClient-sonda-" + ProcessHandle.current().pid() + "-" + System.nanoTime());
+            short atom = a.GlobalAddAtomW(probe);
+            if (atom == 0) return false;
+            boolean read = a.GlobalFindAtomW(probe) != 0;
+            a.GlobalDeleteAtom(atom);
+            return read && a.GlobalFindAtomW(probe) == 0;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** A sessao do Windows em que o processo roda. Nulo: o sistema nao informou. */
+    static Integer sessionOf(long pid) {
+        Api a = api();
+        if (a == null || pid < 0 || pid > Integer.MAX_VALUE) return null;
+        try {
+            IntByReference s = new IntByReference();
+            return a.ProcessIdToSessionId((int) pid, s) ? s.getValue() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * A sessao do Windows numero {@code session}, que existia em {@code sinceMillis} (o inicio do processo da execucao), ACABOU?
+     * Olha todos os processos que o sistema mostra, sem depender de marca nenhuma:
+     * <ul>
+     * <li>existe processo dessa sessao que comecou ate aquele instante: a sessao e a MESMA - nao acabou ({@code false});</li>
+     * <li>existe processo antigo cuja sessao o sistema nao informa: nao da para saber ({@code null});</li>
+     * <li>nenhum processo com esse numero de sessao: ela acabou ({@code true});</li>
+     * <li>ha processos com esse numero e TODOS os de inicio conhecido comecaram depois: o numero foi reaproveitado por uma
+     * sessao nova (reinicio do Windows, ou nova entrada do usuario) - a de antes acabou ({@code true}).</li>
+     * </ul>
+     */
+    static Boolean sessionEnded(int session, long sinceMillis) {
+        if (api() == null || sinceMillis <= 0) return null;
+        try {
+            int newer = 0;
+            int undated = 0;
+            for (ProcessHandle h : ProcessHandle.allProcesses().toList()) {
+                long start = h.info().startInstant().map(java.time.Instant::toEpochMilli).orElse(-1L);
+                Integer s = sessionOf(h.pid());
+                if (s == null) {
+                    if (start >= 0 && start <= sinceMillis && h.isAlive()) return null;
+                    continue;
+                }
+                if (s != session) continue;
+                if (start < 0) {
+                    undated++;
+                } else if (start <= sinceMillis) {
+                    return false;
+                } else {
+                    newer++;
+                }
+            }
+            if (newer > 0) return true;
+            return undated == 0 ? Boolean.TRUE : null;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

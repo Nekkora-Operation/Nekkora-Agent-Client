@@ -466,4 +466,22 @@ class RemoteWorkTest {
             assertFalse(com.nekkora.client.auth.FolderOpener.openText(script.toString()), "so arquivo .txt e entregue ao sistema");
         }
     }
+
+    /**
+     * Decisao de 16/11: o acumulo de pastas mantidas nao pode esgotar o disco. Abaixo da reserva de espaco livre nenhum trabalho
+     * novo da Platform e aceito (a tentativa e recusada por falta de espaco) - e nada do que esta guardado e apagado para abrir espaco.
+     */
+    @Test
+    void comPoucoEspacoLivreNenhumTrabalhoNovoEAceitoENadaEApagado() {
+        RemoteWork w = new RemoteWork(runner);
+        String attempt = "11111111-1111-4111-8111-111111111111";
+        assertTrue(w.dir(attempt).isPresent());
+        assertFalse(w.kept().spaceLow());
+        runner.managedSpace(() -> 500L * 1024 * 1024, Runner.MANAGED_RESERVE_BYTES);
+        assertTrue(w.dir(attempt).isEmpty(), "abaixo da reserva nao ha onde trabalhar: a tentativa e recusada com DISK_PRESSURE");
+        assertTrue(w.kept().spaceLow(), "e isso fica dito na tela");
+        runner.managedSpace(() -> 2L * Runner.MANAGED_RESERVE_BYTES, Runner.MANAGED_RESERVE_BYTES);
+        assertTrue(w.dir(attempt).isPresent());
+        assertFalse(w.kept().spaceLow());
+    }
 }

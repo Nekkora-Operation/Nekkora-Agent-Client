@@ -26,6 +26,8 @@ public enum ErrorCode {
     EXEC_CANCELLED("AGT-EXE-024", "A execução foi cancelada pela pessoa operadora."),
     EXEC_AGENT_RESTARTED("AGT-EXE-025", "O Agent reiniciou durante a execução; o fim não foi observado."),
     EXEC_SUSPENDED("AGT-EXE-026", "O Windows foi suspenso durante a execução."),
+    EXEC_PROCESSES_PENDING("AGT-EXE-027", "Há processos de uma execução anterior ainda ativos neste computador, ou sem confirmação de que "
+            + "terminaram. Uma automação por vez: a próxima só inicia quando eles terminarem ou a sessão do Windows for encerrada."),
     /** NOVO neste aplicativo: o formato existe, mas nao e aceito aqui (nunca aceito em silencio). */
     EXEC_PACKAGE_UNSUPPORTED("AGT-EXE-030", "O pacote é do Studio ou de laboratório: este aplicativo só aceita pacotes Python externos "
             + "(nekkora-external.json)."),

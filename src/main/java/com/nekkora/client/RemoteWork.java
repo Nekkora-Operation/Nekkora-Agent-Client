@@ -69,6 +69,17 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
+    public String localHold() {
+        return runner.localHold();
+    }
+
+    @Override
+    public RemoteMachine.Kept kept() {
+        long[] n = runner.managedProtected();
+        return new RemoteMachine.Kept((int) n[0], n[1], runner.managedSpaceLow());
+    }
+
+    @Override
     public void cancel(String run) {
         runner.cancelManaged(run);
     }
