@@ -96,7 +96,26 @@ class RemoteWorkTest {
                 dependencies, pythonId(), dir.toString());
     }
 
+    /**
+     * Espera o FIM da execucao por inteiro: o processo principal terminar E a finalizacao concluir (o motor deixar de dizer que
+     * ha processo dela vivo). Entre uma coisa e outra o computador continua ocupado e a limpeza do codigo nao tem efeito, de
+     * proposito; um teste que afirmasse "livre" ou limpasse nesse intervalo dependia da sorte. Se o motor nao tem como saber
+     * (incerto), nao ha o que esperar: quem chamou confere o que quiser.
+     */
     private RemoteMachine.Progress waitEnd(String run) throws Exception {
+        RemoteMachine.Progress end = waitMainEnd(run);
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(60).toNanos();
+        while ("ALIVE".equals(work.processes(run))) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("a finalizacao nao concluiu no prazo do teste");
+            }
+            Thread.sleep(20);
+        }
+        return end;
+    }
+
+    /** So o processo principal: usado pelos testes que querem olhar o intervalo da finalizacao (um filho ainda vivo). */
+    private RemoteMachine.Progress waitMainEnd(String run) throws Exception {
         long deadline = System.nanoTime() + java.time.Duration.ofSeconds(90).toNanos();
         while (System.nanoTime() < deadline) {
             RemoteMachine.Progress p = work.progress(run).orElseThrow();
@@ -212,7 +231,7 @@ class RemoteWorkTest {
                 "");
         RemoteMachine.Job job = job(leavesChild, List.of());
         String run = work.start(job);
-        assertEquals("SUCCEEDED", waitEnd(run).state());
+        assertEquals("SUCCEEDED", waitMainEnd(run).state());
         Path dir = Path.of(job.dir());
         Path copy = data.resolve("remota").resolve("execucoes").resolve(run).resolve("pacote");
         ProcessHandle child = ProcessHandle.of(Long.parseLong(Files.readString(dir.resolve("saida").resolve(run).resolve("filho.txt")).strip())).orElseThrow();
