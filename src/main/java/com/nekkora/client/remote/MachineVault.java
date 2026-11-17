@@ -2,11 +2,9 @@ package com.nekkora.client.remote;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
@@ -127,11 +125,7 @@ public final class MachineVault {
         Files.createDirectories(dir);
         Path tmp = dir.resolve(FILE + ".novo");
         Files.writeString(tmp, json, StandardCharsets.UTF_8);
-        try {
-            Files.move(tmp, dir.resolve(FILE), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, dir.resolve(FILE), StandardCopyOption.REPLACE_EXISTING);
-        }
+        Replace.into(tmp, dir.resolve(FILE));
     }
 
     /**
@@ -175,11 +169,7 @@ public final class MachineVault {
         Files.createDirectories(dir);
         Path tmp = dir.resolve(PENDING + ".novo");
         Files.writeString(tmp, "{\"versao\":1,\"credencial\":" + Json.quote(fromCredentialId) + ",\"segredo\":" + Json.quote(blob) + "}", StandardCharsets.UTF_8);
-        try {
-            Files.move(tmp, dir.resolve(PENDING), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, dir.resolve(PENDING), StandardCopyOption.REPLACE_EXISTING);
-        }
+        Replace.into(tmp, dir.resolve(PENDING));
     }
 
     /**
