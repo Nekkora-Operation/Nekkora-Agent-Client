@@ -237,21 +237,23 @@ final class RemoteText {
     /** Tela principal, primeira linha: o vinculo e, separada, a comunicacao. */
     static String summaryState(Status s, boolean inContact) {
         return "Execução remota: " + switch (s) {
+            // textos curtos: cabem inteiros na janela padrao e na largura minima (o que diz a comunicacao nunca pode ser cortado)
             case UNAVAILABLE -> "indisponível neste computador";
-            case NOT_ENABLED -> "este computador não está vinculado à Platform";
-            case RECEIVING -> "vinculado à Platform · " + (inContact ? "conectado" : "sem contato agora");
-            case PAUSED -> "vinculado à Platform (novos trabalhos pausados) · " + (inContact ? "conectado" : "sem contato agora");
+            case NOT_ENABLED -> "não vinculado à Platform";
+            case RECEIVING -> "vinculado · " + (inContact ? "conectado" : "sem contato agora");
+            case PAUSED -> "vinculado (pausado) · " + (inContact ? "conectado" : "sem contato agora");
             case ENDED -> "vínculo encerrado · sem contato";
         };
     }
 
-    /** Tela principal, segunda linha: organizacao e posto na Platform. Vazio sem vinculo. */
-    static String summaryWhere(boolean linked, String organizationName, String seatName) {
-        if (!linked) {
-            return "";
-        }
-        return "Organização: " + (organizationName == null || organizationName.isBlank() ? "fora da sua lista" : organizationName)
-                + " · " + SEAT_LABEL + (seatName == null || seatName.isBlank() ? "ainda não informado" : seatName);
+    /** Tela principal, segunda linha: a organizacao do vinculo. Vazio sem vinculo. */
+    static String summaryOrganization(boolean linked, String organizationName) {
+        return linked ? "Organização: " + (organizationName == null || organizationName.isBlank() ? "fora da sua lista" : organizationName) : "";
+    }
+
+    /** Tela principal, terceira linha: o posto na Platform. Vazio sem vinculo. */
+    static String summarySeat(boolean linked, String seatName) {
+        return linked ? SEAT_LABEL + (seatName == null || seatName.isBlank() ? "ainda não informado" : seatName) : "";
     }
 
     /** Tela principal, terceira linha: a atividade de agora, em poucas palavras. */
