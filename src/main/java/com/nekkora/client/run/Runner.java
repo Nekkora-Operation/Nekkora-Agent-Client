@@ -268,6 +268,11 @@ public final class Runner implements AutoCloseable {
         return n;
     }
 
+    /** Avisa quando a ocupacao do computador muda (inicio, fim, finalizando, incerta, liberada). So o aviso: sem conteudo nenhum. */
+    public void onOccupancy(Runnable listener) {
+        controller.onOccupancy(listener);
+    }
+
     /** Por que o computador esta ocupado por execucao LOCAL: {@code RUNNING}, {@code FINISHING}, {@code UNCERTAIN} ou vazio. */
     public String localHold() {
         return controller.hold(true);
