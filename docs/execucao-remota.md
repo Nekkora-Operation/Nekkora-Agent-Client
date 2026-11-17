@@ -39,6 +39,17 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
   usuário do Windows não é usado: a tela oferece só **Remover deste computador**.
 - Nada disso aparece em log (o aplicativo não tem log), exceção, argumento de processo ou ZIP.
 
+## O que a tela mostra (ajustes do aceite de 17/11)
+
+- **Tela principal (depois da entrada):** um resumo de duas linhas — vínculo com a Platform e comunicação na primeira; organização,
+  Worker e a atividade de agora na segunda — com "Ver detalhes", que abre a tela "Execução remota".
+- **Vinculado × conectado:** "vinculado" é ter a credencial da máquina guardada; "conectado" só quando a Platform aceitou o último
+  contato (a hora aparece na tela "Execução remota"). Ter a credencial não comprova contato: os dois são ditos em separado.
+- **Tela "Execução remota", parte principal:** estado, vínculo, organização e Worker, comunicação, atividade de agora, pendências (só
+  quando há) e as ações. **"Detalhes técnicos"**, recolhido por padrão, traz as explicações extensas, a validade da credencial e os
+  ambientes Python informados (com "Atualizar versões de Python").
+- **Habilitar:** o botão fica desabilitado enquanto a confirmação está desmarcada; a ação confere a confirmação de novo.
+
 ## Presença, pausar, desabilitar
 
 - **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Nesta versão
