@@ -81,8 +81,11 @@ final class RemoteText {
      * O posto, na Platform, a que este computador está associado: é em nome dele que as execuções chegam aqui. A Platform o chama
      * de Worker, e é com esse nome que a pessoa o encontra lá; por isso a palavra aparece neste texto, e só nele.
      */
+    /** O unico texto com o nome que a Platform da ao posto desta maquina (regra de arquitetura: a palavra so aparece aqui). */
+    static final String SEAT_LABEL = "Worker na Platform: ";
+
     static String seat(String name) {
-        return "Worker na Platform: " + name + ". É para ele que as versões são autorizadas e é em nome dele que este computador recebe execuções.";
+        return SEAT_LABEL + name + ". É para ele que as versões são autorizadas e é em nome dele que este computador recebe execuções.";
     }
 
     /** T06 - onde ver o que as execuções pedidas pela Platform escreveram e produziram. Este aplicativo não mostra esse conteúdo. */
@@ -202,6 +205,56 @@ final class RemoteText {
     }
 
     static final String NO_CONTACT = "Sem contato com a Platform no momento. O estado mostrado é o último conhecido.";
+
+    // ---- vinculo x comunicacao: ter a credencial guardada (vinculado) nao comprova contato de agora (conectado)
+
+    /** O vinculo, em uma frase, para a tela de execucao remota. Vazio quando nao ha vinculo. */
+    static String link(Status s) {
+        return s == Status.RECEIVING || s == Status.PAUSED
+                ? "Vínculo: este computador está vinculado à Platform (guarda uma credencial de máquina). O vínculo, sozinho, não comprova contato agora."
+                : "";
+    }
+
+    /** A comunicacao, em uma frase. {@code lastTime}: a hora do ultimo contato aceito nesta abertura (vazio: nenhum ainda). */
+    static String connection(boolean inContact, String lastTime) {
+        if (inContact) {
+            return "Comunicação: conectado. A Platform aceitou o último contato deste computador" + (lastTime.isEmpty() ? "." : " às " + lastTime + ".");
+        }
+        return "Comunicação: sem contato agora. " + (lastTime.isEmpty() ? "A Platform ainda não aceitou nenhum contato desde que o aplicativo abriu."
+                : "O último contato aceito foi às " + lastTime + ".") + " O estado mostrado é o último conhecido.";
+    }
+
+    static final String SUMMARY_DETAILS = "Ver detalhes";
+    static final String SUMMARY_DETAILS_ACCESSIBLE = "Ver detalhes da execução remota neste computador";
+
+    /** Tela principal, primeira linha: o vinculo e, separada, a comunicacao. */
+    static String summaryState(Status s, boolean inContact) {
+        return "Execução remota: " + switch (s) {
+            case UNAVAILABLE -> "indisponível neste computador";
+            case NOT_ENABLED -> "este computador não está vinculado à Platform";
+            case RECEIVING -> "vinculado à Platform · " + (inContact ? "conectado" : "sem contato agora");
+            case PAUSED -> "vinculado à Platform (novos trabalhos pausados) · " + (inContact ? "conectado" : "sem contato agora");
+            case ENDED -> "vínculo encerrado · sem contato";
+        };
+    }
+
+    /** Tela principal, segunda linha: organizacao, posto na Platform e a atividade de agora. Sem vinculo, so a atividade. */
+    static String summaryWhere(boolean linked, String organizationName, String seatName, com.nekkora.client.remote.RemoteMachine.Activity a) {
+        String now = switch (a) {
+            case IDLE -> "nenhuma execução em andamento";
+            case LOCAL_RUNNING -> "execução local em andamento";
+            case REMOTE_PREPARING -> "preparando uma execução solicitada pela Platform";
+            case REMOTE_RUNNING -> "executando uma solicitação da Platform";
+            case REMOTE_SENDING -> "enviando o resultado à Platform";
+            case REMOTE_FINISHING, LOCAL_FINISHING -> "finalizando (processos da automação ainda ativos)";
+            case REMOTE_UNCERTAIN, LOCAL_UNCERTAIN -> "ocupação incerta";
+        };
+        if (!linked) {
+            return "Atividade: " + now + ".";
+        }
+        return "Organização: " + (organizationName == null || organizationName.isBlank() ? "fora da sua lista" : organizationName)
+                + " · " + SEAT_LABEL + (seatName == null || seatName.isBlank() ? "ainda não informado" : seatName) + " · " + now + ".";
+    }
 
     private RemoteText() {
     }
