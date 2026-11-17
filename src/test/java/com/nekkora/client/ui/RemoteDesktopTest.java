@@ -239,6 +239,21 @@ class RemoteDesktopTest {
         assertFalse(read(() -> p.codeField().isShowing() || p.enableButton().isShowing()));
         assertEquals("", read(() -> p.codeField().getText()));
         assertTrue(Files.exists(vaultFile));
+        // texto compacto: a parte principal mostra o estado, o vinculo, a organizacao, a comunicacao e a atividade; o que e extenso
+        // (explicacoes, credencial e ambientes Python) fica em "Detalhes tecnicos", recolhido por padrao
+        assertFalse(read(p::detailsOpen), "detalhes tecnicos recolhidos por padrao");
+        assertEquals(RemoteText.DETAILS_SHOW, read(() -> p.detailsToggle().getText()));
+        assertTrue(read(() -> p.statusNotice().isShowing() && p.contactNotice().isShowing() && p.activityNotice().isShowing()), "estado, comunicacao e atividade a vista");
+        assertFalse(read(p::linkText).isEmpty());
+        assertFalse(read(p::organizationText).isEmpty());
+        assertFalse(read(() -> p.notYetNotice().isShowing() || p.refreshPythonButton().isShowing() || p.detailsShowing()), "nada dos detalhes na tela enquanto recolhidos");
+        click(p.detailsToggle());
+        assertTrue(read(p::detailsOpen));
+        assertEquals(RemoteText.DETAILS_HIDE, read(() -> p.detailsToggle().getText()));
+        assertTrue(read(() -> p.notYetNotice().isShowing() && p.refreshPythonButton().isShowing()), "abertos: o que este aplicativo executa e os ambientes Python");
+        click(p.detailsToggle());
+        assertFalse(read(() -> p.detailsOpen() || p.refreshPythonButton().isShowing()), "recolhe de novo");
+        click(p.detailsToggle());
         // T01b: a tela diz ate quando a credencial vale e que a renovacao e automatica
         assertTrue(read(p::validityText).matches("A credencial deste computador vale até [0-9]{2}/02/2027 e é renovada automaticamente.*"), read(p::validityText));
 
@@ -265,6 +280,9 @@ class RemoteDesktopTest {
         assertFalse(gw.paused);
         assertEquals(RemoteText.status(Status.RECEIVING), read(() -> p.statusNotice().text()));
 
+        // de volta ao estado padrao da tela (detalhes recolhidos)
+        click(p.detailsToggle());
+        assertFalse(read(p::detailsOpen));
         // trocar o tema com o dialogo aberto: o conteudo continua cabendo, sem barra de rolagem
         edt(() -> window.themeToggle().doClick(0));
         JDialog d = read(() -> window.remoteDialog());

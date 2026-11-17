@@ -69,6 +69,12 @@ final class RemotePanel extends JPanel {
     private final GhostButton keep = GhostButton.text(RemoteText.KEEP);
     private final Notice result = new Notice(WIDTH);
     private final GhostButton close = GhostButton.text(RemoteText.CLOSE);
+    // o que e extenso fica recolhido: explicacoes, credencial e ambientes Python (a parte principal mostra organizacao, posto,
+    // comunicacao e a atividade de agora)
+    private final GhostButton detailsToggle = GhostButton.text(RemoteText.DETAILS_SHOW);
+    private final JPanel detailsSection = column();
+    private final WrappedText seatExplained = new WrappedText(WIDTH).alignLeft();
+    private boolean detailsOpen;
     private final JPanel enableSection = column();
     private final JPanel enabledSection = column();
     private final JPanel disableSection = column();
@@ -111,9 +117,8 @@ final class RemotePanel extends JPanel {
         enableSection.add(row(enable));
 
         enabledSection.add(row(disable));
-        enabledSection.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
-        enabledSection.add(row(refreshPython));
         reportsPython.setText(RemoteText.REPORTS_PYTHON);
+        seatExplained.setText(RemoteText.SEAT_EXPLAINED);
 
         disableSection.add(disableWarning);
         disableSection.add(Box.createVerticalStrut(ClientTheme.SPACE_3));
@@ -124,11 +129,24 @@ final class RemotePanel extends JPanel {
         footer.add(close);
 
         seeOnPlatform.setText(RemoteText.SEE_ON_PLATFORM);
-        JComponent[] all = {title, status, link, organization, contact, activity, what, local, reportsPython, notYet, seeOnPlatform, validity, pythonReported,
-                pythonHere, held, heldLogs, lost, enableSection, enabledSection, disableSection, result, footer};
-        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
+        // detalhes tecnicos, recolhidos por padrao: o que o posto significa, o que este aplicativo executa, o que fica local, onde
+        // ver o conteudo, a validade da credencial e os ambientes Python informados
+        JComponent refreshRow = row(refreshPython);
+        for (JComponent c : new JComponent[] {seatExplained, notYet, local, seeOnPlatform, validity, reportsPython, pythonReported, pythonHere, refreshRow}) {
+            c.setAlignmentX(Component.LEFT_ALIGNMENT);
+            detailsSection.add(c);
+            detailsSection.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
+        }
+        detailsSection.getAccessibleContext().setAccessibleName(RemoteText.DETAILS_TITLE);
+        detailsSection.setVisible(false);
+        detailsToggle.addActionListener(e -> setDetailsOpen(!detailsOpen));
+        JComponent toggleRow = row(detailsToggle);
+        // parte principal: estado, vinculo, organizacao e posto, comunicacao, atividade, pendencias (so quando ha) e as acoes
+        JComponent[] all = {title, status, link, organization, contact, activity, what, held, heldLogs, lost, enableSection, enabledSection, disableSection,
+                result, toggleRow, detailsSection, footer};
+        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_3,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_3,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_3, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -169,6 +187,15 @@ final class RemotePanel extends JPanel {
         });
         restyle();
         render();
+    }
+
+    /** Abre ou recolhe os detalhes tecnicos; a janela acompanha a altura. */
+    void setDetailsOpen(boolean open) {
+        detailsOpen = open;
+        detailsSection.setVisible(open);
+        detailsToggle.setText(open ? RemoteText.DETAILS_HIDE : RemoteText.DETAILS_SHOW);
+        detailsToggle.getAccessibleContext().setAccessibleName(detailsToggle.getText());
+        relayout();
     }
 
     /** A janela fechou: respostas que chegarem depois nao mexem mais na tela. */
@@ -272,6 +299,7 @@ final class RemotePanel extends JPanel {
         org = org.isEmpty() || seat.isEmpty() ? org : org + " " + seat;
         organization.setText(org);
         organization.setVisible(!org.isEmpty());
+        seatExplained.setVisible(!seat.isEmpty());
         RemoteMachine.Activity now = machine.activity();
         String keptHere = RemoteText.kept(machine.kept());
         if (linked || now != RemoteMachine.Activity.IDLE || !keptHere.isEmpty()) {
@@ -392,7 +420,7 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere, link}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere, link, seatExplained}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -439,6 +467,19 @@ final class RemotePanel extends JPanel {
 
     Notice contactNotice() {
         return contact;
+    }
+
+    GhostButton detailsToggle() {
+        return detailsToggle;
+    }
+
+    boolean detailsOpen() {
+        return detailsSection.isVisible();
+    }
+
+    /** O que esta de fato na tela agora dentro dos detalhes tecnicos (vazio com eles recolhidos). */
+    boolean detailsShowing() {
+        return detailsSection.isShowing();
     }
 
     String linkText() {
