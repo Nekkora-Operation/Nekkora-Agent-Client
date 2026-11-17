@@ -41,8 +41,8 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
 
 ## O que a tela mostra (ajustes do aceite de 17/11)
 
-- **Tela principal (depois da entrada):** um resumo de duas linhas — vínculo com a Platform e comunicação na primeira; organização,
-  Worker e a atividade de agora na segunda — com "Ver detalhes", que abre a tela "Execução remota".
+- **Tela principal (depois da entrada):** um resumo de três linhas curtas — vínculo com a Platform e comunicação; organização e Worker;
+  e a atividade de agora — com "Ver detalhes", que abre a tela "Execução remota".
 - **Vinculado × conectado:** "vinculado" é ter a credencial da máquina guardada; "conectado" só quando a Platform aceitou o último
   contato (a hora aparece na tela "Execução remota"). Ter a credencial não comprova contato: os dois são ditos em separado.
 - **Tela "Execução remota", parte principal:** estado, vínculo, organização e Worker, comunicação, atividade de agora, pendências (só
