@@ -256,7 +256,7 @@ class ManagedRunTest {
             assertTrue(controller.occupied(), "mas o computador continua ocupado: finalizando");
             assertEquals(ProcessTree.Verdict.ALIVE, controller.processTree(id));
             ExecRefused busy = assertThrows(ExecRefused.class, () -> controller.startManaged(job("onze", RunFixtures.SUCESSO, null)));
-            assertEquals(ErrorCode.EXEC_ALREADY_RUNNING, busy.code());
+            assertEquals(ErrorCode.EXEC_PROCESSES_PENDING, busy.code());
             // outro controlador (o aplicativo reaberto) nao alcanca mais o grupo, mas ve o filho anotado vivo
             RunController reopened = controller();
             assertEquals(ProcessTree.Verdict.ALIVE, reopened.processTree(id), "a anotacao esta no disco: vale depois de reabrir");
@@ -283,7 +283,7 @@ class ManagedRunTest {
      * insuficiente - ate a sessao do Windows acabar (aqui, simulada tirando a marca da execucao).
      */
     @Test
-    void comOAplicativoFechadoNoFimDoPrincipalSoASessaoEncerradaAcabaComADuvida() throws Exception {
+    void comOAplicativoFechadoNoFimDoPrincipalOComputadorContinuaOcupadoEAFaltaDaMarcaSozinhaNaoLibera() throws Exception {
         RunController.Request job = job("treze", DEIXA_FILHO, null);
         ExecutionId id = controller.startManaged(job).record().id();
         waitEnd(controller);
@@ -305,10 +305,18 @@ class ManagedRunTest {
             String after = Files.readString(tree, StandardCharsets.UTF_8);
             Files.writeString(tree, after.replace(ProcessTree.END + "\n", "").replace(ProcessTree.EMPTY + "\n", ""), StandardCharsets.UTF_8);
             assertEquals(ProcessTree.Verdict.UNCERTAIN, reopened.processTree(id), "nenhum anotado vivo NAO e prova");
-            assertFalse(reopened.occupied(), "a vaga local nao fica presa; a duvida e dita a quem pergunta");
-            // a sessao do Windows acabou (simulado): a marca da execucao nao existe mais
+            // ao abrir, o aplicativo encontra a execucao sem prova de encerramento: o computador continua OCUPADO por ela
+            reopened.reconcile();
+            assertTrue(reopened.occupied(), "sem prova de que os processos acabaram, nada novo inicia");
+            ExecRefused pending = assertThrows(ExecRefused.class, () -> reopened.startManaged(job("quinze", RunFixtures.SUCESSO, null)));
+            assertEquals(ErrorCode.EXEC_PROCESSES_PENDING, pending.code());
+            // a marca da execucao some (removida por outro programa, por exemplo): SOZINHA, a falta dela nao libera nada - a sessao
+            // do Windows deste teste e a mesma, e os processos dela desde antes do lancamento provam isso
             WindowsProcessGroup.unmark(WindowsProcessGroup.name(id));
-            assertEquals(ProcessTree.Verdict.GONE, reopened.processTree(id));
+            assertEquals(Boolean.FALSE, WindowsProcessGroup.marked(WindowsProcessGroup.name(id)));
+            assertTrue(WindowsProcessGroup.working());
+            assertEquals(ProcessTree.Verdict.UNCERTAIN, reopened.processTree(id), "marca ausente com a sessao viva: continua incerto");
+            assertTrue(reopened.occupied());
             reopened.close();
         } finally {
             child.destroyForcibly();

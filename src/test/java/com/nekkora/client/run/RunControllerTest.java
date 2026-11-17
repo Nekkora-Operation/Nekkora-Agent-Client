@@ -162,7 +162,8 @@ class RunControllerTest {
         assertEquals(3, rows.size(), rows.toString());
         assertTrue(rows.stream().anyMatch(l -> l.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3} saída +\\| SENTINELA-VALOR-DA-AUTOMACAO 12345")), rows.toString());
         assertTrue(rows.stream().anyMatch(l -> l.matches(".* erro +\\| SENTINELA-VALOR-DA-AUTOMACAO erro")), rows.toString());
-        List<String> ev = runs.events(r.id());
+        // depois do desfecho vem o registro de que os processos da execucao acabaram (a vaga so e liberada com ele)
+        List<String> ev = runs.events(r.id()).stream().filter(l -> !l.contains("PROCESSES_GONE")).toList();
         assertTrue(ev.get(0).contains("STARTING") && ev.stream().anyMatch(l -> l.contains("\"RUNNING\"")) && ev.get(ev.size() - 1).contains("SUCCEEDED")
                 && ev.get(ev.size() - 1).contains("BUSINESS_SUCCESS"), ev.toString());
         Path copy = runs.dir(r.id()).resolve("pacote");
@@ -540,5 +541,50 @@ class RunControllerTest {
             }
         }
         return zip;
+    }
+
+    /**
+     * Decisao de 16/11: uma automacao por computador vale tambem para a execucao LOCAL. Ela termina (o desfecho e o dela) e deixa
+     * um processo filho: a vaga continua ocupada - nada inicia, daqui nem da Platform - ate o filho acabar. Tudo fica so neste
+     * computador.
+     */
+    @Test
+    void execucaoLocalQueDeixaProcessoFilhoMantemAVagaOcupadaAteEleAcabar() throws Exception {
+        String main = String.join("\n",
+                "import json, os, pathlib, subprocess, sys, time",
+                "from comum import saida, sinal",
+                "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(pathlib.Path(__file__).with_name('filho.py'))],",
+                "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+                "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': filho.pid}), encoding='utf-8')",
+                "time.sleep(1.5)",
+                "sinal('BUSINESS_SUCCESS')",
+                "");
+        ExecutionPackage pkg = approved("deixa-filho", main);
+        ExecutionId id = controller.start(request(pkg, null)).record().id();
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (controller.isRunning() && System.nanoTime() < deadline) Thread.sleep(50);
+        assertFalse(controller.isRunning(), "a execucao local terminou");
+        assertEquals(ExecutionState.SUCCEEDED, controller.record(id).orElseThrow().state());
+        java.util.regex.Matcher m;
+        try (java.util.stream.Stream<Path> walk = Files.walk(tmp)) {
+            Path pids = walk.filter(f -> f.getFileName().toString().equals("pids.json")).findFirst().orElseThrow();
+            m = java.util.regex.Pattern.compile("\"filho\": *(\\d+)").matcher(Files.readString(pids, StandardCharsets.UTF_8));
+        }
+        assertTrue(m.find());
+        ProcessHandle child = ProcessHandle.of(Long.parseLong(m.group(1))).orElseThrow();
+        try {
+            assertTrue(child.isAlive());
+            assertTrue(controller.occupied(), "a vaga do computador continua ocupada pela execucao local que deixou um filho");
+            assertEquals("FINISHING", controller.hold(true));
+            assertEquals("", controller.hold(false), "nao e uma execucao da Platform");
+            ExecRefused refused = assertThrows(ExecRefused.class, () -> controller.start(request(approved("outra", RunFixtures.SUCESSO), null)));
+            assertEquals(ErrorCode.EXEC_PROCESSES_PENDING, refused.code());
+        } finally {
+            child.destroyForcibly();
+        }
+        deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (controller.occupied() && System.nanoTime() < deadline) Thread.sleep(50);
+        assertFalse(controller.occupied(), "o filho acabou: a vaga foi liberada");
+        assertEquals("", controller.hold(true));
     }
 }
