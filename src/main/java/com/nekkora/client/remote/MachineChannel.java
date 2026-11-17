@@ -184,8 +184,16 @@ public final class MachineChannel {
      * {@link RemoteMachine#setDeliveryTrial}); {@code busy}: ha uma tentativa entregue ainda nao resolvida.
      */
     Presence heartbeat(String credential, String appVersion, boolean declaresRun, boolean busy) throws Refused {
+        return heartbeat(credential, appVersion, declaresRun, busy, false);
+    }
+
+    /**
+     * {@code busy} e {@code diskPressure} sao os UNICOS sinais de disponibilidade que saem deste computador: dois sim/nao, sem
+     * dizer por que - nada identifica o que o esta ocupando (execucao da Platform ou iniciada aqui).
+     */
+    Presence heartbeat(String credential, String appVersion, boolean declaresRun, boolean busy, boolean diskPressure) throws Refused {
         String body = "{\"agentVersion\":" + Json.quote(appVersion) + ",\"contractVersion\":\"" + CONTRACT + "\",\"capabilities\":[\"PY_INVENTORY_1_0\""
-                + (declaresRun ? ",\"REMOTE_RUN_1_0\"" : "") + "],\"remote\":{\"busy\":" + busy + ",\"diskPressure\":false}}";
+                + (declaresRun ? ",\"REMOTE_RUN_1_0\"" : "") + "],\"remote\":{\"busy\":" + busy + ",\"diskPressure\":" + diskPressure + "}}";
         HttpResponse<String> r = send(request(HEARTBEAT, credential).POST(HttpRequest.BodyPublishers.ofString(body)));
         Map<String, Object> o = ok(authenticated(r));
         if (!(o.get("remote") instanceof Map<?, ?> remote)) {
