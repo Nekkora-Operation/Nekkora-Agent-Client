@@ -92,6 +92,11 @@ class RunControllerTest {
         long deadline = System.nanoTime() + max.toNanos();
         while (c.isRunning() && System.nanoTime() < deadline) Thread.sleep(50);
         assertFalse(c.isRunning(), "terminou no prazo do teste");
+        // o fim por inteiro: a finalizacao (a espera dos processos da execucao) continua numa thread depois do processo principal.
+        // Enquanto ela corre o computador segue ocupado e a pasta da execucao ainda recebe gravacoes; quem quer olhar esse
+        // intervalo (um filho vivo) nao usa este metodo
+        long settle = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (c.finalizing() && System.nanoTime() < settle) Thread.sleep(20);
         return c.current().orElseThrow().record();
     }
 
