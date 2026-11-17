@@ -175,15 +175,27 @@ class RemoteDesktopTest {
         assertEquals(RemoteText.status(Status.NOT_ENABLED), read(() -> p.statusNotice().text()));
         assertFalse(read(() -> p.toggleButton().isShowing() || p.disableButton().isShowing()));
 
-        // sem codigo e sem confirmacao: nada e enviado
-        click(p.enableButton());
-        assertEquals(RemoteText.CODE_REQUIRED, read(() -> p.resultNotice().text()));
+        // confirmacao desmarcada: o botao de habilitar fica DESABILITADO, com ou sem codigo digitado
+        assertTrue(read(() -> p.enableButton().isShowing()));
+        assertFalse(read(() -> p.enableButton().isEnabled()), "sem a confirmacao marcada o botao nao pode ser clicado");
         String plain = gw.code("plain");
         type(p, plain, false);
-        click(p.enableButton());
+        assertFalse(read(() -> p.enableButton().isEnabled()), "codigo digitado nao basta: falta a confirmacao");
+        // a validacao continua na logica: Enter no campo do codigo, sem a confirmacao, e recusado e nada e enviado
+        edt(() -> p.codeField().postActionEvent());
         assertEquals(RemoteText.CONFIRM_REQUIRED, read(() -> p.resultNotice().text()));
         assertFalse(read(p::busy));
         assertEquals(0, gw.calls.size(), "sem a confirmacao explicita, o codigo nao sai deste computador");
+        // marcar habilita o botao; desmarcar o desabilita de novo
+        edt(() -> p.confirmBox().doClick(0));
+        assertTrue(read(() -> p.enableButton().isEnabled()));
+        edt(() -> p.confirmBox().doClick(0));
+        assertFalse(read(() -> p.enableButton().isEnabled()));
+        // confirmacao marcada e codigo vazio: o botao aceita o clique e a logica pede o codigo
+        type(p, "", true);
+        click(p.enableButton());
+        assertEquals(RemoteText.CODE_REQUIRED, read(() -> p.resultNotice().text()));
+        assertEquals(0, gw.calls.size());
 
         // codigo de pareamento comum, com a confirmacao: recusado com o motivo; o codigo sai da tela; nada guardado
         type(p, plain, true);
