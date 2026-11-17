@@ -24,8 +24,9 @@ import com.nekkora.client.theme.ClientTheme;
 /**
  * A habilitacao deste computador para execucao remota: o estado em palavras e, conforme o estado, habilitar (codigo +
  * confirmacao explicita), desabilitar (com um segundo passo de confirmacao) ou remover um vinculo encerrado. Pausar e
- * retomar o recebimento NAO sao oferecidos nesta tela (pedido do aceite de 17/11): o mecanismo continua em
- * {@link RemoteMachine#pause()} e {@link RemoteMachine#resume()}, e o estado "pausado" continua sendo mostrado se vier. Cada clique e uma tentativa; enquanto ela corre, o formulario fica ocupado. O codigo digitado e
+ * o recebimento NAO e oferecido nesta tela (pedido do aceite de 17/11); o mecanismo continua em {@link RemoteMachine#pause()}.
+ * Um computador que JA esteja pausado mostra o estado e, so nele, "Voltar a receber trabalhos": a recuperacao explicita, que
+ * preserva o vinculo e as autorizacoes. Nada e retomado sozinho. Cada clique e uma tentativa; enquanto ela corre, o formulario fica ocupado. O codigo digitado e
  * apagado do campo assim que a tentativa termina, com sucesso ou nao. Nada aqui usa a sessao de quem entrou.
  */
 final class RemotePanel extends JPanel {
@@ -63,6 +64,8 @@ final class RemotePanel extends JPanel {
     private final JTextField code = new JTextField(20);
     private final JCheckBox confirm = new JCheckBox(RemoteText.CONFIRM);
     private final PrimaryButton enable = PrimaryButton.compact(RemoteText.ENABLE);
+    /** So para o computador JA pausado: a recuperacao explicita do estado, sem desfazer o vinculo. Pausar nao e oferecido. */
+    private final PrimaryButton resume = PrimaryButton.compact(RemoteText.RESUME);
     private final GhostButton disable = GhostButton.text(RemoteText.DISABLE);
     private final Notice disableWarning = new Notice(WIDTH);
     private final PrimaryButton disableConfirm = PrimaryButton.compact(RemoteText.DISABLE_CONFIRM);
@@ -116,7 +119,7 @@ final class RemotePanel extends JPanel {
         enableSection.add(Box.createVerticalStrut(ClientTheme.SPACE_3));
         enableSection.add(row(enable));
 
-        enabledSection.add(row(disable));
+        enabledSection.add(row(resume, disable));
         reportsPython.setText(RemoteText.REPORTS_PYTHON);
         seatExplained.setText(RemoteText.SEAT_EXPLAINED);
 
@@ -157,6 +160,12 @@ final class RemotePanel extends JPanel {
         // a confirmacao desmarcada desabilita o botao (a validacao na acao continua existindo)
         confirm.addActionListener(e -> enable.setEnabled(!busy && confirm.isSelected()));
         enable.addActionListener(e -> submitEnable());
+        // ato explicito de quem esta diante do computador: nada e retomado sozinho
+        resume.addActionListener(e -> {
+            if (machine.view().status() == Status.PAUSED) {
+                attempt(resume, machine::resume, RemoteText.RESUMED_NOW);
+            }
+        });
         disable.addActionListener(e -> {
             if (machine.view().status() == Status.ENDED) {
                 // vinculo ja encerrado: remover e so local, nao ha o que confirmar com a Platform
@@ -361,12 +370,13 @@ final class RemotePanel extends JPanel {
         enableSection.setVisible(s == Status.NOT_ENABLED);
         enabledSection.setVisible((linked || s == Status.ENDED) && !confirmingDisable);
         disableSection.setVisible(linked && confirmingDisable);
+        resume.setVisible(s == Status.PAUSED);
         disable.setText(s == Status.ENDED ? RemoteText.REMOVE : RemoteText.DISABLE);
         disable.getAccessibleContext().setAccessibleName(disable.getText());
         // desabilitar impede de vez o envio do que ainda nao foi confirmado: dito ANTES de a pessoa confirmar
         boolean sending = pending.stream().anyMatch(h -> "SENDING".equals(h.reason())) || queues.stream().anyMatch(q -> "SENDING".equals(q.reason()));
         disableWarning.show(Notice.Kind.WARNING, sending ? RemoteText.DISABLE_WARNING_SENDING : RemoteText.DISABLE_WARNING);
-        for (JComponent c : new JComponent[] {code, confirm, enable, disable, disableConfirm, keep, refreshPython}) {
+        for (JComponent c : new JComponent[] {code, confirm, enable, resume, disable, disableConfirm, keep, refreshPython}) {
             c.setEnabled(!busy);
         }
         enable.setEnabled(!busy && confirm.isSelected());
@@ -444,6 +454,10 @@ final class RemotePanel extends JPanel {
 
     PrimaryButton enableButton() {
         return enable;
+    }
+
+    PrimaryButton resumeButton() {
+        return resume;
     }
 
     GhostButton disableButton() {
