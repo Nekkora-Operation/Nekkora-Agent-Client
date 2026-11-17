@@ -706,6 +706,7 @@ public final class RunController implements AutoCloseable {
         if (d != null) {
             Thread t = new Thread(() -> drain(d), "nekkora-client-finalizando");
             t.setDaemon(true);
+            finalizer = t;
             t.start();
         }
         occupancyChanged();
@@ -826,6 +827,13 @@ public final class RunController implements AutoCloseable {
     private record Draining(ExecutionId id, WindowsProcessGroup.Group group, ProcessTree tree) {
     }
 
+    /** A thread que espera os processos da execucao ja terminada ("finalizando"); nulo antes da primeira. */
+    private volatile Thread finalizer;
+    /** As finalizacoes interrompidas pelo encerramento do aplicativo: nao avisam mudanca de ocupacao (ninguem mais as ouve). */
+    private final java.util.Set<ExecutionId> closedFinalizations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Quanto o encerramento espera a finalizacao fazer a ultima conferencia e parar. */
+    static final Duration FINALIZER_CLOSE_WAIT = Duration.ofSeconds(5);
+
     /**
      * A cada volta do acompanhamento de uma execucao gerenciada: anota os processos vivos do grupo e poe nele qualquer
      * descendente que tenha nascido antes de o processo principal entrar (a janela entre lancar e agrupar). Se algum ficar de
@@ -886,7 +894,7 @@ public final class RunController implements AutoCloseable {
             synchronized (lock) {
                 if (draining == d) draining = null;
             }
-            occupancyChanged();
+            if (!closedFinalizations.remove(d.id())) occupancyChanged();
         }
     }
 
@@ -1089,6 +1097,11 @@ public final class RunController implements AutoCloseable {
      * Encerramento do aplicativo: a execucao ativa e cancelada com a origem {@code APPLICATION_SHUTDOWN} (a arvore possuida
      * e encerrada) e espera-se ate {@link #CLOSE_WAIT} (15 s) o registro ser fechado; estados ainda nao gravados tem uma
      * ultima tentativa. Bloqueia: chamar fora da linha de eventos. Sem execucao ativa, volta logo.
+     * <p>
+     * A FINALIZACAO de uma execucao ja terminada (a espera dos processos dela) tambem para aqui: ela e interrompida, faz no
+     * maximo a conferencia que ja estava em curso e termina, e o encerramento a espera ({@link #FINALIZER_CLOSE_WAIT}). Depois
+     * de {@code close()} voltar, este objeto nao grava mais nada na pasta de dados. Sem a prova de que os processos acabaram,
+     * nada e afirmado: a proxima abertura do aplicativo encontra o que ficou gravado (ocupacao incerta, se for o caso).
      */
     @Override
     public void close() {
@@ -1108,6 +1121,24 @@ public final class RunController implements AutoCloseable {
                 }
             }
         }
+        Thread f = finalizer;
+        if (f != null && f.isAlive()) {
+            synchronized (lock) {
+                if (draining != null) closedFinalizations.add(draining.id());
+            }
+            f.interrupt();
+            try {
+                f.join(FINALIZER_CLOSE_WAIT.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
         flushUnsaved();
+    }
+
+    /** Ha uma finalizacao em curso (processos de uma execucao ja terminada ainda sendo esperados)? */
+    boolean finalizing() {
+        Thread f = finalizer;
+        return f != null && f.isAlive();
     }
 }
