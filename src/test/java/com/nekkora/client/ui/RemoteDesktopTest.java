@@ -152,6 +152,24 @@ class RemoteDesktopTest {
         return read(() -> window.remotePanel());
     }
 
+    /** Os botoes VISIVEIS do dialogo cujo texto fala em pausar, retomar ou voltar a receber (esperado: nenhum). */
+    private java.util.List<String> pauseControls(RemotePanel p) throws Exception {
+        return read(() -> {
+            java.util.List<String> found = new java.util.ArrayList<>();
+            java.util.ArrayDeque<Component> todo = new java.util.ArrayDeque<>(java.util.List.of(p));
+            while (!todo.isEmpty()) {
+                Component c = todo.pop();
+                if (c instanceof AbstractButton b && b.isShowing() && b.getText() != null && b.getText().toLowerCase().matches(".*(paus|retom|voltar a receber).*")) {
+                    found.add(b.getText());
+                }
+                if (c instanceof java.awt.Container k) {
+                    todo.addAll(java.util.List.of(k.getComponents()));
+                }
+            }
+            return found;
+        });
+    }
+
     private void type(RemotePanel p, String code, boolean confirm) throws Exception {
         edt(() -> {
             p.codeField().setText(code);
@@ -169,11 +187,11 @@ class RemoteDesktopTest {
     }
 
     @Test
-    void habilitarPausarRetomarEDesabilitarPeloDialogoModal() throws Exception {
+    void habilitarEDesabilitarPeloDialogoModalSemPausarNemRetomarNaTela() throws Exception {
         edt(() -> window.setRemote(machine));
         RemotePanel p = openDialog();
         assertEquals(RemoteText.status(Status.NOT_ENABLED), read(() -> p.statusNotice().text()));
-        assertFalse(read(() -> p.toggleButton().isShowing() || p.disableButton().isShowing()));
+        assertFalse(read(() -> p.disableButton().isShowing()));
 
         // confirmacao desmarcada: o botao de habilitar fica DESABILITADO, com ou sem codigo digitado
         assertTrue(read(() -> p.enableButton().isShowing()));
@@ -233,14 +251,16 @@ class RemoteDesktopTest {
         assertEquals("1 instalação de Python informada à Platform (só a versão).", read(p::pythonReportedText));
         assertFalse(gw.inventory.toLowerCase().contains("python312") || gw.inventory.contains("c:"), "o caminho nao sai deste computador");
 
-        // pausar e retomar
-        assertEquals(RemoteText.PAUSE, read(() -> p.toggleButton().getText()));
-        click(p.toggleButton());
+        // pausar e retomar NAO estao na tela (pedido do aceite); o mecanismo interno continua e a tela mostra o estado que vier
+        assertEquals(java.util.List.of(), pauseControls(p), "nenhum controle de pausar ou retomar na tela, habilitado e recebendo");
+        machine.pause();
         answer();
-        assertTrue(gw.paused);
+        assertTrue(gw.paused, "o mecanismo interno de pausa continua valendo no servidor");
         assertEquals(RemoteText.status(Status.PAUSED), read(() -> p.statusNotice().text()));
-        assertEquals(RemoteText.RESUME, read(() -> p.toggleButton().getText()));
-        click(p.toggleButton());
+        assertTrue(read(() -> p.statusNotice().text()).contains("desabilite este computador e habilite de novo"), "pausado: a tela diz como sair");
+        assertEquals(java.util.List.of(), pauseControls(p), "nenhum controle de pausar ou retomar na tela, pausado");
+        assertTrue(read(() -> p.disableButton().isShowing() && p.disableButton().isEnabled()), "desabilitar continua oferecido");
+        machine.resume();
         answer();
         assertFalse(gw.paused);
         assertEquals(RemoteText.status(Status.RECEIVING), read(() -> p.statusNotice().text()));
@@ -255,7 +275,6 @@ class RemoteDesktopTest {
         long before = gw.calls.size();
         click(p.disableButton());
         assertTrue(read(() -> p.disableConfirmButton().isShowing() && p.keepButton().isShowing()));
-        assertFalse(read(() -> p.toggleButton().isShowing()));
         click(p.keepButton());
         assertEquals(before, gw.calls.size());
         assertEquals(Status.RECEIVING, machine.view().status());
@@ -284,7 +303,8 @@ class RemoteDesktopTest {
         edt(() -> window.setRemote(machine));
         RemotePanel p = openDialog();
         assertEquals(RemoteText.status(Status.ENDED), read(() -> p.statusNotice().text()));
-        assertFalse(read(() -> p.toggleButton().isShowing() || p.enableButton().isShowing()));
+        assertFalse(read(() -> p.enableButton().isShowing()));
+        assertEquals(java.util.List.of(), pauseControls(p));
         assertEquals(RemoteText.REMOVE, read(() -> p.disableButton().getText()));
         long before = gw.calls.size();
         click(p.disableButton());
@@ -511,7 +531,8 @@ class RemoteDesktopTest {
         }
         String active = RemoteText.problem(com.nekkora.client.remote.MachineChannel.Problem.ATTEMPT_ACTIVE);
         assertTrue(active.contains("Desabilitar agora a deixaria sem desfecho"), active);
-        assertTrue(active.contains("peça o cancelamento na Platform") && active.contains("\"Pausar novos trabalhos\""), active);
+        assertTrue(active.contains("peça o cancelamento na Platform"), active);
+        assertFalse(active.toLowerCase().contains("pausar"), "a recusa nao indica um botao que a tela nao oferece mais: " + active);
         assertTrue(active.endsWith("Nada foi alterado."), active);
     }
 
