@@ -85,8 +85,15 @@ final class RemoteText {
     static final String SEAT_LABEL = "Worker na Platform: ";
 
     static String seat(String name) {
-        return SEAT_LABEL + name + ". É para ele que as versões são autorizadas e é em nome dele que este computador recebe execuções.";
+        return SEAT_LABEL + name + ".";
     }
+
+    /** O que o posto significa (vai para os detalhes tecnicos; o nome fica na parte principal da tela). */
+    static final String SEAT_EXPLAINED = "É para o posto acima que as versões são autorizadas na Platform, e é em nome dele que este computador recebe execuções.";
+
+    static final String DETAILS_SHOW = "Mostrar detalhes técnicos";
+    static final String DETAILS_HIDE = "Ocultar detalhes técnicos";
+    static final String DETAILS_TITLE = "Detalhes técnicos";
 
     /** T06 - onde ver o que as execuções pedidas pela Platform escreveram e produziram. Este aplicativo não mostra esse conteúdo. */
     static final String SEE_ON_PLATFORM = "Registros e resultados das execuções solicitadas pela Platform são consultados na Platform, na página da versão da "
@@ -211,7 +218,7 @@ final class RemoteText {
     /** O vinculo, em uma frase, para a tela de execucao remota. Vazio quando nao ha vinculo. */
     static String link(Status s) {
         return s == Status.RECEIVING || s == Status.PAUSED
-                ? "Vínculo: este computador está vinculado à Platform (guarda uma credencial de máquina). O vínculo, sozinho, não comprova contato agora."
+                ? "Vínculo: este computador está vinculado à Platform. O vínculo, sozinho, não comprova contato agora."
                 : "";
     }
 
