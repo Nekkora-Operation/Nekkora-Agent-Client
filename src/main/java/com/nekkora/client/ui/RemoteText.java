@@ -34,6 +34,12 @@ final class RemoteText {
     static final String ENABLED_NOW = "Este computador foi habilitado.";
     static final String DISABLED_NOW = "Este computador foi desabilitado. A Platform não o reconhece mais.";
     static final String REMOVED_NOW = "O vínculo foi removido deste computador.";
+    /** A validade em dia/mês/ano; a renovação é do aplicativo, sem ação da pessoa. */
+    static String validUntil(String date) {
+        return "A credencial deste computador vale até " + date + " e é renovada automaticamente perto do vencimento, enquanto o Nekkora Agent "
+                + "estiver aberto. Se vencer ou for revogada, será preciso habilitar de novo.";
+    }
+
     static final String NO_CONTACT = "Sem contato com a Platform no momento. O estado mostrado é o último conhecido.";
 
     private RemoteText() {
@@ -45,7 +51,7 @@ final class RemoteText {
             case NOT_ENABLED -> "Este computador não está habilitado. Ele não recebe execuções solicitadas pela Platform.";
             case RECEIVING -> "Este computador está habilitado e com o recebimento ligado.";
             case PAUSED -> "Recebimento pausado. Este computador não recebe novas execuções até você retomar.";
-            case ENDED -> "O vínculo deste computador com a Platform foi encerrado ou não pode mais ser usado. Remova-o para poder habilitar de novo "
+            case ENDED -> "A habilitação deste computador expirou, foi revogada ou não pode mais ser usada. Remova-a para poder habilitar de novo "
                     + "com um código novo.";
         };
     }
@@ -65,6 +71,7 @@ final class RemoteText {
             case LINK_ENDED -> "A Platform encerrou o vínculo deste computador. Remova-o para poder habilitar de novo com um código novo.";
             case NOT_ENABLED -> "Este computador não está habilitado na Platform.";
             case STORAGE -> "Este computador não conseguiu guardar a credencial da máquina com proteção. Nada ficou habilitado.";
+            case RENEWAL_NOT_DUE -> "A credencial deste computador ainda não precisa ser renovada.";
             case ALREADY_ENABLED -> "Este computador já tem um vínculo. Desabilite ou remova o vínculo atual antes de habilitar de novo.";
             case UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
         };

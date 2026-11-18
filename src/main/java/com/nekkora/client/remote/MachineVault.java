@@ -26,6 +26,8 @@ import com.nekkora.client.auth.Json;
 public final class MachineVault {
 
     static final String FILE = "maquina.json";
+    /** Renovacao em curso: o segredo NOVO, protegido, e a credencial que ele vai substituir. */
+    static final String PENDING = "renovacao.json";
     private static final int MAX_FILE = 16 * 1024;
     private static final Pattern UUID = Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     private static final Pattern SECRET = Pattern.compile("^[A-Za-z0-9_-]{43}$");
@@ -55,6 +57,11 @@ public final class MachineVault {
 
         Link withPaused(boolean value) {
             return new Link(origin, organizationId, agentId, workerId, credentialId, credentialExpiresAt, secret, value);
+        }
+
+        /** A mesma maquina com a credencial NOVA de uma renovacao. */
+        Link renewed(String newCredentialId, String newExpiresAt, String newSecret) {
+            return new Link(origin, organizationId, agentId, workerId, newCredentialId, newExpiresAt, newSecret, paused);
         }
 
         Link withExpiry(String expiresAt) {
@@ -126,8 +133,62 @@ public final class MachineVault {
         }
     }
 
+    /**
+     * O segredo novo de uma renovacao em curso DA credencial indicada, se houver. E gravado antes de a troca ser pedida:
+     * se a resposta se perder ou o aplicativo fechar, a troca e repetida com o MESMO segredo. Arquivo de outra credencial,
+     * ilegivel ou fora do formato: nao ha renovacao em curso.
+     */
+    Optional<String> pending(String fromCredentialId) {
+        Path f = dir.resolve(PENDING);
+        try {
+            if (!Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS) || Files.size(f) > MAX_FILE) {
+                return Optional.empty();
+            }
+            Map<String, Object> o = Json.object(Files.readString(f, StandardCharsets.UTF_8));
+            if (!fromCredentialId.equals(o.get("credencial"))) {
+                return Optional.empty();
+            }
+            byte[] plain = keyring.unprotect(Base64.getDecoder().decode(text(o, "segredo")));
+            try {
+                String secret = new String(plain, StandardCharsets.US_ASCII);
+                return SECRET.matcher(secret).matches() ? Optional.of(secret) : Optional.empty();
+            } finally {
+                Arrays.fill(plain, (byte) 0);
+            }
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    void savePending(String fromCredentialId, String secret) throws IOException {
+        if (!keyring.available() || !SECRET.matcher(secret).matches() || !UUID.matcher(fromCredentialId).matches()) {
+            throw new IOException("protecao indisponivel");
+        }
+        byte[] plain = secret.getBytes(StandardCharsets.US_ASCII);
+        String blob;
+        try {
+            blob = Base64.getEncoder().encodeToString(keyring.protect(plain));
+        } finally {
+            Arrays.fill(plain, (byte) 0);
+        }
+        Files.createDirectories(dir);
+        Path tmp = dir.resolve(PENDING + ".novo");
+        Files.writeString(tmp, "{\"versao\":1,\"credencial\":" + Json.quote(fromCredentialId) + ",\"segredo\":" + Json.quote(blob) + "}", StandardCharsets.UTF_8);
+        try {
+            Files.move(tmp, dir.resolve(PENDING), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tmp, dir.resolve(PENDING), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    void clearPending() throws IOException {
+        Files.deleteIfExists(dir.resolve(PENDING + ".novo"));
+        Files.deleteIfExists(dir.resolve(PENDING));
+    }
+
     /** Remove o vinculo deste computador. Depois disso a maquina nao consegue mais se autenticar. */
     public void clear() throws IOException {
+        clearPending();
         Files.deleteIfExists(dir.resolve(FILE + ".novo"));
         Files.deleteIfExists(dir.resolve(FILE));
     }

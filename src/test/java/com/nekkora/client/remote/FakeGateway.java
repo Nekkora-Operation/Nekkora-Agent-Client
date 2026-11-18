@@ -64,6 +64,17 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String contentType = "application/json";
     /** O resgate e processado, mas a conexao cai antes da resposta (uma vez). */
     public volatile boolean dropRedeemResponse;
+    /** Renovacao: a credencial esta na janela do servidor? */
+    public volatile boolean renewalDue = true;
+    /**
+     * A renovacao e processada, mas a conexao cai antes da resposta, por este numero de pedidos. O cliente HTTP do JDK repete
+     * sozinho, uma vez, um pedido que falha numa conexao reaproveitada: para perder a resposta de verdade, o teste derruba 2.
+     */
+    public volatile int dropRenewResponses;
+    /** credencial anterior (revogada por uma renovacao) -> segredo novo com que foi trocada. */
+    final Map<String, String> renewedFrom = new ConcurrentHashMap<>();
+    public volatile String renewedCredentialId = UUID.randomUUID().toString();
+    public volatile String renewedExpiresAt = "2027-05-14T12:00:00Z";
     /** O 409 do encerramento, quando nao nulo (vinculo ja encerrado de outro modo). */
     public volatile String unlinkConflict;
     public final List<String> unlinkOperations = new CopyOnWriteArrayList<>();
@@ -173,6 +184,7 @@ public final class FakeGateway implements AutoCloseable {
                     }
                 }
             }
+            case "/agent/api/v1/remote/credential/renew" -> renew(x, text, auth);
             case "/agent/api/v1/link/unlink" -> {
                 String op = field(text, "operationId");
                 unlinkOperations.add(op);
@@ -235,6 +247,45 @@ public final class FakeGateway implements AutoCloseable {
             return;
         }
         respond(x, 200, identity());
+    }
+
+    /** Como o servidor real: troca numa vez so; a repeticao com a credencial anterior e o MESMO segredo devolve a mesma nova. */
+    private void renew(HttpExchange x, String text, String auth) throws IOException {
+        String secret = field(text, "credentialSecret");
+        String bearer = auth == null ? "" : auth.replaceFirst("^Bearer ", "");
+        String answer = "{\"credentialId\":\"" + renewedCredentialId + "\",\"credentialExpiresAt\":\"" + renewedExpiresAt + "\"}";
+        if (secret.equals(renewedFrom.get(bearer)) && credential != null && credential.endsWith("." + secret)) {
+            if (dropRenewResponses > 0) {
+                dropRenewResponses--;
+                x.close();
+                return;
+            }
+            respond(x, 200, answer);
+            return;
+        }
+        if (!authenticated(x, auth)) {
+            return;
+        }
+        if (!featureOn) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_execution_unavailable\"}");
+        } else if (!enabled) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_execution_not_enabled\"}");
+        } else if (!secret.matches("^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$") || credential.endsWith("." + secret)) {
+            respond(x, 400, "{\"error\":\"invalid_request\"}");
+        } else if (!renewalDue) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"credential_renewal_not_due\"}");
+        } else {
+            renewedFrom.put(credential, secret);
+            credential = "nka1." + organizationId + "." + renewedCredentialId + "." + secret;
+            credentialExpiresAt = renewedExpiresAt;
+            renewalDue = false;
+            if (dropRenewResponses > 0) {
+                dropRenewResponses--;
+                x.close();
+                return;
+            }
+            respond(x, 200, answer);
+        }
     }
 
     private String identity() {
