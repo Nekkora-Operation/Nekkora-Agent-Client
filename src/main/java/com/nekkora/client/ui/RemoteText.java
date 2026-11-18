@@ -180,8 +180,6 @@ final class RemoteText {
     static final String CODE_FIELD = "Código de habilitação";
     static final String CONFIRM = "Confirmo que este computador poderá receber execuções solicitadas pela Platform.";
     static final String ENABLE = "Habilitar este computador";
-    static final String PAUSE = "Pausar novos trabalhos";
-    static final String RESUME = "Voltar a receber trabalhos";
     static final String DISABLE = "Desabilitar este computador";
     static final String DISABLE_CONFIRM = "Confirmar desabilitação";
     static final String DISABLE_WARNING = "Desabilitar encerra o vínculo deste computador na Platform. Para habilitar de novo será preciso outro código.";
@@ -213,8 +211,9 @@ final class RemoteText {
             case UNAVAILABLE -> "Este computador não consegue proteger a credencial da máquina. A habilitação não está disponível aqui.";
             case NOT_ENABLED -> "Este computador não está habilitado. Ele não recebe execuções solicitadas pela Platform.";
             case RECEIVING -> "Este computador está habilitado e recebendo novos trabalhos.";
-            case PAUSED -> "Novos trabalhos pausados. Este computador não recebe novas execuções até você voltar a receber. "
-                    + "Uma execução já em andamento continua até o fim. Pausar não desabilita o computador.";
+            // a tela nao oferece pausar nem retomar; o estado ainda pode vir (pausado antes desta versao): diz como sair dele
+            case PAUSED -> "Novos trabalhos pausados. Este computador continua vinculado, mas não recebe novas execuções. "
+                    + "Uma execução já em andamento continua até o fim. Para voltar a receber, desabilite este computador e habilite de novo com um código novo.";
             case ENDED -> "A habilitação deste computador expirou, foi revogada ou não pode mais ser usada. Remova-a para poder habilitar de novo "
                     + "com um código novo.";
         };
@@ -238,8 +237,8 @@ final class RemoteText {
             case RENEWAL_NOT_DUE -> "A credencial deste computador ainda não precisa ser renovada.";
             case ALREADY_ENABLED -> "Este computador já tem um vínculo. Desabilite ou remova o vínculo atual antes de habilitar de novo.";
             case ATTEMPT_ACTIVE -> "Há uma execução solicitada pela Platform em andamento neste computador, ou com o desfecho ainda por informar. "
-                    + "Desabilitar agora a deixaria sem desfecho. Espere terminar, ou peça o cancelamento na Platform, e desabilite depois. Para só deixar de "
-                    + "receber trabalhos novos, use \"Pausar novos trabalhos\": a execução em andamento continua até o fim. Nada foi alterado.";
+                    + "Desabilitar agora a deixaria sem desfecho. Espere terminar, ou peça o cancelamento na Platform, e desabilite depois. "
+                    + "Nada foi alterado.";
             // da entrega de uma tentativa: nunca chegam a uma acao da pessoa nesta tela
             case ATTEMPT_STALE, ATTEMPT_GONE, ATTEMPT_TRANSITION, PACKAGE_UNAVAILABLE, RESULT_CONFLICT, LOG_CONFLICT, LOG_LIMIT, RESULT_LIMIT, UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
         };

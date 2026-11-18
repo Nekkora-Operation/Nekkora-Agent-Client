@@ -44,7 +44,9 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
 - **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Nesta versão
   ela **não declara nenhuma capacidade de execução remota**, então a Platform mostra o computador como *incompatível* e
   não lhe entrega nada.
-- **Pausar novos trabalhos / Voltar a receber trabalhos:** vale no servidor, que é a referência; a presença traz o valor de
+- **Pausa (sem botão na tela desde 17/11):** "Pausar novos trabalhos" e "Voltar a receber trabalhos" foram retirados da tela a
+  pedido do aceite. O mecanismo interno continua (`RemoteMachine.pause()`/`resume()` e o canal da máquina) e o estado "pausado"
+  continua sendo mostrado se vier; para sair dele pela tela, desabilitar e habilitar de novo. A pausa vale no servidor, que é a referência; a presença traz o valor de
   lá. Pausar **não** desabilita o computador e **não** interrompe a execução em andamento. (Até o Client #41 os botões
   chamavam-se "Pausar recebimento" e "Retomar recebimento".)
 - **Desabilitar este computador:** pede um segundo passo de confirmação, encerra o vínculo na Platform e remove a
@@ -58,7 +60,7 @@ São três situações diferentes, com três tratamentos:
 
 | Situação | O que acontece com a execução da Platform que está ativa neste computador |
 |---|---|
-| **Pausar novos trabalhos** | Nada. Ela continua, é acompanhada até terminar e o desfecho verdadeiro é informado. Só não chega trabalho novo |
+| **Pausa (mecanismo interno, sem botão na tela)** | Nada. Ela continua, é acompanhada até terminar e o desfecho verdadeiro é informado. Só não chega trabalho novo |
 | **Desabilitar este computador** | **Recusado** enquanto houver uma tentativa recebida e não resolvida com a Platform (em preparação, em execução, ou com o desfecho ainda por informar). Nada muda, nem aqui nem lá; o desvínculo nem é pedido. A tela diz o que fazer: esperar terminar, pedir o cancelamento na Platform, ou só pausar. Assim o desvínculo pela pessoa nunca abandona o estado de uma execução |
 | **Vínculo encerrado na Platform** (quem administra revogou a máquina; credencial vencida) | Não dá para recusar: é o caminho de emergência. O computador deixa de estar autorizado a executar trabalho da Platform, então **o processo é parado, de forma controlada**. O que ele já produziu (registros e pasta de saída) **fica neste computador**, dito na tela como "não podem mais ser enviados: o vínculo foi encerrado", até o prazo de guarda. **Nada é enviado por outro caminho** e a máquina não informa desfecho: quem encerra a tentativa é a Platform ("Resultado não confirmado", ou "Não iniciada") |
 
@@ -72,7 +74,8 @@ Uma nova habilitação cria outra máquina na Platform: ela **não** entrega o q
 A credencial da máquina vale 90 dias. O aplicativo a renova **sozinho**, sem pessoa e sem código, quando faltarem até 30
 dias, a cada presença (portanto só com o aplicativo aberto):
 
-1. gera o segredo novo e o **grava protegido** (`remotaenovacao.json`, DPAPI) antes de pedir qualquer coisa;
+1. gera o segredo novo e o **grava protegido** (`remota
+enovacao.json`, DPAPI) antes de pedir qualquer coisa;
 2. pede a troca com a credencial atual; a resposta traz só o identificador e a validade da nova;
 3. grava a credencial nova e só então apaga o segredo pendente. A presença seguinte já usa a nova.
 
