@@ -1,8 +1,8 @@
 # Execução remota: habilitação deste computador
 
-PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01a. Esta entrega traz **só a habilitação**: o vínculo deste computador com a
-Platform, a presença, pausar/retomar e desabilitar. **O aplicativo ainda não executa o que a Platform solicitar**; isso
-vem nas próximas tarefas, e a tela diz isso enquanto for verdade.
+PLATFORM-CLIENT-EXECUCAO-REMOTA-001. O vínculo deste computador com a Platform (T01a), a continuidade da credencial
+(T01b), o inventário de Python (T01c), a entrega de uma tentativa (T02) e a **execução do que a Platform solicitar** (T03):
+ver "Entrega e execução de uma tentativa".
 
 Contrato do servidor: `docs/platform-client-execucao-remota-001/t01a-habilitacao-e-elegibilidade.md`, no repositório da API.
 
@@ -92,27 +92,44 @@ possa escolher onde executar. A tela diz isso antes de habilitar.
 
 Publicar o inventário não escolhe ambiente nem verifica dependências; isso vem nas próximas partes.
 
-## Entrega de uma tentativa (T02)
+## Entrega e execução de uma tentativa (T02 e T03)
 
-A máquina **puxa**: pergunta à Platform o que há para ela (`remote/next`). O caminho é:
+A máquina **puxa**: pergunta à Platform o que há para ela (`remote/next`), a cada 15 s (ponto de partida de laboratório).
+O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho:
 
 1. a tentativa entregue é **gravada no diário** (`remota/tentativa.json`, token protegido pela DPAPI) antes de qualquer
    confirmação. Se não der para gravar, nada é confirmado e a Platform entrega de novo, com token e época novos;
-2. o recebimento é confirmado (`ack`) com o token e a época da entrega. Repetir (resposta perdida, aplicativo fechado)
-   não muda nada no servidor;
-3. o desfecho é informado (`state`). Só depois de a Platform aceitar, o diário é apagado.
+2. o recebimento é confirmado (`ack`). Repetir (resposta perdida, aplicativo fechado) não muda nada no servidor;
+3. **preparando**: o pacote da tentativa é baixado para `remota/tentativas/<tentativa>/pacote.zip`. O arquivo só fica se
+   chegou inteiro, dentro do limite (50 MiB) e com o SHA-256 declarado. O Python escolhido na Platform é localizado
+   **neste computador** pelo identificador opaco; se não existe mais, a tentativa é recusada. **Nenhum outro é escolhido**;
+4. **iniciando**: a Platform reconfere as condições da solicitação. Autorização revogada ou vencida, cancelamento pedido:
+   **nada é iniciado**;
+5. o motor confere e inicia (`docs/origem-da-execucao.md`): SHA-256 e impressão do pacote, extração segura, as
+   dependências indicadas pela Platform no Python escolhido (versão exata), e as travas de sempre (sessão utilizável,
+   versão do Python, dependências do pacote). **Nada é instalado.** A intenção de iniciar é gravada antes e o identificador
+   da execução logo depois;
+6. **em execução**: a cada consulta o estado é repetido (renova o prazo da comunicação) e o pedido de cancelamento é
+   obedecido. O estado só vira "cancelada" quando o processo para de fato;
+7. o **desfecho** é informado (`SUCCEEDED`, `FAILED`, `TIMED_OUT` com o código de saída quando há; `CANCELLED`;
+   `ENDED_UNKNOWN` quando o fim não foi observado). Só depois de a Platform aceitar, o diário é apagado e o **código da
+   tentativa** (o ZIP e a cópia extraída) é removido. O que a automação gravou na pasta de saída fica.
 
-Token ou época que não valem mais, tentativa que a Platform já encerrou ou não tem: o diário é apagado e nada é alterado
-lá. Falha de rede: fica tudo como está, para a próxima consulta (a cada 15 s, ponto de partida de laboratório). O diário
-serve só para a entrega: não é histórico, não guarda registros nem resultados, e sai junto com o vínculo ao desabilitar.
+| Situação | O que acontece |
+|---|---|
+| Sem rede com a execução em andamento | a execução **não é interrompida**; o desfecho fica no diário e é informado quando a rede voltar |
+| Aplicativo fechado com a execução em andamento | a execução é cancelada pelo encerramento (como a local) e informada como cancelada na próxima abertura |
+| Aplicativo fechado entre pedir o início e gravar a execução | termina como "sem prova do resultado"; **nada é lançado de novo** |
+| Token ou época que não valem mais, tentativa que a Platform não tem | o que esta entrega iniciou aqui é parado, o diário é apagado, nada é alterado na Platform |
+| Recebimento pausado | nada novo é entregue; o que está em execução continua |
 
-**Esta versão não executa o que a Platform solicitar.** Por isso:
+Motivos de recusa que esta máquina dá: `BUSY` (há outra execução, local ou não), `PACKAGE_INVALID`, `ENVIRONMENT_GONE`,
+`ENVIRONMENT_INCOMPATIBLE`, `DEPENDENCIES_MISSING`, `SESSION_UNAVAILABLE` (tela bloqueada ou sem sessão interativa),
+`DISK_PRESSURE` (não conseguiu preparar as pastas ou gravar) e `CLIENT_INCOMPATIBLE` (pacote de um tipo que o aplicativo
+não executa, ou entrega sem o ambiente ou o Python).
 
-- por padrão o aplicativo **não declara** a capacidade de execução (`REMOTE_RUN_1_0`) e **não pergunta** pela entrega; a
-  Platform mostra a máquina como incompatível e nada lhe é entregue;
-- **ensaio de entrega, só para o laboratório**: com a variável de ambiente `NEKKORA_CLIENT_ENSAIO_ENTREGA=1`, a máquina
-  declara a capacidade e pergunta pela entrega, e toda tentativa recebida é **recusada** com o motivo
-  `CLIENT_INCOMPATIBLE`. Nada é baixado nem executado. O ensaio sai quando a execução de verdade entrar (T03).
+A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
+(`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
 
 ## O que continua local
 
@@ -135,12 +152,22 @@ temporária.
 | Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
 | Inventário: nada de caminho no pedido, identificador estável e por máquina, filtros, falhas | `PythonInventoryTest` |
 | Descoberta sem pacote | `PythonEnvironmentsTest.instalacoesSemPacoteMesmaDescobertaSoComAVersao` (exige `NEKKORA_TEST_PYTHON`) |
-| Entrega: diário antes da confirmação, resposta perdida, fechamento no meio, token obsoleto, tentativa encerrada, entrega fora do contrato, pausa, desabilitar | `RemoteDeliveryTest` (canal simulado em HTTPS; DPAPI real) |
+| Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (16; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
+| A ponte com o motor: ZIP real, conferência, execução gerenciada por Python real, código de saída, cancelamento, uma por vez, cada recusa | `RemoteWorkTest` (exige `NEKKORA_TEST_PYTHON`) |
+| O motor: execução gerenciada | `ManagedRunTest` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
 
 ## Limites desta entrega
 
-- Não há execução remota: só o vínculo e o caminho da entrega, que por padrão fica desligado.
+- **Só pacote Python externo** é executado. Pacote do Studio é recusado (`CLIENT_INCOMPATIBLE`).
+- **Tela bloqueada ou sem sessão interativa: a execução não inicia** (`SESSION_UNAVAILABLE`), como na execução local.
+- **A saída do processo (stdout/stderr) não é capturada nem enviada**; os arquivos de resultado também não. A Platform vê o
+  estado e o código de saída. Registros e resultados vêm nas próximas tarefas.
+- A cópia do pacote que o motor executa (`remota/execucoes/<id>/pacote`) não é apagada no fim da tentativa: sai com a
+  limpeza das execucoes antigas (as 50 mais recentes ficam). A limpeza completa é da próxima tarefa.
+- Localizar o Python escolhido refaz a descoberta das instalações (alguns segundos); enquanto isso, pausar e desabilitar
+  esperam.
+- Não há verificação sob demanda das dependências: a falta só aparece como recusa de uma solicitação.
 - A renovação só acontece com o aplicativo aberto dentro da janela de 30 dias.
 - Desabilitar exige contato com a Platform.
 - Os testes automatizados usam um canal simulado; a prova contra a API real é a do laboratório, registrada na entrega.

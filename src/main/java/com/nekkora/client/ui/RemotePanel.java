@@ -238,7 +238,7 @@ final class RemotePanel extends JPanel {
             contact.clear();
         }
         if (linked) {
-            notYet.show(Notice.Kind.INFO, RemoteText.NOT_YET);
+            notYet.show(Notice.Kind.INFO, machine.executes() ? RemoteText.RUNS_HERE : RemoteText.NOT_YET);
         } else {
             notYet.clear();
         }

@@ -1,16 +1,20 @@
 package com.nekkora.client.remote;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,24 +26,108 @@ import org.junit.jupiter.api.io.TempDir;
 import com.nekkora.client.remote.RemoteMachine.Status;
 
 /**
- * PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T02 - a entrega de uma tentativa a esta maquina: perguntar, gravar no diario,
- * confirmar o recebimento e informar o desfecho, contra um canal simulado (HTTPS de verdade) e com a protecao REAL do
- * Windows. Esta versao nao executa: no ensaio do laboratorio, o desfecho e sempre a recusa CLIENT_INCOMPATIBLE.
+ * PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T02 e T03 - a tentativa nesta maquina, do recebimento ao desfecho: perguntar, gravar no
+ * diario, confirmar, baixar o pacote, localizar o Python escolhido, iniciar so depois de a Platform reconferir, acompanhar,
+ * obedecer ao cancelamento e informar o desfecho. Contra um canal simulado (HTTPS de verdade) e com a protecao REAL do
+ * Windows. Quem executa e simulado aqui ({@link FakeWork}): o motor de verdade e provado em {@code ManagedRunTest} e a ponte
+ * em {@code RemoteWorkTest}.
  */
 @EnabledOnOs(OS.WINDOWS)
 class RemoteDeliveryTest {
 
     private static final String NEXT = "/agent/api/v1/remote/next";
+    private static final String LOCAL_PYTHON = "computador:c:\\python312\\python.exe";
+
+    /** Quem executa, simulado: guarda o que recebeu e devolve o que o teste mandar. */
+    static final class FakeWork implements RemoteMachine.Work {
+        final Path root;
+        final List<RemoteMachine.Job> jobs = new ArrayList<>();
+        final List<String> cancelled = new ArrayList<>();
+        final List<String> discarded = new ArrayList<>();
+        volatile boolean busy;
+        volatile String refusal;
+        volatile Throwable crash;
+        volatile String state = "RUNNING";
+        volatile Integer exitCode;
+        volatile boolean known = true;
+        volatile byte[] zipSeen;
+
+        FakeWork(Path root) {
+            this.root = root;
+        }
+
+        @Override
+        public boolean busy() {
+            return busy;
+        }
+
+        @Override
+        public Optional<String> dir(String attemptId) {
+            return Optional.of(root.resolve(attemptId).toString());
+        }
+
+        @Override
+        public String start(RemoteMachine.Job job) throws RemoteMachine.WorkRefused {
+            jobs.add(job);
+            try {
+                zipSeen = Files.readAllBytes(Path.of(job.zip()));
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            }
+            if (crash instanceof Error err) {
+                throw err;
+            }
+            if (crash instanceof RuntimeException re) {
+                throw re;
+            }
+            if (refusal != null) {
+                throw new RemoteMachine.WorkRefused(refusal);
+            }
+            busy = true;
+            return "ex-" + "1".repeat(32);
+        }
+
+        @Override
+        public Optional<RemoteMachine.Progress> progress(String run) {
+            return known ? Optional.of(new RemoteMachine.Progress(state, exitCode)) : Optional.empty();
+        }
+
+        @Override
+        public void cancel(String run) {
+            cancelled.add(run);
+            state = "CANCELLED";
+            busy = false;
+        }
+
+        @Override
+        public void discard(String attemptId) {
+            discarded.add(attemptId);
+            try {
+                Files.deleteIfExists(root.resolve(attemptId).resolve("pacote.zip"));
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        void ends(String how, Integer exit) {
+            state = how;
+            exitCode = exit;
+            busy = false;
+        }
+    }
 
     @TempDir
     Path tmp;
     private FakeGateway gw;
     private Path dir;
+    private FakeWork work;
+    private volatile boolean pythonPresent = true;
 
     @BeforeEach
     void open() throws Exception {
         gw = new FakeGateway();
         dir = tmp.resolve("remota");
+        work = new FakeWork(tmp.resolve("tentativas"));
     }
 
     @AfterEach
@@ -47,16 +135,24 @@ class RemoteDeliveryTest {
         gw.close();
     }
 
-    private RemoteMachine machine(boolean trial) {
+    private RemoteMachine machine(boolean executes) {
         RemoteMachine m = new RemoteMachine(new MachineVault(dir, new WindowsKeyring()), gw.channel(), Optional.of("0.1.0"));
-        m.setDeliveryTrial(trial);
+        m.setPythonFinder(() -> pythonPresent ? List.of(new RemoteMachine.PythonSeen(LOCAL_PYTHON, false, "3.12.10")) : List.of());
+        if (executes) {
+            m.setWork(work);
+        }
         return m;
     }
 
-    private RemoteMachine enabled(boolean trial) throws Exception {
-        RemoteMachine m = machine(trial);
+    /** Habilitada, com o inventario publicado; a entrega passa a indicar o Python escolhido pelo identificador opaco dele. */
+    private RemoteMachine enabled(boolean executes) throws Exception {
+        RemoteMachine m = machine(executes);
         m.enable(gw.code("remote"));
         m.beat();
+        Matcher id = Pattern.compile("\"environmentId\":\"([A-Za-z0-9_-]{43})\"").matcher(gw.inventory);
+        assertTrue(id.find(), "inventario publicado");
+        gw.offerPython = id.group(1);
+        assertFalse(gw.inventory.toLowerCase().contains("python312"), "o caminho nunca vai a Platform");
         return m;
     }
 
@@ -64,21 +160,25 @@ class RemoteDeliveryTest {
         return dir.resolve(AttemptJournal.FILE);
     }
 
+    private String journalText() throws Exception {
+        return Files.readString(journal(), StandardCharsets.UTF_8);
+    }
+
     private long acks() {
         return gw.calls.stream().filter(c -> c.path().endsWith("/ack")).count();
     }
 
-    private List<FakeGateway.Call> states() {
-        return gw.calls.stream().filter(c -> c.path().endsWith("/state")).toList();
+    private long downloads() {
+        return gw.calls.stream().filter(c -> c.path().endsWith("/package")).count();
     }
 
     @Test
-    void semOEnsaioAMaquinaNaoDeclaraExecucaoNemPerguntaPelaEntrega() throws Exception {
+    void semQuemExecuteAMaquinaNaoDeclaraExecucaoNemPerguntaPelaEntrega() throws Exception {
         RemoteMachine m = enabled(false);
         gw.queue();
         m.pull();
         m.beat();
-        assertFalse(gw.declaredRun, "esta versao nao executa: nao declara a capacidade");
+        assertFalse(gw.declaredRun, "sem quem execute, nao declara a capacidade");
         assertTrue(gw.lastHeartbeat.contains("\"capabilities\":[\"PY_INVENTORY_1_0\"]"));
         assertEquals(0, gw.count(NEXT));
         assertEquals("QUEUED", gw.attemptState);
@@ -86,35 +186,236 @@ class RemoteDeliveryTest {
     }
 
     @Test
-    void noEnsaioATentativaEGravadaConfirmadaERecusadaComOMotivoEODiarioSome() throws Exception {
+    void recebeBaixaIniciaAcompanhaEInformaOSucesso() throws Exception {
         RemoteMachine m = enabled(true);
-        assertTrue(gw.declaredRun);
+        assertTrue(gw.declaredRun, "com quem execute, declara REMOTE_RUN_1_0");
         String attempt = gw.queue();
-        gw.failStates = 1; // o desfecho ainda nao chega: o diario fica
         m.pull();
-        assertEquals("RECEIVED", gw.attemptState, "recebida, e so isso: nada foi iniciado");
-        String file = Files.readString(journal(), StandardCharsets.UTF_8);
-        assertTrue(file.contains(attempt));
-        assertTrue(file.contains("\"confirmada\":true"));
-        assertTrue(file.contains("\"informar\":\"REFUSED\""));
-        assertFalse(file.contains(gw.attemptToken), "o token da entrega nunca fica em claro no disco");
-        // a presenca diz que ha uma tentativa nao resolvida
+        // a ordem que a Platform viu: preparando, iniciando (reconferencia), em execucao
+        assertEquals(List.of("PREPARING", "STARTING", "RUNNING"), gw.reported);
+        assertEquals("RUNNING", gw.attemptState);
+        assertEquals(1, acks());
+        assertEquals(1, downloads());
+        // o que quem executa recebeu: o ZIP inteiro, o SHA-256 declarado, a impressao, as dependencias, o Python LOCAL e os ids
+        assertEquals(1, work.jobs.size());
+        RemoteMachine.Job job = work.jobs.get(0);
+        assertArrayEquals(gw.packageBytes, work.zipSeen);
+        assertEquals(FakeGateway.sha256(gw.packageBytes), job.sha256());
+        assertEquals("c".repeat(64), job.fingerprint());
+        assertEquals(List.of("requests==2.32.3"), job.dependencies());
+        assertEquals(LOCAL_PYTHON, job.pythonLocalId());
+        assertEquals(attempt, job.attemptId());
+        assertEquals(gw.organizationId, job.organizationId());
+        assertEquals(gw.workspaceId, job.workspaceId());
+        assertEquals(gw.automationVersionId, job.automationVersionId());
+        assertEquals(work.root.resolve(attempt).toString(), job.dir());
+        // o diario: em execucao, com o identificador da execucao; o token nunca em claro; nenhum caminho do Python
+        String file = journalText();
+        assertTrue(file.contains("\"fase\":\"RUNNING\""));
+        assertTrue(file.contains("\"execucao\":\"ex-"));
+        assertFalse(file.contains(gw.attemptToken));
+        assertFalse(file.toLowerCase().contains("python312"));
+        // o token do download foi em cabecalho, nunca na URL
+        assertTrue(gw.calls.stream().noneMatch(c -> c.path().contains(gw.attemptToken)));
+        // enquanto roda: cada consulta repete o estado (renova o prazo), sem nova entrega nem novo inicio
+        m.pull();
+        m.pull();
+        assertEquals(List.of("PREPARING", "STARTING", "RUNNING", "RUNNING", "RUNNING"), gw.reported);
+        assertEquals(1, gw.count(NEXT));
+        assertEquals(1, work.jobs.size());
         m.beat();
         assertTrue(gw.lastHeartbeat.contains("\"busy\":true"));
-        // proxima consulta: so o desfecho, sem perguntar de novo
-        long asked = gw.count(NEXT);
+        // terminou: o desfecho com o codigo de saida; so entao o diario some e o codigo da tentativa e apagado
+        work.ends("SUCCEEDED", 0);
         m.pull();
-        assertEquals(asked, gw.count(NEXT));
-        assertEquals("REFUSED", gw.attemptState);
-        assertEquals("CLIENT_INCOMPATIBLE", gw.attemptReason);
-        assertEquals(1, acks());
-        assertFalse(Files.exists(journal()), "desfecho aceito pela Platform: o diario e apagado");
-        FakeGateway.Call state = states().get(states().size() - 1);
-        assertEquals("Bearer " + gw.credential, state.authorization(), "o canal da maquina usa a credencial da maquina");
-        assertEquals("1.0", state.contract());
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(0, gw.attemptExit);
+        assertFalse(Files.exists(journal()));
+        assertTrue(work.discarded.contains(attempt));
+        assertFalse(Files.exists(Path.of(job.zip())));
         m.beat();
         assertTrue(gw.lastHeartbeat.contains("\"busy\":false"));
         assertEquals(Status.RECEIVING, m.view().status());
+    }
+
+    @Test
+    void cadaDesfechoDoProcessoViraOEstadoCerto() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        work.ends("FAILED", 3);
+        m.pull();
+        assertEquals("FAILED", gw.attemptState);
+        assertEquals(3, gw.attemptExit);
+
+        gw.queue();
+        gw.reported.clear();
+        work.state = "RUNNING";
+        m.pull();
+        work.ends("TIMED_OUT", null);
+        m.pull();
+        assertEquals("TIMED_OUT", gw.attemptState);
+        assertNull(gw.attemptExit);
+
+        // o motor nao observou o fim (ou nao conhece mais a execucao): terminou sem prova do resultado, sem codigo de saida
+        gw.queue();
+        work.state = "RUNNING";
+        m.pull();
+        work.ends("UNKNOWN", 7);
+        m.pull();
+        assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertNull(gw.attemptExit);
+        gw.queue();
+        work.state = "RUNNING";
+        m.pull();
+        work.known = false;
+        m.pull();
+        assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertFalse(Files.exists(journal()));
+    }
+
+    @Test
+    void oQueNaoPodeIniciarERecusadoComOMotivoENadaEExecutado() throws Exception {
+        RemoteMachine m = enabled(true);
+        // quem executa recusa (dependencia ausente no Python escolhido): o motivo dele vai a Platform
+        gw.queue();
+        work.refusal = "DEPENDENCIES_MISSING";
+        m.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertEquals("DEPENDENCIES_MISSING", gw.attemptReason);
+        assertFalse(Files.exists(journal()));
+        assertFalse(work.busy);
+        work.refusal = null;
+        // o Python escolhido nao esta mais no computador: recusa; nenhum outro e escolhido e nada e iniciado
+        gw.queue();
+        pythonPresent = false;
+        int started = work.jobs.size();
+        m.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertEquals("ENVIRONMENT_GONE", gw.attemptReason);
+        assertEquals(started, work.jobs.size());
+        pythonPresent = true;
+        // pacote de um tipo que este aplicativo nao executa, ou entrega sem o Python ou o ambiente: nem baixa
+        long before = downloads();
+        gw.queue();
+        gw.offerRule = "nekkora-agent/package-fingerprint/1";
+        m.pull();
+        assertEquals("CLIENT_INCOMPATIBLE", gw.attemptReason);
+        gw.offerRule = "nekkora-agent/external-python-fingerprint/1";
+        gw.queue();
+        String python = gw.offerPython;
+        gw.offerPython = null;
+        m.pull();
+        assertEquals("CLIENT_INCOMPATIBLE", gw.attemptReason);
+        gw.offerPython = python;
+        gw.queue();
+        gw.offerWorkspace = false;
+        m.pull();
+        assertEquals("CLIENT_INCOMPATIBLE", gw.attemptReason);
+        gw.offerWorkspace = true;
+        // computador ocupado com outra execucao (a local, por exemplo): recusa sem preparar
+        gw.queue();
+        gw.reported.clear();
+        work.busy = true;
+        m.pull();
+        assertEquals("BUSY", gw.attemptReason);
+        assertEquals(List.of("REFUSED"), gw.reported);
+        assertEquals(before, downloads());
+        assertEquals(started, work.jobs.size());
+    }
+
+    @Test
+    void antesDeIniciarAPlatformReconfereESeAlgoCaiuNadaEIniciado() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        gw.refuseStart = "AUTHORIZATION_REVOKED";
+        m.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertEquals("AUTHORIZATION_REVOKED", gw.attemptReason);
+        assertEquals(List.of("PREPARING", "STARTING"), gw.reported);
+        assertTrue(work.jobs.isEmpty(), "nada foi iniciado");
+        assertFalse(Files.exists(journal()));
+        assertTrue(work.discarded.contains(attempt), "o pacote baixado foi apagado");
+        // cancelamento pedido durante a preparacao: idem
+        gw.refuseStart = null;
+        gw.queue();
+        gw.failStates = 0;
+        gw.reported.clear();
+        gw.cancelRequested = false;
+        // a pessoa cancela depois de a maquina receber
+        RemoteMachine.Work real = work;
+        m.setWork(new RemoteMachine.Work() {
+            @Override
+            public boolean busy() {
+                return false;
+            }
+
+            @Override
+            public Optional<String> dir(String a) {
+                gw.cancelRequested = true; // o pedido chega enquanto a maquina prepara
+                return real.dir(a);
+            }
+
+            @Override
+            public String start(RemoteMachine.Job job) throws RemoteMachine.WorkRefused {
+                return real.start(job);
+            }
+
+            @Override
+            public Optional<RemoteMachine.Progress> progress(String run) {
+                return real.progress(run);
+            }
+
+            @Override
+            public void cancel(String run) {
+                real.cancel(run);
+            }
+
+            @Override
+            public void discard(String a) {
+                real.discard(a);
+            }
+        });
+        m.pull();
+        assertEquals("CANCELLED", gw.attemptState);
+        assertTrue(work.jobs.isEmpty());
+        assertFalse(Files.exists(journal()));
+    }
+
+    @Test
+    void cancelamentoPedidoDuranteAExecucaoEObedecidoEInformado() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        gw.cancelRequested = true;
+        m.pull();
+        assertEquals(1, work.cancelled.size(), "a maquina mandou parar");
+        assertEquals("RUNNING", gw.attemptState, "so muda quando o processo parar de fato");
+        m.pull();
+        assertEquals("CANCELLED", gw.attemptState);
+        assertFalse(Files.exists(journal()));
+    }
+
+    @Test
+    void pacoteQueNaoConfereOuQueAPlatformNaoTemERecusadoSemExecutar() throws Exception {
+        RemoteMachine m = enabled(true);
+        // os bytes nao batem com o SHA-256 declarado: nada fica no disco, nada e iniciado
+        String attempt = gw.queue();
+        gw.declaredSha256 = "0".repeat(64);
+        m.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertEquals("PACKAGE_INVALID", gw.attemptReason);
+        assertFalse(Files.exists(work.root.resolve(attempt).resolve("pacote.zip")));
+        assertTrue(work.jobs.isEmpty());
+        gw.declaredSha256 = null;
+        // a Platform nao tem os bytes (ou eles nao conferem la)
+        gw.queue();
+        gw.packageUnavailable = true;
+        m.pull();
+        assertEquals("PACKAGE_INVALID", gw.attemptReason);
+        assertTrue(work.jobs.isEmpty());
+        assertFalse(Files.exists(journal()));
     }
 
     @Test
@@ -124,18 +425,17 @@ class RemoteDeliveryTest {
         gw.dropAckResponses = 2;
         m.pull();
         assertEquals("RECEIVED", gw.attemptState, "o servidor processou; a resposta se perdeu");
-        assertTrue(Files.readString(journal(), StandardCharsets.UTF_8).contains("\"confirmada\":false"));
+        assertTrue(journalText().contains("\"confirmada\":false"));
         int epoch = gw.attemptEpoch;
         gw.dropAckResponses = 0; // o cliente do JDK pode ou nao ter repetido sozinho: dai em diante as respostas chegam
         m.pull();
         assertEquals(1, gw.count(NEXT), "nao houve nova entrega");
         assertEquals(epoch, gw.attemptEpoch);
-        assertEquals("REFUSED", gw.attemptState);
-        assertFalse(Files.exists(journal()));
+        assertEquals("RUNNING", gw.attemptState);
     }
 
     @Test
-    void aplicativoFechadoDepoisDeGravarAProximaAberturaResolveODiarioMesmoSemOEnsaio() throws Exception {
+    void aplicativoFechadoDepoisDeGravarAProximaAberturaSegueComOQueJaTinha() throws Exception {
         RemoteMachine first = enabled(true);
         gw.queue();
         gw.failAcks = 1;
@@ -144,58 +444,81 @@ class RemoteDeliveryTest {
         assertTrue(Files.exists(journal()), "gravada ANTES de confirmar");
         first.close();
 
-        RemoteMachine second = machine(false);
+        RemoteMachine second = machine(true);
         second.pull();
-        assertEquals(1, gw.count(NEXT), "resolve a que ja tinha; nao pergunta por outra");
-        assertEquals("REFUSED", gw.attemptState);
-        assertEquals("CLIENT_INCOMPATIBLE", gw.attemptReason);
+        assertEquals(1, gw.count(NEXT), "segue com a que ja tinha; nao pergunta por outra");
+        assertEquals("RUNNING", gw.attemptState);
+        // em execucao, o aplicativo fecha e abre: continua acompanhando a MESMA execucao, sem iniciar outra
+        second.close();
+        RemoteMachine third = machine(true);
+        third.pull();
+        assertEquals(1, work.jobs.size());
+        work.ends("SUCCEEDED", 0);
+        third.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
         assertFalse(Files.exists(journal()));
     }
 
     @Test
-    void tokenQueNaoValeMaisNaoAlteraNadaEODiarioEDescartado() throws Exception {
+    void fechouEntrePedirOInicioEGravarAExecucaoTerminaSemProvaENadaELancadoDeNovo() throws Exception {
+        RemoteMachine first = enabled(true);
+        gw.queue();
+        work.crash = new AssertionError("o aplicativo caiu aqui");
+        assertThrows(AssertionError.class, first::pull);
+        assertEquals("STARTING", gw.attemptState);
+        assertTrue(journalText().contains("\"fase\":\"STARTING\""), "a intencao de iniciar foi gravada antes");
+        first.close();
+        work.crash = null;
+
+        RemoteMachine second = machine(true);
+        second.pull();
+        assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertEquals(1, work.jobs.size(), "nada foi lancado de novo");
+        assertFalse(Files.exists(journal()));
+    }
+
+    @Test
+    void entregaQueNaoValeMaisParaOQueEstiverRodandoENaoAlteraNadaNaPlatform() throws Exception {
         RemoteMachine m = enabled(true);
         gw.queue();
-        gw.failAcks = 1;
         m.pull();
-        String old = gw.attemptToken;
+        assertEquals("RUNNING", gw.attemptState);
         // outra entrega tomou o lugar (token e epoca novos no servidor)
         gw.attemptToken = "Z".repeat(43);
         gw.attemptEpoch++;
         m.pull();
-        assertEquals("OFFERED", gw.attemptState, "o consumidor obsoleto nao confirma nem sobrescreve");
+        assertEquals(1, work.cancelled.size(), "o que esta entrega iniciou aqui foi parado");
+        assertEquals("RUNNING", gw.attemptState, "o consumidor obsoleto nao sobrescreve o estado");
         assertFalse(Files.exists(journal()));
-        assertTrue(states().isEmpty());
-        // a consulta seguinte recebe a entrega vigente e segue
-        m.pull();
-        assertNotEquals(old, gw.attemptToken);
-        assertEquals("REFUSED", gw.attemptState);
-        assertFalse(Files.exists(journal()));
-    }
-
-    @Test
-    void tentativaQueAPlatformJaEncerrouNaoSegueENadaEInformado() throws Exception {
-        RemoteMachine m = enabled(true);
+        // a tentativa que a Platform nao tem mais: idem
         gw.queue();
-        gw.failAcks = 1;
-        m.pull();
-        gw.attemptState = "CANCELLED"; // a pessoa cancelou antes de a maquina confirmar
-        m.pull();
-        assertEquals("CANCELLED", gw.attemptState);
-        assertTrue(states().isEmpty(), "proceed=false: a maquina nao informa desfecho nenhum");
-        assertFalse(Files.exists(journal()));
-    }
-
-    @Test
-    void tentativaQueAPlatformNaoTemMaisDescartaODiario() throws Exception {
-        RemoteMachine m = enabled(true);
-        gw.queue();
-        gw.failAcks = 1;
+        work.state = "RUNNING";
         m.pull();
         gw.attemptId = null;
         m.pull();
+        assertEquals(2, work.cancelled.size());
         assertFalse(Files.exists(journal()));
         assertEquals(Status.RECEIVING, m.view().status());
+    }
+
+    @Test
+    void semRedeAExecucaoEmAndamentoNaoEInterrompida() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        gw.failStates = 3;
+        m.pull();
+        m.pull();
+        assertTrue(work.cancelled.isEmpty(), "falta de comunicacao nao para o processo");
+        assertTrue(Files.exists(journal()));
+        // termina sem rede: o desfecho fica no diario e e informado quando a rede voltar
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        assertTrue(journalText().contains("\"informar\":\"SUCCEEDED\""));
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertFalse(Files.exists(journal()));
     }
 
     @Test
@@ -247,7 +570,7 @@ class RemoteDeliveryTest {
         assertTrue(j.load(gw.agentId).isPresent());
         assertTrue(j.load(gw.workerId).isEmpty(), "outra maquina (vinculo anterior)");
         assertFalse(j.load(gw.agentId).orElseThrow().toString().contains(gw.attemptToken));
-        Files.writeString(journal(), "{\"versao\":1,", StandardCharsets.UTF_8);
+        Files.writeString(journal(), "{\"versao\":2,", StandardCharsets.UTF_8);
         assertTrue(j.load(gw.agentId).isEmpty());
     }
 }
