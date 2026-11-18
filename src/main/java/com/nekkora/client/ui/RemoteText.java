@@ -42,6 +42,11 @@ final class RemoteText {
             case REMOTE_RUNNING -> "Em andamento: uma execução solicitada pela Platform. O andamento, os registros e os resultados são acompanhados na Platform.";
             case REMOTE_SENDING -> "A execução solicitada pela Platform terminou neste computador. O desfecho, os registros e os resultados estão sendo "
                     + "enviados à Platform.";
+            case REMOTE_FINISHING -> "Finalizando: o processo principal da execução solicitada pela Platform terminou, mas há processos da automação ainda "
+                    + "ativos neste computador. Ele continua ocupado, e a limpeza espera, até eles terminarem.";
+            case REMOTE_UNCERTAIN -> "Ocupação incerta: uma execução solicitada pela Platform terminou e este computador não consegue confirmar se restou "
+                    + "algum processo dela. A Platform não envia novos trabalhos até haver confirmação. Sair da conta do Windows ou reiniciar o "
+                    + "computador encerra essa dúvida; o resultado da automação não muda.";
         };
     }
 

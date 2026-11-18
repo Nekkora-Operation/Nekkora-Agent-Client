@@ -157,7 +157,8 @@ class ArchitectureTest {
      * <li>as camadas da execucao local, da entrada e do armazenamento nao conhecem {@code remote}: nenhum registro, resultado
      * ou estado de uma execucao local chega ao canal da maquina, com o computador habilitado ou nao. So a tela e a raiz
      * (que monta o aplicativo) a referenciam;</li>
-     * <li>codigo nativo (JNA) so na protecao da credencial da maquina.</li>
+     * <li>codigo nativo (JNA) so na protecao da credencial da maquina e na supervisao dos processos da execucao gerenciada
+     * ({@code WindowsProcessGroup}; ver {@link #aSupervisaoDeProcessosSoChamaAsFuncoesDeclaradas}).</li>
      * </ul>
      */
     @Test
@@ -177,12 +178,37 @@ class ArchitectureTest {
             } else if (!"ui".equals(pkg) && !"client".equals(pkg)) {
                 achados.addAll(matches(f, c, remota, "so a tela e a raiz conhecem a camada remota"));
             }
-            if (!f.endsWith("WindowsKeyring.java")) {
-                achados.addAll(matches(f, c, nativo, "codigo nativo fora da protecao da credencial"));
+            if (!f.endsWith("WindowsKeyring.java") && !f.endsWith("WindowsProcessGroup.java")) {
+                achados.addAll(matches(f, c, nativo, "codigo nativo fora da protecao da credencial e da supervisao de processos"));
             }
         }
         assertEquals(List.of(), achados);
         assertTrue(conferidos > 0, "a camada remota existe e foi conferida");
+    }
+
+    /**
+     * A excecao de codigo nativo da camada de execucao (decisao da titular de 16/11) e RESTRITA: {@code WindowsProcessGroup} so
+     * declara as funcoes do Windows desta lista - grupo de processos (Job Object) e marca da sessao (atomo global). Nenhuma
+     * cria processo, executa comando, le memoria de outro processo ou abre shell. Acrescentar uma funcao exige mudar esta lista.
+     */
+    @Test
+    void aSupervisaoDeProcessosSoChamaAsFuncoesDeclaradas() throws IOException {
+        Path f = MAIN.resolve("com/nekkora/client/run/WindowsProcessGroup.java");
+        String c = Files.readString(f);
+        Matcher api = Pattern.compile("(?s)private interface Api extends StdCallLibrary \\{(.*?)\n    \\}").matcher(c);
+        assertTrue(api.find(), "a interface das funcoes do sistema");
+        Set<String> declaradas = new TreeSet<>();
+        Matcher m = Pattern.compile("(?m)^\\s+\\S+ (\\w+)\\(").matcher(api.group(1));
+        while (m.find()) {
+            declaradas.add(m.group(1));
+        }
+        assertEquals(new TreeSet<>(Set.of("CreateJobObjectW", "OpenJobObjectW", "AssignProcessToJobObject", "QueryInformationJobObject", "TerminateJobObject",
+                "SetHandleInformation", "OpenProcess", "CloseHandle", "GlobalAddAtomW", "GlobalFindAtomW", "GlobalDeleteAtom")), declaradas);
+        // uma biblioteca so, carregada num lugar so; nada de funcao chamada por nome montado
+        assertEquals(1, c.split("Native\\.load\\(", -1).length - 1);
+        assertTrue(c.contains("Native.load(\"kernel32\", Api.class)"));
+        assertFalse(Pattern.compile("Function\\.getFunction|NativeLibrary|Runtime\\.getRuntime|ProcessBuilder|CreateProcess|ReadProcessMemory|WriteProcessMemory|ShellExecute")
+                .matcher(c).find());
     }
 
     @Test

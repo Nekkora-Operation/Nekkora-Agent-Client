@@ -116,6 +116,8 @@ public final class RunController implements AutoCloseable {
     private volatile Path managedRoot;
     /** As execucoes gerenciadas iniciadas nesta abertura (antes de a pasta delas existir no armazem). */
     private final java.util.Set<ExecutionId> managedIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** A execucao gerenciada que ja terminou mas ainda tem processos vivos no grupo dela ("finalizando"). */
+    private Draining draining;
     private final ApprovalLedger approvals;
     private final SessionProbe session;
     private final Clock clock;
@@ -146,8 +148,10 @@ public final class RunController implements AutoCloseable {
         volatile OutputText text;
         /** Gravacoes do {@code record} que falharam desde a ultima que deu certo (0 = o disco tem o {@code record}). */
         volatile int saveFailures;
-        /** Os descendentes do processo vistos durante o acompanhamento, e se o fim dele foi visto (ver {@link ProcessTree}). */
+        /** O que se sabe dos processos desta execucao (ver {@link ProcessTree}). */
         final ProcessTree tree;
+        /** O grupo supervisionado pelo Windows; so em execucao gerenciada, e nulo quando nao ha supervisao. */
+        volatile WindowsProcessGroup.Group group;
 
         Active(ExecutionRecord r, Process p, Path output, Duration timeout) {
             this.tree = new ProcessTree(storeOf(r.id()).dir(r.id()).resolve(ProcessTree.FILE));
@@ -353,7 +357,7 @@ public final class RunController implements AutoCloseable {
 
     private Snapshot launch(Request req, boolean managed, OutputLines.Sink sink) throws ExecRefused {
         synchronized (lock) {
-            if (active != null) throw new ExecRefused(ErrorCode.EXEC_ALREADY_RUNNING);
+            if (active != null || draining != null) throw new ExecRefused(ErrorCode.EXEC_ALREADY_RUNNING);
             flushUnsaved();
             ExecutionId id = ExecutionId.random();
             if (managed) managedIds.add(id);
@@ -413,14 +417,25 @@ public final class RunController implements AutoCloseable {
             // com quem receba a saida, o Python a entrega linha a linha
             Launch.Spec spec = Launch.spec(pkg, probe.python(), copy, lines != null);
             Process p;
+            WindowsProcessGroup.Group group = null;
+            boolean grouped = false;
             try {
                 ProcessBuilder pb = new ProcessBuilder(spec.command()).directory(spec.workDir().toFile());
                 PythonRuntime.minimalEnvironment(pb.environment());
                 pb.environment().put(ExternalSignal.OUTPUT_ENV, output.toString());
                 pb.environment().put(ExternalSignal.SIGNAL_ENV, output.resolve(ExternalSignal.SIGNAL_FILE).toString());
-                p = pb.start();
+                // execucao gerenciada: o processo entra num grupo supervisionado pelo Windows, que conta TODOS os descendentes
+                if (managed) group = WindowsProcessGroup.create(WindowsProcessGroup.name(id));
+                if (group != null) group.inheritable(true);
+                try {
+                    p = pb.start();
+                } finally {
+                    if (group != null) group.inheritable(false);
+                }
+                grouped = group != null && group.assign(p.pid());
                 p.getOutputStream().close();
             } catch (IOException | RuntimeException e) {
+                if (group != null) group.close();
                 throw finish(r, ExecutionState.FAILED, ErrorCode.EXEC_LAUNCH_FAILED);
             }
             // daqui em diante o processo EXISTE. Nada pode escapar de start() sem que ele tenha dono: uma falha ao gravar
@@ -429,6 +444,17 @@ public final class RunController implements AutoCloseable {
             writeProcessRef(id, owner);
             r = r.withOwner(owner).moveTo(ExecutionState.RUNNING, null, clock.instant());
             Active a = new Active(r, p, output, req.timeout());
+            if (managed) {
+                if (grouped) {
+                    a.group = group;
+                    a.tree.fact(ProcessTree.GROUP);
+                } else {
+                    // sem o grupo nao ha como provar, depois, que nada ficou em andamento
+                    if (group != null) group.close();
+                    a.tree.fact(ProcessTree.BROKEN);
+                }
+                if (WindowsProcessGroup.mark(WindowsProcessGroup.name(id))) a.tree.fact(ProcessTree.MARK);
+            }
             a.text = text;
             storeOf(id).event(id, clock.instant(), "RUNNING", Map.of("pid", owner.pid()));
             persist(a);
@@ -575,11 +601,14 @@ public final class RunController implements AutoCloseable {
         }
         if (forced != null) {
             int killed = a.record.owner() == null ? 0 : a.record.owner().terminate(Duration.ofSeconds(10));
+            // o grupo alcanca tambem o descendente que nenhuma arvore pai-filho mostra mais
+            WindowsProcessGroup.Group g = a.group;
+            if (g != null) g.terminate();
             if (a.process != null) a.process.destroyForcibly();
             storeOf(a.record.id()).event(a.record.id(), clock.instant(), "TERMINATED", Map.of("processes", killed));
         }
         // o fim do processo principal foi VISTO aqui (terminou sozinho ou foi encerrado): so assim se pode, depois, conferir a arvore
-        a.tree.ended();
+        a.tree.fact(ProcessTree.END);
         for (Thread t : a.drains) {
             try {
                 t.join(3000);
@@ -633,9 +662,18 @@ public final class RunController implements AutoCloseable {
         f.put("output_bytes", a.bytes.get());
         if (code != null) f.put("code", code.code());
         storeOf(end.id()).event(end.id(), clock.instant(), state.name(), f);
+        WindowsProcessGroup.Group g = a.group;
+        Draining d = g == null ? null : new Draining(end.id(), g, a.tree);
         synchronized (lock) {
             active = null;
             last = end;
+            // o processo principal terminou; enquanto houver processo da execucao vivo, este computador continua ocupado
+            draining = d;
+        }
+        if (d != null) {
+            Thread t = new Thread(() -> drain(d), "nekkora-client-finalizando");
+            t.setDaemon(true);
+            t.start();
         }
         pruneAll();
         notifyListeners(endSnapshot(end));
@@ -750,15 +788,80 @@ public final class RunController implements AutoCloseable {
         return false;
     }
 
-    /** Anota os descendentes vivos do processo desta execucao (a cada volta do acompanhamento). */
+    /** Uma execucao gerenciada cujo processo principal ja terminou e cujo grupo ainda pode ter processos vivos. */
+    private record Draining(ExecutionId id, WindowsProcessGroup.Group group, ProcessTree tree) {
+    }
+
+    /**
+     * A cada volta do acompanhamento de uma execucao gerenciada: anota os processos vivos do grupo e poe nele qualquer
+     * descendente que tenha nascido antes de o processo principal entrar (a janela entre lancar e agrupar). Se algum ficar de
+     * fora, o grupo deixa de servir de prova.
+     */
     private void observeTree(Active a) {
-        ProcessOwner o = a.record.owner();
-        if (o == null) return;
+        WindowsProcessGroup.Group g = a.group;
+        if (g == null) return;
         try {
-            Optional<ProcessHandle> root = a.process != null ? Optional.of(a.process.toHandle()) : o.handle();
-            root.filter(ProcessHandle::isAlive).ifPresent(h -> a.tree.observe(h, o.startMillis()));
+            List<Long> in = g.pids();
+            if (in == null) {
+                a.tree.fact(ProcessTree.BROKEN);
+                return;
+            }
+            a.tree.note(in);
+            ProcessOwner o = a.record.owner();
+            Optional<ProcessHandle> root = a.process != null ? Optional.of(a.process.toHandle()) : o == null ? Optional.empty() : o.handle();
+            if (root.isPresent() && root.get().isAlive()) {
+                java.util.Set<Long> known = new java.util.HashSet<>(in);
+                List<ProcessHandle> out = root.get().descendants().filter(h -> !known.contains(h.pid())).toList();
+                for (ProcessHandle h : out) {
+                    if (!g.assign(h.pid()) && h.isAlive()) a.tree.fact(ProcessTree.BROKEN);
+                }
+            }
         } catch (RuntimeException e) {
             // sem a anotacao, a conferencia posterior fica mais pobre; o acompanhamento segue
+        }
+    }
+
+    /** Espera o grupo esvaziar: so entao ha prova de que nada da execucao continua em andamento, e a vaga e liberada. */
+    private void drain(Draining d) {
+        try {
+            while (true) {
+                int n = d.group().active();
+                if (n == 0) {
+                    d.tree().fact(ProcessTree.EMPTY);
+                    WindowsProcessGroup.unmark(WindowsProcessGroup.name(d.id()));
+                    storeOf(d.id()).event(d.id(), clock.instant(), "PROCESSES_GONE", Map.of());
+                    return;
+                }
+                if (n < 0) {
+                    // o Windows nao respondeu: nao ha mais como provar; a vaga e liberada e a duvida fica dita
+                    d.tree().fact(ProcessTree.BROKEN);
+                    storeOf(d.id()).event(d.id(), clock.instant(), "PROCESSES_UNCERTAIN", Map.of());
+                    return;
+                }
+                d.tree().note(d.group().pids());
+                Thread.sleep(tick.toMillis());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException e) {
+            d.tree().fact(ProcessTree.BROKEN);
+        } finally {
+            d.group().close();
+            synchronized (lock) {
+                if (draining == d) draining = null;
+            }
+        }
+    }
+
+    /** A execucao tem o registro dos processos dela (foi lancada por uma versao do aplicativo que os supervisiona)? */
+    boolean tracked(ExecutionId id) {
+        return Files.isRegularFile(storeOf(id).dir(id).resolve(ProcessTree.FILE), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+
+    /** Ha execucao em andamento OU processos de uma execucao gerenciada ja terminada ainda vivos: o computador esta ocupado. */
+    public boolean occupied() {
+        synchronized (lock) {
+            return active != null || draining != null;
         }
     }
 
@@ -769,9 +872,12 @@ public final class RunController implements AutoCloseable {
      */
     ProcessTree.Verdict processTree(ExecutionId id) {
         if (isActive(id)) return ProcessTree.Verdict.ALIVE;
+        synchronized (lock) {
+            if (draining != null && draining.id().equals(id)) return ProcessTree.Verdict.ALIVE;
+        }
         Optional<ExecutionRecord> r = record(id);
         if (r.isEmpty() || !r.get().state().terminal()) return ProcessTree.Verdict.UNCERTAIN;
-        return ProcessTree.verdict(r.get().owner(), storeOf(id).dir(id).resolve(ProcessTree.FILE));
+        return ProcessTree.verdict(r.get().owner(), storeOf(id).dir(id).resolve(ProcessTree.FILE), WindowsProcessGroup::marked, WindowsProcessGroup.name(id));
     }
 
     private boolean aliveAdopted(Active a) {
@@ -832,6 +938,11 @@ public final class RunController implements AutoCloseable {
                     if (active == null) {
                         ExecutionRecord adopted = r.adoptedAfterRestart();
                         Active a = new Active(adopted, null, outputOf(r), DEFAULT_TIMEOUT);
+                        if (managed(r.id())) {
+                            // o processo principal vive: o grupo dele continua alcancavel pelo nome
+                            a.group = WindowsProcessGroup.open(WindowsProcessGroup.name(r.id()));
+                            if (a.group == null) a.tree.fact(ProcessTree.BROKEN);
+                        }
                         persist(a);
                         active = a;
                         Thread t = new Thread(() -> watch(a), "nekkora-client-execucao");

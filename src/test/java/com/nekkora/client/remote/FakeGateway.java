@@ -88,6 +88,8 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String attemptId;
     /** O ultimo relato de estado afirmou que o processo da tentativa nao esta mais em execucao na maquina? */
     public volatile boolean lastProcessAbsent;
+    /** O que o ultimo relato de estado disse dos processos da tentativa (ABSENT, ACTIVE, UNCERTAIN, ou vazio). */
+    public volatile String lastProcessTree = "";
     /** QUEUED, OFFERED, RECEIVED, REFUSED, CANCELLED... */
     public volatile String attemptState;
     public volatile String attemptReason;
@@ -526,14 +528,16 @@ public final class FakeGateway implements AutoCloseable {
             }
         } else if (ended) {
             // relato repetido de uma tentativa ja terminada: nada muda; fica anotado o que foi dito
-            afterEnd.add(field(text, "state") + (text.contains("\"processAbsent\":true") ? "+ausente" : ""));
-            lastProcessAbsent = text.contains("\"processAbsent\":true");
+            afterEnd.add(field(text, "state") + (text.contains("\"processTree\":\"ABSENT\"") ? "+ausente" : "+" + field(text, "processTree")));
+            lastProcessAbsent = text.contains("\"processTree\":\"ABSENT\"");
+            lastProcessTree = field(text, "processTree");
             proceed = false;
         } else {
             String wanted = field(text, "state");
             String reason = field(text, "refusalReason");
             reported.add(wanted);
-            lastProcessAbsent = text.contains("\"processAbsent\":true");
+            lastProcessAbsent = text.contains("\"processTree\":\"ABSENT\"");
+            lastProcessTree = field(text, "processTree");
             java.util.regex.Matcher exit = java.util.regex.Pattern.compile("\"exitCode\":(-?\\d+)").matcher(text);
             // as mesmas transicoes do servidor real (046)
             List<String> next = switch (attemptState) {
