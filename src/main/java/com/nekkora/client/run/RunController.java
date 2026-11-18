@@ -121,6 +121,22 @@ public final class RunController implements AutoCloseable {
     /** Execucoes terminadas cujos processos NAO foram dados por encerrados com prova: o computador continua ocupado por elas. */
     private final java.util.Set<ExecutionId> unsettled = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile long unsettledCheckedAt;
+    private volatile Runnable occupancyListener;
+
+    /** Quem quer saber que a ocupacao do computador mudou. Chamado fora das travas do motor; falha de quem ouve nao o afeta. */
+    void onOccupancy(Runnable listener) {
+        this.occupancyListener = listener;
+    }
+
+    private void occupancyChanged() {
+        Runnable l = occupancyListener;
+        if (l == null) return;
+        try {
+            l.run();
+        } catch (RuntimeException e) {
+            // quem ouve nao derruba o acompanhamento
+        }
+    }
     /** Quanto se espera, ao iniciar, os ultimos processos de uma execucao que acabou de terminar. */
     static final Duration DRAIN_GRACE = Duration.ofSeconds(3);
     private final ApprovalLedger approvals;
@@ -482,6 +498,7 @@ public final class RunController implements AutoCloseable {
             t.start();
             Snapshot snap = new Snapshot(r, 0, true, a.saveFailures == 0);
             notifyListeners(snap);
+            occupancyChanged();
             return snap;
         }
     }
@@ -691,6 +708,7 @@ public final class RunController implements AutoCloseable {
             t.setDaemon(true);
             t.start();
         }
+        occupancyChanged();
         pruneAll();
         notifyListeners(endSnapshot(end));
         if (!saved) insistOnFinal(end);
@@ -868,6 +886,7 @@ public final class RunController implements AutoCloseable {
             synchronized (lock) {
                 if (draining == d) draining = null;
             }
+            occupancyChanged();
         }
     }
 
@@ -892,8 +911,15 @@ public final class RunController implements AutoCloseable {
         long now = System.nanoTime();
         if (now - unsettledCheckedAt > Duration.ofSeconds(3).toNanos()) {
             unsettledCheckedAt = now;
+            boolean freed = false;
             for (ExecutionId id : List.copyOf(unsettled)) {
-                if (!tracked(id) || treeOf(id) == ProcessTree.Verdict.GONE) unsettled.remove(id);
+                if (!tracked(id) || treeOf(id) == ProcessTree.Verdict.GONE) freed |= unsettled.remove(id);
+            }
+            if (freed) {
+                // fora da trava de quem perguntou
+                Thread t = new Thread(this::occupancyChanged, "nekkora-client-vaga");
+                t.setDaemon(true);
+                t.start();
             }
         }
         return !unsettled.isEmpty();

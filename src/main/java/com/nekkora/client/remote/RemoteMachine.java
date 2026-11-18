@@ -96,6 +96,30 @@ public final class RemoteMachine implements AutoCloseable {
     public record Kept(int folders, long bytes, boolean spaceLow) {
     }
 
+    /**
+     * A OCUPACAO deste computador mudou (uma execucao iniciou, terminou, ficou finalizando, incerta, ou a vaga foi liberada) - de
+     * uma execucao da Platform ou de uma iniciada aqui. A tela e redesenhada e a presenca e enviada JA, para a Platform nao
+     * oferecer nem esconder a maquina com atraso. O que sai e so o sim/nao de sempre (ocupada, pouco espaco). Nunca lanca, nunca
+     * bloqueia quem chama.
+     */
+    public void occupancyChanged() {
+        try {
+            changed();
+            Thread t = new Thread(() -> {
+                try {
+                    beat();
+                } catch (RuntimeException x) {
+                    // a presenca periodica envia depois
+                }
+                changed();
+            }, "nekkora-client-disponibilidade");
+            t.setDaemon(true);
+            t.start();
+        } catch (RuntimeException x) {
+            // a presenca periodica envia depois
+        }
+    }
+
     /** Nunca lanca. */
     public Kept kept() {
         Work w = work;
@@ -1639,7 +1663,8 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
-                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, work != null, journal.load(current.agentId()).isPresent() || (work != null && work.busy()));
+                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, work != null,
+                        journal.load(current.agentId()).isPresent() || (work != null && work.busy()), kept().spaceLow());
                 MachineVault.Link next = current.withPaused(p.paused());
                 boolean renamed;
                 synchronized (this) {

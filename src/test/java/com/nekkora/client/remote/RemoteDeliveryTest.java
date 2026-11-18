@@ -1182,6 +1182,34 @@ class RemoteDeliveryTest {
         assertEquals(List.of(), gw.afterEnd, "o motor nao conhece mais a execucao: nao ha o que conferir");
     }
 
+    /**
+     * Decisao de 17/11: quando a ocupacao deste computador muda (por uma execucao da Platform ou por uma iniciada aqui), a tela e
+     * avisada e a presenca e enviada JA. O que sai e so o sim/nao de sempre - ocupada, pouco espaco -, sem dizer por que.
+     */
+    @Test
+    void quandoAOcupacaoMudaATelaEAvisadaEAPresencaVaiJaSoComOSimOuNao() throws Exception {
+        RemoteMachine m = enabled(true);
+        java.util.concurrent.atomic.AtomicInteger avisos = new java.util.concurrent.atomic.AtomicInteger();
+        m.addListener(avisos::incrementAndGet);
+        gw.lastHeartbeat = null;
+        work.busy = true;
+        int antes = avisos.get();
+        m.occupancyChanged();
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+        while (gw.lastHeartbeat == null && System.nanoTime() < deadline) Thread.sleep(20);
+        assertTrue(avisos.get() > antes, "a tela foi avisada");
+        assertTrue(gw.lastHeartbeat.contains("\"remote\":{\"busy\":true,\"diskPressure\":false}"), gw.lastHeartbeat);
+        // a presenca inteira: versao, contrato, capacidades e os dois sinais - nada alem disso
+        assertTrue(gw.lastHeartbeat.matches("\\{\"agentVersion\":\"[^\"]*\",\"contractVersion\":\"[^\"]*\",\"capabilities\":\\[[A-Z0-9_\",]*\\],\"remote\":\\{\"busy\":true,\"diskPressure\":false\\}\\}"),
+                gw.lastHeartbeat);
+        gw.lastHeartbeat = null;
+        work.busy = false;
+        m.occupancyChanged();
+        deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+        while (gw.lastHeartbeat == null && System.nanoTime() < deadline) Thread.sleep(20);
+        assertTrue(gw.lastHeartbeat.contains("\"busy\":false"), gw.lastHeartbeat);
+    }
+
     @Test
     void fechouEntrePedirOInicioEGravarAExecucaoTerminaSemProvaENadaELancadoDeNovo() throws Exception {
         RemoteMachine first = enabled(true);
