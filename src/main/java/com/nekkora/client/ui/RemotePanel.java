@@ -50,6 +50,11 @@ final class RemotePanel extends JPanel {
     private final WrappedText pythonReported = new WrappedText(WIDTH).alignLeft();
     private final Notice held = new Notice(WIDTH);
     private final Notice heldLogs = new Notice(WIDTH);
+    private final Notice activity = new Notice(WIDTH);
+    private final WrappedText organization = new WrappedText(WIDTH).alignLeft();
+    private final WrappedText seeOnPlatform = new WrappedText(WIDTH).alignLeft();
+    private final WrappedText pythonHere = new WrappedText(WIDTH).alignLeft();
+    private final java.util.function.Function<String, String> organizationName;
     private final Notice lost = new Notice(WIDTH);
     private final GhostButton refreshPython = GhostButton.text(RemoteText.REFRESH_PYTHON);
     private final JLabel codeLabel = new JLabel(RemoteText.CODE_FIELD);
@@ -72,6 +77,12 @@ final class RemotePanel extends JPanel {
     private boolean disposed;
 
     RemotePanel(RemoteMachine machine, Executor background, Runnable onClose) {
+        this(machine, background, onClose, id -> "");
+    }
+
+    /** {@code organizationName}: o nome da organizacao de um identificador, pela lista de quem entrou; vazio se ela nao esta na lista. */
+    RemotePanel(RemoteMachine machine, Executor background, Runnable onClose, java.util.function.Function<String, String> organizationName) {
+        this.organizationName = organizationName;
         this.machine = machine;
         this.background = background;
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -111,11 +122,12 @@ final class RemotePanel extends JPanel {
         footer.setOpaque(false);
         footer.add(close);
 
-        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, held, heldLogs, lost, enableSection,
-                enabledSection, disableSection, result, footer};
-        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
+        seeOnPlatform.setText(RemoteText.SEE_ON_PLATFORM);
+        JComponent[] all = {title, status, organization, contact, activity, what, local, reportsPython, notYet, seeOnPlatform, validity, pythonReported,
+                pythonHere, held, heldLogs, lost, enableSection, enabledSection, disableSection, result, footer};
+        int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2,
+                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -246,6 +258,24 @@ final class RemotePanel extends JPanel {
         } else {
             notYet.clear();
         }
+        // T06 - o estado operacional: para qual organizacao, o que esta rodando agora e de quem e, e onde ver o que foi produzido
+        String org = linked ? machine.organizationId().map(id -> RemoteText.organization(organizationName.apply(id))).orElse("") : "";
+        organization.setText(org);
+        organization.setVisible(!org.isEmpty());
+        RemoteMachine.Activity now = machine.activity();
+        if (linked || now != RemoteMachine.Activity.IDLE) {
+            activity.show(now == RemoteMachine.Activity.IDLE ? Notice.Kind.PLAIN : Notice.Kind.INFO, RemoteText.activity(now));
+        } else {
+            activity.clear();
+        }
+        seeOnPlatform.setVisible(linked);
+        java.util.List<RemoteMachine.PythonHere> envs = linked ? machine.pythonHere() : java.util.List.of();
+        StringBuilder list = new StringBuilder();
+        for (RemoteMachine.PythonHere e : envs) {
+            list.append('\n').append(RemoteText.pythonHere(e.code(), e.version(), e.virtual(), e.where()));
+        }
+        pythonHere.setText(envs.isEmpty() ? "" : RemoteText.PYTHON_HERE_TITLE + list);
+        pythonHere.setVisible(!envs.isEmpty());
         String until = linked ? v.credentialExpiresAt().map(RemotePanel::day).orElse("") : "";
         validity.setText(until.isEmpty() ? "" : RemoteText.validUntil(until));
         validity.setVisible(!until.isEmpty());
@@ -343,7 +373,7 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
@@ -398,6 +428,22 @@ final class RemotePanel extends JPanel {
 
     Notice resultNotice() {
         return result;
+    }
+
+    Notice activityNotice() {
+        return activity;
+    }
+
+    String organizationText() {
+        return organization.isVisible() ? organization.getText() : "";
+    }
+
+    String seeOnPlatformText() {
+        return seeOnPlatform.isVisible() ? seeOnPlatform.getText() : "";
+    }
+
+    String pythonHereText() {
+        return pythonHere.isVisible() ? pythonHere.getText() : "";
     }
 
     Notice heldLogsNotice() {

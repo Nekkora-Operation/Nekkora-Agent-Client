@@ -31,6 +31,38 @@ final class RemoteText {
                 : count == 1 ? "1 instalação de Python informada à Platform (só a versão)." : count + " instalações de Python informadas à Platform (só a versão).";
     }
 
+    /** T06 - o que este computador está fazendo agora, e de quem é a execução. */
+    static String activity(com.nekkora.client.remote.RemoteMachine.Activity a) {
+        return switch (a) {
+            case IDLE -> "Nenhuma execução em andamento neste computador.";
+            case LOCAL_RUNNING -> "Em andamento: uma execução iniciada neste computador (botão Executar). Ela é local: nada dela é enviado à Platform. "
+                    + "Enquanto ela roda, este computador não inicia execuções solicitadas pela Platform.";
+            case REMOTE_PREPARING -> "Em andamento: uma execução solicitada pela Platform foi recebida e está sendo preparada (pacote, Python e dependências). "
+                    + "Ela ainda não iniciou.";
+            case REMOTE_RUNNING -> "Em andamento: uma execução solicitada pela Platform. O andamento, os registros e os resultados são acompanhados na Platform.";
+            case REMOTE_SENDING -> "A execução solicitada pela Platform terminou neste computador. O desfecho, os registros e os resultados estão sendo "
+                    + "enviados à Platform.";
+        };
+    }
+
+    /** T06 - para qual organização este computador está habilitado. {@code name} vazio: a organização não está na lista de quem entrou. */
+    static String organization(String name) {
+        return name == null || name.isBlank() ? "Habilitado para uma organização que não aparece na sua lista agora (entre com uma conta dessa organização para ver o nome)."
+                : "Habilitado para a organização " + name + ".";
+    }
+
+    /** T06 - onde ver o que as execuções pedidas pela Platform escreveram e produziram. Este aplicativo não mostra esse conteúdo. */
+    static final String SEE_ON_PLATFORM = "Registros e resultados das execuções solicitadas pela Platform são consultados na Platform, na página da versão da "
+            + "automação, em \"Execução remota\". Este aplicativo não mostra esse conteúdo. O que você executa aqui fica só aqui: veja em \"Última execução\", "
+            + "na preparação da execução.";
+
+    static final String PYTHON_HERE_TITLE = "Ambientes Python informados à Platform. O código é o que a Platform mostra ao lado da versão; a pasta só aparece aqui:";
+
+    /** T06 - uma linha por ambiente: o mesmo código curto que a Platform mostra, a versão, o tipo e onde ele está NESTE computador. */
+    static String pythonHere(String code, String version, boolean virtual, String where) {
+        return "código " + code + " · Python " + version + " · " + (virtual ? "ambiente virtual" : "instalação") + " · " + where;
+    }
+
     /** Resultados de execuções remotas que ficaram neste computador porque a Platform não confirmou o recebimento. */
     static String held(int attempts, int files, long bytes, boolean outOfLimit, String removeDay, String folder) {
         return held(attempts, files, bytes, outOfLimit, removeDay, folder, 7);

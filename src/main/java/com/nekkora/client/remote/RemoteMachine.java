@@ -53,6 +53,57 @@ public final class RemoteMachine implements AutoCloseable {
     public record PythonSeen(String localId, boolean virtual, String version) {
     }
 
+    /**
+     * T06 - um ambiente Python como a Platform o conhece e como este computador o conhece. {@code code}: os 6 primeiros
+     * caracteres do identificador opaco publicado - o mesmo codigo que a Platform mostra ao lado da versao, para a pessoa
+     * distinguir dois ambientes iguais e achar aqui o que escolheu la. {@code where}: onde ele esta NESTE computador; so a tela
+     * deste computador o mostra, e ele nunca vai a Platform.
+     */
+    public record PythonHere(String code, String version, boolean virtual, String where) {
+    }
+
+    /** Os ambientes da ultima publicacao feita nesta abertura do aplicativo, na ordem publicada. Vazio antes da primeira. */
+    public synchronized List<PythonHere> pythonHere() {
+        return link == null || ended ? List.of() : publishedHere;
+    }
+
+    /** O que este computador esta fazendo agora. So estado operacional: nada do conteudo de uma execucao. */
+    public enum Activity {
+        /** Nenhuma execucao em andamento. */
+        IDLE,
+        /** Uma execucao iniciada AQUI, pelo botao Executar. Nada dela vai a Platform. */
+        LOCAL_RUNNING,
+        /** Uma solicitacao da Platform foi recebida e esta sendo preparada (pacote, Python, dependencias). */
+        REMOTE_PREPARING,
+        /** Uma solicitacao da Platform esta em execucao. */
+        REMOTE_RUNNING,
+        /** A execucao pedida pela Platform terminou; o desfecho, os registros e os resultados estao sendo enviados. */
+        REMOTE_SENDING
+    }
+
+    /** A atividade de agora e a origem dela. Nunca lanca. */
+    public Activity activity() {
+        try {
+            MachineVault.Link current = usable();
+            AttemptJournal.Entry pending = current == null ? null : journal.load(current.agentId()).orElse(null);
+            if (pending != null) {
+                if (pending.phase() == AttemptJournal.Phase.RESULTS || pending.report() != null) {
+                    return Activity.REMOTE_SENDING;
+                }
+                return pending.phase() == AttemptJournal.Phase.RUNNING ? Activity.REMOTE_RUNNING : Activity.REMOTE_PREPARING;
+            }
+            Work w = work;
+            return w != null && w.busy() ? Activity.LOCAL_RUNNING : Activity.IDLE;
+        } catch (RuntimeException x) {
+            return Activity.IDLE;
+        }
+    }
+
+    /** A organizacao para a qual este computador esta habilitado (o identificador; quem mostra o nome e a tela). Vazio sem vinculo. */
+    public synchronized Optional<String> organizationId() {
+        return link == null || ended ? Optional.empty() : Optional.of(link.organizationId());
+    }
+
     /** Quem descobre o Python deste computador (entregue por quem monta o aplicativo; esta camada nao cria processos). */
     public interface PythonFinder {
         List<PythonSeen> find();
@@ -95,6 +146,8 @@ public final class RemoteMachine implements AutoCloseable {
     /** Inventario de Python: quem descobre (nulo = este aplicativo nao publica), quantos foram publicados e quando tentar de novo. */
     private volatile PythonFinder pythons;
     private Integer published;
+    /** O que foi publicado por ultimo, com o que so este computador sabe (onde esta cada ambiente). Nunca sai daqui. */
+    private List<PythonHere> publishedHere = List.of();
     private java.time.Instant inventoryNotBefore = java.time.Instant.MIN;
     /** Renovacao: quando tentar de novo depois de uma falha passageira, e a espera da proxima. So em memoria. */
     private java.time.Instant renewNotBefore = java.time.Instant.MIN;
@@ -812,6 +865,13 @@ public final class RemoteMachine implements AutoCloseable {
         }
     }
 
+    /** Onde o ambiente esta neste computador: o identificador local sem o prefixo de tipo ({@code computador:}, {@code pacote:}...). */
+    private static String where(String localId) {
+        int cut = localId.indexOf(':');
+        // "c:\..." tambem tem dois-pontos: so e prefixo de tipo o que vem antes de um caminho com letra de unidade ou barra
+        return cut > 1 && cut < localId.length() - 1 ? localId.substring(cut + 1) : localId;
+    }
+
     /** Liga a publicacao do inventario de Python (quem monta o aplicativo entrega a descoberta). */
     public void setPythonFinder(PythonFinder finder) {
         this.pythons = finder;
@@ -840,6 +900,7 @@ public final class RemoteMachine implements AutoCloseable {
                 return view();
             }
             List<MachineChannel.Published> out = new java.util.ArrayList<>();
+            List<PythonHere> here = new java.util.ArrayList<>();
             java.util.Set<String> ids = new java.util.HashSet<>();
             try {
                 javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
@@ -851,6 +912,7 @@ public final class RemoteMachine implements AutoCloseable {
                     String id = Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(s.localId().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                     if (ids.add(id)) {
                         out.add(new MachineChannel.Published(id, s.version(), s.virtual(), observedAt));
+                        here.add(new PythonHere(id.substring(0, 6), s.version(), s.virtual(), where(s.localId())));
                     }
                 }
             } catch (IOException | java.security.GeneralSecurityException e) {
@@ -869,6 +931,7 @@ public final class RemoteMachine implements AutoCloseable {
                 throw e;
             }
             synchronized (this) {
+                publishedHere = List.copyOf(here);
                 published = count;
                 inventoryNotBefore = clock.instant().plusSeconds(INVENTORY_EVERY_SECONDS);
             }

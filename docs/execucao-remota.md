@@ -255,6 +255,28 @@ chega inteiro.
 **Limite conhecido.** Um texto em página de código cujos bytes formem, por coincidência, UTF-8 válido é lido como UTF-8.
 Com `Cp1252` isso exige sequências como `Ã©`, raras em texto real, mas possíveis.
 
+## Estado operacional na tela (T06)
+
+A tela "Execução remota" mostra **só estado operacional**. Nenhum conteúdo de execução pedida pela Platform aparece no
+aplicativo.
+
+| O que | Como aparece |
+|---|---|
+| Habilitação | habilitado e recebendo, pausado, não habilitado, encerrado, sem contato (já existiam) |
+| Organização | "Habilitado para a organização *nome*". O nome vem da lista de organizações de quem entrou; se a organização do vínculo não está nela, a tela diz isso, sem mostrar identificador |
+| O que roda agora, e de quem é | nada; execução **iniciada neste computador** (local, nada vai à Platform); solicitação da Platform em preparação; em execução; terminada e enviando desfecho, registros e resultados |
+| Onde ver o conteúdo | um texto fixo: registros e resultados das execuções pedidas pela Platform são consultados na Platform, na página da versão; os das execuções locais, em "Última execução" |
+| Ambientes Python | uma linha por ambiente informado: **código**, versão, tipo e a pasta. O código são os 6 primeiros caracteres do identificador opaco publicado, o mesmo que a Platform mostra. A pasta só aparece aqui |
+| Pendências | resultados e registros guardados sem confirmação, com data e motivo da remoção; o que já foi removido pelo prazo |
+
+Limites: o nome do **Worker** não aparece (o aplicativo só recebe o identificador dele). "Onde ver" é texto, não um
+atalho que abre a Platform. A lista de ambientes é a da última publicação feita nesta abertura do aplicativo.
+
+| Requisito | Teste |
+|---|---|
+| Atividade e origem em cada fase; organização; código igual ao começo do identificador publicado; pasta nunca enviada | `RemoteDeliveryTest.aTelaSabeOQueEstaRodandoAgoraEDeQuemEEOCodigoDoAmbienteEOMesmoQueVaiAPlatform` |
+| Tela: textos, nada antes de habilitar, sem identificador | `RemoteDesktopTest.aTelaMostraOEstadoOperacionalEOCodigoDeCadaAmbienteSemMostrarConteudoDeExecucao` (`-Pdesktop`) |
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
