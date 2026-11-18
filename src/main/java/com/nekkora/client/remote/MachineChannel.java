@@ -71,6 +71,8 @@ public final class MachineChannel {
         STORAGE,
         /** Ja ha um vinculo neste computador. */
         ALREADY_ENABLED,
+        /** Ha uma tentativa recebida da Platform e ainda nao resolvida com ela: o computador nao e desabilitado agora. */
+        ATTEMPT_ACTIVE,
         /** A credencial ainda esta longe do vencimento: a Platform nao a renova agora. */
         RENEWAL_NOT_DUE,
         /** O token ou a epoca desta entrega nao sao mais os vigentes: outra entrega tomou o lugar. Nada foi alterado. */

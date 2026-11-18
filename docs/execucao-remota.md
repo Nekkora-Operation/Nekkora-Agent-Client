@@ -50,6 +50,21 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
   administra revoga a máquina na Platform.
 - **Vínculo encerrado na Platform** (máquina revogada): a credencial deixa de ser enviada e a tela oferece só remover.
 
+### Pausar, desabilitar e perder o vínculo com uma execução ativa
+
+São três situações diferentes, com três tratamentos:
+
+| Situação | O que acontece com a execução da Platform que está ativa neste computador |
+|---|---|
+| **Pausar recebimento** | Nada. Ela continua, é acompanhada até terminar e o desfecho verdadeiro é informado. Só não chega trabalho novo |
+| **Desabilitar este computador** | **Recusado** enquanto houver uma tentativa recebida e não resolvida com a Platform (em preparação, em execução, ou com o desfecho ainda por informar). Nada muda, nem aqui nem lá; o desvínculo nem é pedido. A tela diz o que fazer: esperar terminar, pedir o cancelamento na Platform, ou só pausar. Assim o desvínculo pela pessoa nunca abandona o estado de uma execução |
+| **Vínculo encerrado na Platform** (quem administra revogou a máquina; credencial vencida) | Não dá para recusar: é o caminho de emergência. O computador deixa de estar autorizado a executar trabalho da Platform, então **o processo é parado, de forma controlada**. O que ele já produziu (registros e pasta de saída) **fica neste computador**, dito na tela como "não podem mais ser enviados: o vínculo foi encerrado", até o prazo de guarda. **Nada é enviado por outro caminho** e a máquina não informa desfecho: quem encerra a tentativa é a Platform ("Resultado não confirmado", ou "Não iniciada") |
+
+Com registros ou resultados ainda **sendo enviados** (tentativa já resolvida), desabilitar é permitido, e o segundo passo avisa
+antes: depois de desabilitar eles não poderão mais ser enviados.
+
+Uma nova habilitação cria outra máquina na Platform: ela **não** entrega o que a anterior deixou guardado.
+
 ## Renovação da credencial (T01b)
 
 A credencial da máquina vale 90 dias. O aplicativo a renova **sozinho**, sem pessoa e sem código, quando faltarem até 30
@@ -127,7 +142,7 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 |---|---|
 | **Código da tentativa**: o ZIP baixado, a cópia extraída e a cópia que foi executada | sempre, quando a tentativa está resolvida com a Platform (qualquer desfecho). O registro da execução fica |
 | **Pasta de saída** (o que a automação gravou) | **só** com a confirmação de recebimento conferida: cada arquivo confirmado pela Platform com o mesmo número, tamanho e SHA-256; fechamento desta tentativa aceito com as mesmas contagens; nenhum arquivo de fora; e a pasta, relida e recalculada antes de apagar, igual ao que foi confirmado |
-| Pasta de saída com arquivo fora do limite (`OUT_OF_LIMIT`), envio não confirmado (`NOT_CONFIRMED`) ou alterada depois do envio (`CHANGED_AFTER_SEND`) | **fica guardada**, marcada como pendente (`pendente.txt`: início e motivo). Aparece na tela "Execução remota" com a quantidade, o tamanho, a pasta e a data de remoção. É removida quando vence o **prazo de guarda** (padrão 7 dias, configurável; ver "Prazo de guarda"), contado da marca |
+| Pasta de saída ainda não confirmada | **fica guardada**, marcada (`pendente.txt`: início e motivo), e aparece na tela "Execução remota" com a quantidade, o tamanho, a pasta, o motivo e a data de remoção. É removida quando vence o **prazo de guarda** (padrão 7 dias, configurável; ver "Prazo de guarda"), contado do desfecho. Os motivos estão em "Entrega depois do desfecho" |
 | Sobra de uma queda entre o desfecho e a limpeza | ao abrir o aplicativo e de hora em hora, a varredura tira o **código** das tentativas que não são a pendente. A pasta de saída que sobrou sem marca é marcada nesse momento: o prazo de guarda começa aí, nunca antes |
 | O que a limpeza **nunca** alcança | só pastas de tentativa (nome no formato de UUID) dentro de `remota/tentativas`. Projeto original, ambiente Python, registros de execuções locais, registro da execução remota e qualquer pasta pessoal ficam fora do alcance |
 
@@ -157,6 +172,24 @@ não executa, ou entrega sem o ambiente ou o Python).
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
 
+### Entrega depois do desfecho: até confirmar, vencer o prazo ou haver impedimento
+
+**Informar o desfecho resolve a tentativa, não a entrega.** Assim que a Platform aceita o desfecho, o diário da tentativa sai,
+o código é apagado e a máquina fica livre para outro trabalho. Os registros e a pasta de saída passam para a **entrega
+continuada**, que guarda o token da atribuição (protegido, em `remota/guarda/`) e tenta de novo a cada consulta, com espera
+crescente entre tentativas (30 s até 15 min). Ela acaba, para cada tipo, de um de três jeitos:
+
+| Fim | Quando | O que fica dito |
+|---|---|---|
+| **Confirmação** | a Platform aceita o fechamento com as mesmas contagens (registros) e confirma cada arquivo com o mesmo SHA-256 (resultados) | só então o que estava guardado é apagado; não sobra registro nem token |
+| **Impedimento**, com o motivo | **limite** (`OUT_OF_LIMIT`): a Platform fechou o envio sabendo que há arquivo acima do limite, que só existe aqui. **Conflito** (`NOT_CONFIRMED`, `CHANGED_AFTER_SEND`): a Platform tem outra coisa, ou outro fechamento, ou a pasta mudou depois do envio. **Autorização** (`LINK_ENDED`, `NOT_AUTHORIZED`): o vínculo deste computador acabou, ou a Platform não reconhece mais a atribuição | não há novo envio; o que está guardado fica até o prazo de guarda, e a tela diz o motivo. Um impedimento de autorização **nunca é contornado** |
+| **Prazo de guarda** | o prazo vence antes da confirmação | a limpeza remove, registra a perda e avisa a Platform quando possível |
+
+Enquanto nada impede (`SENDING`), a tela diz "O envio à Platform continua sendo tentado". Falha passageira — rede, servidor
+indisponível, limite de requisições, arquivo que não pôde ser lido agora — **não** vira impedimento: é tentada de novo.
+
+O prazo de guarda conta **do desfecho**, não da última tentativa de envio: tentar de novo não recomeça o prazo.
+
 ### Prazo de guarda do que a Platform não confirmou
 
 Vale para a **pasta de saída** e para a **fila de registros** de uma tentativa já terminada cujo recebimento a Platform
@@ -168,8 +201,8 @@ não confirmou. É retenção **local**; não substitui a retenção do servidor
 | Como mudar, sem alterar o programa | um arquivo de texto `prazo-de-guarda.txt` na pasta `remota` dos dados do aplicativo (`%LOCALAPPDATA%\Nekkora\AgentClient\remota\`), com um número inteiro de dias na primeira linha, de **1 a 90** |
 | Valor inválido | arquivo ausente, vazio, com texto, zero, negativo ou acima de 90: vale o padrão. Um valor inválido nunca encurta nem alonga a guarda |
 | Quando passa a valer | é lido a cada limpeza (ao abrir e de hora em hora) e a cada vez que a tela é montada. Não é preciso reabrir o aplicativo |
-| O que não entra na contagem | a tentativa **pendente**: em andamento, ou terminada e ainda enviando. A fila e a pasta dela nunca são removidas pelo prazo. Com uma execução em andamento, a limpeza das pastas não roda |
-| De quando conta | pasta de saída: da marca de pendência, gravada quando o envio termina sem confirmação. Fila de registros: da última gravação do arquivo |
+| O que não entra na contagem | a tentativa **em andamento** (do recebimento até o desfecho ser aceito pela Platform). A fila e a pasta dela nunca são removidas pelo prazo. Com uma execução em andamento, a limpeza das pastas não roda |
+| De quando conta | **do desfecho**. Pasta de saída: da marca gravada quando a Platform aceita o desfecho. Fila de registros: da última gravação do arquivo, que é a do fim da execução — tentar enviar de novo preserva essa data |
 | Aviso prévio | a tela "Execução remota" mostra, enquanto a pendência existe, **a data** de remoção e **o motivo** ("é quando vence o prazo de guarda de N dias sem confirmação de recebimento"). Para resultados, também a quantidade, o tamanho e a pasta |
 | O que já foi confirmado | sai antes, na hora da confirmação. O prazo é só para o que não foi confirmado |
 
@@ -200,7 +233,7 @@ descartava.
 | O que o aplicativo mostra | **nada do conteúdo.** A tela continua mostrando só o estado da máquina |
 | Fila local | um arquivo por tentativa em `remota/fila/`, só para a entrega. Cada bloco gravado passa pela proteção do Windows (o mesmo usuário, neste computador) |
 | Quando a fila é apagada | quando a Platform confirma o fechamento do envio com as mesmas contagens. Tentativa que não iniciou não tem fila |
-| Sem confirmação | a fila fica no disco, aparece na tela como pendência (sem o conteúdo) e é apagada quando vence o **prazo de guarda** (padrão 7 dias, configurável), contado da última gravação dela |
+| Sem confirmação | a fila fica no disco e o envio continua sendo tentado (ver "Entrega depois do desfecho"). Aparece na tela como pendência (sem o conteúdo), com o motivo, e é apagada quando vence o **prazo de guarda** (padrão 7 dias, configurável), contado do desfecho |
 | Segredos | antes de entrar na fila saem do texto: a credencial da máquina, o token da atribuição, códigos de habilitação e valores de cabeçalho de autorização |
 | `STDERR` | é um **canal**, não um nível. Nada é classificado pelo texto |
 | Limite por linha | 8 KiB; o excedente da linha é lido e desprezado, e a linha vai marcada como cortada |
@@ -291,6 +324,15 @@ temporária.
 
 ## Testes
 
+| Requisito (fechamento) | Teste |
+|---|---|
+| Informar o desfecho libera a máquina; a entrega continua até a confirmação, com espera entre tentativas, sem recomeçar o prazo de guarda e atravessando o fechamento do aplicativo | `RemoteDeliveryTest.informarODesfechoNaoEncerraAEntregaQueContinuaAteAPlatformConfirmar` |
+| Impedimento de autorização (a Platform não reconhece mais a atribuição): fica dito, nada mais é enviado | `RemoteDeliveryTest.impedimentoDeAutorizacaoFicaDitoComOMotivoENaoEContornado` |
+| Vínculo encerrado com execução em andamento: processo parado, o que há fica guardado com o motivo, nenhuma chamada a mais; a perda por prazo fica registrada com aviso impossível | `RemoteDeliveryTest.vinculoEncerradoComExecucaoEmAndamentoParaOProcessoEGuardaOQueHaSemEnviar` |
+| Desabilitar é recusado com tentativa ativa; pausar não mexe na execução em andamento | `RemoteDeliveryTest.pausadaNadaEEntregueEComTentativaAtivaOComputadorNaoEDesabilitado` |
+| Os três fins da entrega no registro local; vínculo encerrado tira os tokens e mantém o motivo | `LossLedgerTest` (3) |
+| Textos: cada motivo, aviso antes de desabilitar com envio em andamento, recusa com execução ativa | `RemoteDesktopTest` (`-Pdesktop`) |
+
 | O que | Teste |
 |---|---|
 | Habilitar, recusas, resposta perdida, pausar, desabilitar, vínculo encerrado, outro endereço, arquivo adulterado, sem proteção | `RemoteMachineTest` (canal simulado em HTTPS; DPAPI real) |
@@ -331,8 +373,13 @@ temporária.
   muda de resultado, mas escreve com mais chamadas ao sistema.
 - Registros: sem nível (tudo `UNKNOWN`); sem limite de espaço total da fila; até 1 segundo de saída pode se perder se o
   aplicativo cair. A fila que não pôde ser confirmada aparece na tela como pendência, sem o conteúdo.
-- O que ficou pendente **não é reenviado** depois que a tentativa é dada por resolvida: fica guardado para a pessoa copiar
-  (resultados) e sai no prazo. O prazo de guarda é configurado por arquivo, não pela tela.
+- O prazo de guarda é configurado por arquivo, não pela tela.
+- A espera entre tentativas da entrega continuada (30 s até 15 min) é fixa no programa, e a tela não mostra quando será a
+  próxima tentativa.
+- Uma nova habilitação não entrega o que a habilitação anterior deixou guardado (o plano T00 previa; não foi feito, por
+  contornar a revogação).
+- Com o vínculo encerrado pela Platform, o processo em execução é **parado**. O que ele estava fazendo num sistema de
+  terceiros não é desfeito.
 - Depois de o aplicativo ser reaberto no meio de uma execução, a saída do processo **não é mais capturada** (o fluxo ficou
   sem leitor); a lacuna fica dita nos registros.
 - Não há aviso de espaço em disco para pasta de saída ou fila pendentes.

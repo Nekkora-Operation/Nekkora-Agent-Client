@@ -78,18 +78,52 @@ final class RemoteText {
 
     /** O mesmo, dizendo o MOTIVO da remoção: o prazo de guarda vigente, em dias. */
     static String held(int attempts, int files, long bytes, boolean outOfLimit, String removeDay, String folder, int retentionDays) {
+        return held(attempts, files, bytes, java.util.Set.of(outOfLimit ? "OUT_OF_LIMIT" : "NOT_CONFIRMED"), removeDay, folder, retentionDays);
+    }
+
+    /**
+     * Por que o que está guardado ainda não saiu daqui, em palavras. Cada motivo é dito uma vez; com mais de um, todos são ditos.
+     * {@code SENDING}: nada impede, o envio continua. {@code OUT_OF_LIMIT}: há arquivo acima do limite. {@code LINK_ENDED} e
+     * {@code NOT_AUTHORIZED}: impedimento de autorização - não há novo envio. Os demais: a Platform não confirmou.
+     */
+    static String why(java.util.Set<String> reasons) {
+        StringBuilder b = new StringBuilder();
+        if (reasons.contains("SENDING")) {
+            b.append("O envio à Platform continua sendo tentado; o que ela confirmar sai deste computador. ");
+        }
+        if (reasons.contains("OUT_OF_LIMIT")) {
+            b.append("A Platform não recebeu todos: há arquivo acima do limite de envio, que só existe aqui. ");
+        }
+        if (reasons.contains("LINK_ENDED")) {
+            b.append("Não podem mais ser enviados: o vínculo deste computador com a Platform foi encerrado, e nada é enviado sem ele. ");
+        }
+        if (reasons.contains("NOT_AUTHORIZED")) {
+            b.append("Não podem mais ser enviados: a Platform não reconhece mais a atribuição dessa execução a este computador. ");
+        }
+        if (reasons.stream().anyMatch(r -> !java.util.Set.of("SENDING", "OUT_OF_LIMIT", "LINK_ENDED", "NOT_AUTHORIZED").contains(r))) {
+            b.append("A Platform não confirmou o recebimento, e não há novo envio. ");
+        }
+        return b.toString();
+    }
+
+    /** O mesmo, com os motivos de cada pasta guardada (ver {@link #why}). */
+    static String held(int attempts, int files, long bytes, java.util.Set<String> reasons, String removeDay, String folder, int retentionDays) {
         String size = bytes < 1024 * 1024 ? Math.max(1, bytes / 1024) + " KB" : String.format(java.util.Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0)).replace('.', ',') + " MB";
         return "Resultados pendentes neste computador: " + (files == 1 ? "1 arquivo" : files + " arquivos") + " (" + size + ") de "
-                + (attempts == 1 ? "1 execução remota" : attempts + " execuções remotas") + ". "
-                + (outOfLimit ? "A Platform não recebeu todos: há arquivo acima do limite de envio. " : "A Platform não confirmou o recebimento. ")
+                + (attempts == 1 ? "1 execução remota" : attempts + " execuções remotas") + ". " + why(reasons)
                 + "Eles ficam guardados em " + folder + " e são removidos deste computador a partir de " + removeDay + ": é quando vence o prazo de guarda de "
                 + days(retentionDays) + " sem confirmação de recebimento. Copie o que precisar antes dessa data.";
     }
 
     /** Registros (saída do processo) de execuções remotas que ficaram neste computador sem confirmação. Nada do conteúdo. */
     static String heldLogs(int attempts, String removeDay, int retentionDays) {
-        return "Registros pendentes neste computador: a Platform não confirmou o recebimento de toda a saída do processo de " + runs(attempts)
-                + ". O que falta fica guardado aqui, protegido, e não é mostrado nesta tela. É removido deste computador a partir de " + removeDay
+        return heldLogs(attempts, java.util.Set.of("NOT_CONFIRMED"), removeDay, retentionDays);
+    }
+
+    /** O mesmo, com os motivos (ver {@link #why}). */
+    static String heldLogs(int attempts, java.util.Set<String> reasons, String removeDay, int retentionDays) {
+        return "Registros pendentes neste computador: a Platform ainda não confirmou o recebimento de toda a saída do processo de " + runs(attempts) + ". "
+                + why(reasons) + "O que falta fica guardado aqui, protegido, e não é mostrado nesta tela. É removido deste computador a partir de " + removeDay
                 + ": é quando vence o prazo de guarda de " + days(retentionDays) + " sem confirmação de recebimento. O que já chegou continua na Platform.";
     }
 
@@ -105,7 +139,8 @@ final class RemoteText {
                 + ". Esse conteúdo não foi entregue por inteiro e não pode mais ser recuperado daqui. "
                 + (notice == 0 ? "A Platform foi avisada."
                         : notice == 1 ? "A Platform ainda não foi avisada de tudo: o aviso é tentado de novo a cada hora, com este computador habilitado."
-                                : "Não foi possível avisar a Platform de tudo: ela não reconhece mais a atribuição dessas execuções.");
+                                : "Não foi possível avisar a Platform de tudo: o vínculo deste computador foi encerrado, ou ela não reconhece mais a atribuição "
+                                        + "dessas execuções.");
     }
 
     static final String CODE_FIELD = "Código de habilitação";
@@ -116,6 +151,9 @@ final class RemoteText {
     static final String DISABLE = "Desabilitar este computador";
     static final String DISABLE_CONFIRM = "Confirmar desabilitação";
     static final String DISABLE_WARNING = "Desabilitar encerra o vínculo deste computador na Platform. Para habilitar de novo será preciso outro código.";
+    /** Com registros ou resultados ainda sendo enviados: desabilitar é um impedimento definitivo para esse envio, e isso é dito antes. */
+    static final String DISABLE_WARNING_SENDING = DISABLE_WARNING + " Há registros ou resultados de execuções remotas que a Platform ainda não confirmou: "
+            + "depois de desabilitar eles NÃO poderão mais ser enviados. Ficam neste computador até o prazo de guarda.";
     static final String REMOVE = "Remover deste computador";
     static final String KEEP = "Manter";
     static final String CLOSE = "Fechar";
@@ -164,6 +202,9 @@ final class RemoteText {
             case STORAGE -> "Este computador não conseguiu guardar a credencial da máquina com proteção. Nada ficou habilitado.";
             case RENEWAL_NOT_DUE -> "A credencial deste computador ainda não precisa ser renovada.";
             case ALREADY_ENABLED -> "Este computador já tem um vínculo. Desabilite ou remova o vínculo atual antes de habilitar de novo.";
+            case ATTEMPT_ACTIVE -> "Há uma execução solicitada pela Platform em andamento neste computador, ou com o desfecho ainda por informar. "
+                    + "Desabilitar agora a deixaria sem desfecho. Espere terminar, ou peça o cancelamento na Platform, e desabilite depois. Para só deixar de "
+                    + "receber trabalhos novos, use \"Pausar recebimento\". Nada foi alterado.";
             // da entrega de uma tentativa: nunca chegam a uma acao da pessoa nesta tela
             case ATTEMPT_STALE, ATTEMPT_GONE, ATTEMPT_TRANSITION, PACKAGE_UNAVAILABLE, RESULT_CONFLICT, LOG_CONFLICT, LOG_LIMIT, RESULT_LIMIT, UNEXPECTED -> "A Platform respondeu de um jeito que o aplicativo não reconhece. Nada foi alterado.";
         };

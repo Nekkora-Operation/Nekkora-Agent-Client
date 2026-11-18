@@ -280,6 +280,31 @@ public final class MachineVault {
         return new LogQueue(dir.resolve("fila").resolve(attemptId + ".fila"), keyring, secrets);
     }
 
+    /** A data do arquivo da fila (de onde o prazo de guarda conta). Nulo: nao ha arquivo. */
+    java.nio.file.attribute.FileTime logQueueTime(String attemptId) {
+        try {
+            Path f = dir.resolve("fila").resolve(attemptId + ".fila");
+            return Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS) ? Files.getLastModifiedTime(f, java.nio.file.LinkOption.NOFOLLOW_LINKS) : null;
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Devolve ao arquivo da fila a data que ele tinha: tentar enviar de novo nao recomeca o prazo de guarda. */
+    void logQueueTime(String attemptId, java.nio.file.attribute.FileTime time) {
+        if (time == null) {
+            return;
+        }
+        try {
+            Path f = dir.resolve("fila").resolve(attemptId + ".fila");
+            if (Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                Files.setLastModifiedTime(f, time);
+            }
+        } catch (IOException | RuntimeException e) {
+            // a fila fica um pouco mais, nunca menos
+        }
+    }
+
     /**
      * Apaga as filas de registros que nao sao a da tentativa pendente e estao paradas ha mais que o prazo de guarda
      * ({@link #retentionDays}). A fila da tentativa pendente (em andamento, ou ainda enviando) nunca entra na conta. So arquivos
