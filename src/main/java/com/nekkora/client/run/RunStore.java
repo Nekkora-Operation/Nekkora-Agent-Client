@@ -45,11 +45,31 @@ public final class RunStore {
 
     private final Path root;
     private final AtomicWriter writer;
+    /** A origem das execucoes DESTE armazem: gravada em cada registro e exigida na leitura. Um armazem nunca mistura origens. */
+    private final String origin;
 
-    /** {@code root}: a pasta das execucoes (ex.: {@code <dados>/execucoes}). */
+    /** {@code root}: a pasta das execucoes iniciadas pela pessoa neste aplicativo (ex.: {@code <dados>/execucoes}). */
     public RunStore(Path root, AtomicWriter writer) {
+        this(root, writer, ExecutionRecord.ORIGIN);
+    }
+
+    private RunStore(Path root, AtomicWriter writer, String origin) {
         this.root = root;
         this.writer = writer;
+        this.origin = origin;
+    }
+
+    /**
+     * O armazem das execucoes que NAO nasceram de uma aprovacao da pessoa neste aplicativo: quem as pede responde pela
+     * autorizacao e pelas pastas. Fica em outra pasta e grava outra origem: um registro daqui nunca e lido pelo armazem das
+     * execucoes locais, nem o contrario.
+     */
+    public static RunStore managed(Path root, AtomicWriter writer) {
+        return new RunStore(root, writer, ExecutionRecord.MANAGED_ORIGIN);
+    }
+
+    public String origin() {
+        return origin;
     }
 
     public static Path defaultRoot(Path dataRoot) {
@@ -73,7 +93,7 @@ public final class RunStore {
                 throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
             }
             Files.createDirectories(dir(r.id()));
-            writer.write(f, json(r).getBytes(StandardCharsets.UTF_8));
+            writer.write(f, json(r, origin).getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new ExecRefused(ErrorCode.EXEC_STORAGE_FAILED);
         }
@@ -197,14 +217,19 @@ public final class RunStore {
         }
     }
 
-    static Optional<ExecutionRecord> load(Path f) {
+    private Optional<ExecutionRecord> load(Path f) {
+        return load(f, origin);
+    }
+
+    static Optional<ExecutionRecord> load(Path f, String origin) {
         try {
             if (!Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
             Map<String, Object> m = StrictJson.parseObject(Files.readString(f, StandardCharsets.UTF_8));
             if (!ExecutionRecord.SCHEMA.equals(m.get("schema")) || !ExecutionRecord.VERSION.equals(m.get("version"))) return Optional.empty();
             // origem: ausente em registros anteriores ao campo (todos locais); presente, so a deste aplicativo. Um arquivo que se
             // diga "da Platform" (ou qualquer outra coisa) nao foi escrito aqui e nao vira execucao
-            if (m.get("origin") != null && !ExecutionRecord.ORIGIN.equals(m.get("origin"))) return Optional.empty();
+            // No armazem das execucoes locais, a ausencia vale como local; no outro, a origem tem de estar escrita
+            if (m.get("origin") == null ? !ExecutionRecord.ORIGIN.equals(origin) : !origin.equals(m.get("origin"))) return Optional.empty();
             ProcessOwner owner = null;
             if (m.get("process") instanceof Map<?, ?> p && p.get("pid") instanceof Long pid && p.get("start") instanceof Long start
                     && p.get("executableDigest") instanceof String exe && exe.matches("sha256:[0-9a-f]{64}")) {
@@ -247,10 +272,14 @@ public final class RunStore {
     }
 
     static String json(ExecutionRecord r) {
+        return json(r, ExecutionRecord.ORIGIN);
+    }
+
+    static String json(ExecutionRecord r, String origin) {
         StringBuilder b = new StringBuilder("{\n");
         field(b, "schema", ExecutionRecord.SCHEMA);
         field(b, "version", ExecutionRecord.VERSION);
-        field(b, "origin", ExecutionRecord.ORIGIN);
+        field(b, "origin", origin);
         field(b, "id", r.id().value());
         RunContext c = r.context();
         b.append("  \"context\": {\"organizationId\": ").append(StrictJson.quote(c.organizationId().toString())).append(", \"workspaceId\": ")

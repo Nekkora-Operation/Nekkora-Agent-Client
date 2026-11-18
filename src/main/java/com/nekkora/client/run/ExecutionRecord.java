@@ -27,6 +27,11 @@ public record ExecutionRecord(ExecutionId id, RunContext context, ExecutionState
     public static final String VERSION = "1.0.0";
     /** A unica origem que este aplicativo produz e aceita: execucao iniciada nele, com registros so locais. */
     public static final String ORIGIN = "LOCAL_AGENT";
+    /**
+     * A origem das execucoes que nao nasceram de uma aprovacao da pessoa neste aplicativo (PLATFORM-CLIENT-EXECUCAO-REMOTA-001).
+     * Ficam num armazem proprio ({@link RunStore#managed}); o armazem das execucoes locais nao as le.
+     */
+    public static final String MANAGED_ORIGIN = "PLATFORM";
 
     /** Quem pediu o cancelamento. */
     public enum CancelSource {
