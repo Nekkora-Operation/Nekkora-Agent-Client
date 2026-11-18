@@ -86,6 +86,8 @@ public final class FakeGateway implements AutoCloseable {
     // ---- entrega (T02): no maximo uma tentativa, como no servidor real
     /** A tentativa desta maquina; nula = nao ha. */
     public volatile String attemptId;
+    /** O ultimo relato de estado afirmou que o processo da tentativa nao esta mais em execucao na maquina? */
+    public volatile boolean lastProcessAbsent;
     /** QUEUED, OFFERED, RECEIVED, REFUSED, CANCELLED... */
     public volatile String attemptState;
     public volatile String attemptReason;
@@ -357,6 +359,13 @@ public final class FakeGateway implements AutoCloseable {
     public volatile String earlierResultsClosure;
     public final java.util.concurrent.atomic.AtomicInteger earlierLogBatches = new java.util.concurrent.atomic.AtomicInteger();
 
+    /**
+     * Espera o atendimento em curso de um pedido sobre a tentativa anterior terminar. O servidor falso responde ANTES de desfazer
+     * a troca interna; sem isto, um teste que le {@code earlier*} logo depois da resposta pode pegar a destroca pela metade.
+     */
+    public synchronized void settle() {
+    }
+
     /** Guarda a tentativa atual (terminada) como a anterior e enfileira outra. */
     public synchronized String queueKeepingEarlier() {
         earlierId = attemptId;
@@ -519,6 +528,7 @@ public final class FakeGateway implements AutoCloseable {
             String wanted = field(text, "state");
             String reason = field(text, "refusalReason");
             reported.add(wanted);
+            lastProcessAbsent = text.contains("\"processAbsent\":true");
             java.util.regex.Matcher exit = java.util.regex.Pattern.compile("\"exitCode\":(-?\\d+)").matcher(text);
             // as mesmas transicoes do servidor real (046)
             List<String> next = switch (attemptState) {
@@ -680,14 +690,18 @@ public final class FakeGateway implements AutoCloseable {
             if (authenticated(x, auth)) {
                 boolean earlier = forEarlier(path);
                 if (earlier) {
-                    swapEarlier();
-                }
-                try {
-                    logs(x, path, text);
-                } finally {
-                    if (earlier) {
+                    // a troca, o atendimento (que ja responde) e a destroca sob a MESMA trava: quem ler o estado da tentativa
+                    // anterior por settle() so ve o resultado depois de a destroca terminar
+                    synchronized (this) {
                         swapEarlier();
+                        try {
+                            logs(x, path, text);
+                        } finally {
+                            swapEarlier();
+                        }
                     }
+                } else {
+                    logs(x, path, text);
                 }
             }
             return;
@@ -703,14 +717,18 @@ public final class FakeGateway implements AutoCloseable {
             if (authenticated(x, auth)) {
                 boolean earlier = forEarlier(path);
                 if (earlier) {
-                    swapEarlier();
-                }
-                try {
-                    result(x, path, text, raw);
-                } finally {
-                    if (earlier) {
+                    // a troca, o atendimento (que ja responde) e a destroca sob a MESMA trava: quem ler o estado da tentativa
+                    // anterior por settle() so ve o resultado depois de a destroca terminar
+                    synchronized (this) {
                         swapEarlier();
+                        try {
+                            result(x, path, text, raw);
+                        } finally {
+                            swapEarlier();
+                        }
                     }
+                } else {
+                    result(x, path, text, raw);
                 }
             }
             return;

@@ -892,12 +892,17 @@ class RemoteDeliveryTest {
         m.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
         assertNull(gw.attemptExit);
+        // o motor conhece a execucao e diz que ela nao esta em andamento: este computador CONFERIU que o processo nao esta mais
+        // aqui, e afirma isso junto do desfecho desconhecido - e o que reconcilia a tentativa pela maquina
+        assertTrue(gw.lastProcessAbsent);
         gw.queue();
         work.state = "RUNNING";
         m.pull();
         work.known = false;
         m.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        // o motor NAO conhece mais a execucao: nao ha o que conferir, e nada e afirmado
+        assertFalse(gw.lastProcessAbsent);
         assertFalse(Files.exists(journal()));
     }
 
@@ -1115,6 +1120,7 @@ class RemoteDeliveryTest {
         RemoteMachine second = machine(true);
         second.pull();
         assertEquals("ENDED_UNKNOWN", gw.attemptState);
+        assertFalse(gw.lastProcessAbsent, "fechou antes de registrar a execucao: nao ha processo conhecido para conferir, e nada e afirmado");
         assertEquals(1, work.jobs.size(), "nada foi lancado de novo");
         assertFalse(Files.exists(journal()));
     }
@@ -1387,6 +1393,7 @@ class RemoteDeliveryTest {
         work.exitCode = null;
         gw.queueKeepingEarlier();
         m.pull();
+        gw.settle();
         assertEquals("RUNNING", gw.attemptState, "a tentativa nova foi recebida e esta em execucao");
         assertEquals(600, gw.earlierLogs.size(), "com tentativa ativa: UM lote dos registros guardados por consulta");
         assertEquals(1, gw.earlierLogBatches.get());
@@ -1395,14 +1402,17 @@ class RemoteDeliveryTest {
         // o pedido de cancelamento da tentativa ativa e obedecido na consulta em que chega - antes do lote guardado
         gw.cancelRequested = true;
         m.pull();
+        gw.settle();
         assertEquals(1, work.cancelled.size(), "a maquina mandou parar na mesma consulta");
         assertEquals(800, gw.earlierLogs.size(), "e o que estava guardado andou mais um lote, sem perder o lugar");
         assertTrue(gw.earlierResults.isEmpty());
         // a tentativa ativa termina: a maquina fica livre e o que estava guardado e entregue ate a confirmacao
         work.ends("CANCELLED", null);
         m.pull();
+        gw.settle();
         assertEquals("CANCELLED", gw.attemptState);
         m.pull();
+        gw.settle();
         assertEquals(850, gw.earlierLogs.size());
         assertEquals("850|0", gw.earlierLogsClosure);
         assertEquals("1|0", gw.earlierResultsClosure);
