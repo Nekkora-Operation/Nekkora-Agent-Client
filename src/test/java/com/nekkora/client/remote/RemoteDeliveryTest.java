@@ -1500,9 +1500,25 @@ class RemoteDeliveryTest {
         assertEquals(Status.NOT_ENABLED, m.view().status());
         assertTrue(Files.exists(queueFile(attempt)));
         assertEquals(List.of("LINK_ENDED"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
-        // vencido o prazo de guarda, a remocao fica registrada como perda, e o aviso a Platform e dado por impossivel
+        // decisao de 16/11: um VINCULO NOVO (outro codigo, outra credencial) nao herda o que o anterior deixou. Nada do vinculo
+        // anterior e reenviado sozinho nem passa a ser do novo; a pendencia continua guardada, com o mesmo motivo
+        assertEquals(Status.RECEIVING, m.enable(gw.code("remote")).status());
+        m.beat();
+        long sent = calls("/logs") + calls("/results") + calls("/retention-loss") + calls(attempt);
+        m.forgetHeldWaits();
+        m.pull();
+        m.pull();
+        assertEquals(sent, calls("/logs") + calls("/results") + calls("/retention-loss") + calls(attempt),
+                "com o vinculo novo, nenhuma chamada sobre a tentativa do vinculo anterior");
+        assertTrue(Files.exists(queueFile(attempt)));
+        assertEquals("LINK_ENDED", work.outputsHeld.get(attempt));
+        assertEquals(List.of("LINK_ENDED"), m.heldLogs().stream().map(RemoteMachine.HeldLogs::reason).toList());
+        assertEquals(0, gw.logs.size());
+        // vencido o prazo de guarda, a remocao fica registrada como perda, e o aviso a Platform e dado por impossivel - mesmo
+        // com um vinculo novo valendo: a credencial nova nao fala pela tentativa do vinculo anterior
         age(queueFile(attempt), java.time.Duration.ofDays(8));
         m.sweep();
+        assertEquals(sent, calls("/logs") + calls("/results") + calls("/retention-loss") + calls(attempt));
         assertFalse(Files.exists(queueFile(attempt)));
         List<RemoteMachine.Lost> lost = m.lost();
         assertEquals(1, lost.stream().filter(RemoteMachine.Lost::logs).count());
