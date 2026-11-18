@@ -96,7 +96,26 @@ class RemoteWorkTest {
                 dependencies, pythonId(), dir.toString());
     }
 
+    /**
+     * Espera o FIM da execucao por inteiro: o processo principal terminar E a finalizacao concluir (o motor deixar de dizer que
+     * ha processo dela vivo). Entre uma coisa e outra o computador continua ocupado e a limpeza do codigo nao tem efeito, de
+     * proposito; um teste que afirmasse "livre" ou limpasse nesse intervalo dependia da sorte. Se o motor nao tem como saber
+     * (incerto), nao ha o que esperar: quem chamou confere o que quiser.
+     */
     private RemoteMachine.Progress waitEnd(String run) throws Exception {
+        RemoteMachine.Progress end = waitMainEnd(run);
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(60).toNanos();
+        while ("ALIVE".equals(work.processes(run))) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("a finalizacao nao concluiu no prazo do teste");
+            }
+            Thread.sleep(20);
+        }
+        return end;
+    }
+
+    /** So o processo principal: usado pelos testes que querem olhar o intervalo da finalizacao (um filho ainda vivo). */
+    private RemoteMachine.Progress waitMainEnd(String run) throws Exception {
         long deadline = System.nanoTime() + java.time.Duration.ofSeconds(90).toNanos();
         while (System.nanoTime() < deadline) {
             RemoteMachine.Progress p = work.progress(run).orElseThrow();
@@ -106,6 +125,20 @@ class RemoteWorkTest {
             Thread.sleep(100);
         }
         throw new AssertionError("nao terminou no prazo do teste");
+    }
+
+    /**
+     * Espera a FINALIZACAO da execucao: o motor ter a prova de que nenhum processo dela continua. So entao a limpeza do codigo
+     * acontece - antes disso o descarte e, de proposito, sem efeito (arquivo em uso por processo nao se apaga).
+     */
+    private void waitProcessesGone(String run) throws Exception {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(60).toNanos();
+        while (!"GONE".equals(work.processes(run))) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("os processos da execucao nao foram dados por encerrados no prazo do teste: " + work.processes(run));
+            }
+            Thread.sleep(20);
+        }
     }
 
     private String refusal(RemoteMachine.Job job) {
@@ -183,6 +216,42 @@ class RemoteWorkTest {
         }
     }
 
+    /**
+     * Enquanto houver processo da execucao vivo (o principal terminou e deixou um filho), o descarte do codigo NAO apaga nada:
+     * nem o ZIP, nem a copia extraida, nem a copia executada. Quando os processos acabam, o MESMO descarte apaga. Era a causa da
+     * falha intermitente da suite: a limpeza pedida com a finalizacao ainda em curso e, de proposito, sem efeito.
+     */
+    @Test
+    void comProcessoDaExecucaoAindaVivoODescarteNaoApagaNadaEDepoisApaga() throws Exception {
+        String leavesChild = String.join("\n",
+                "import os, pathlib, subprocess, sys",
+                "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', '-c', 'import time; time.sleep(900)'],",
+                "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+                "pathlib.Path(os.environ['NEKKORA_SAIDA'], 'filho.txt').write_text(str(filho.pid), encoding='utf-8')",
+                "");
+        RemoteMachine.Job job = job(leavesChild, List.of());
+        String run = work.start(job);
+        assertEquals("SUCCEEDED", waitMainEnd(run).state());
+        Path dir = Path.of(job.dir());
+        Path copy = data.resolve("remota").resolve("execucoes").resolve(run).resolve("pacote");
+        ProcessHandle child = ProcessHandle.of(Long.parseLong(Files.readString(dir.resolve("saida").resolve(run).resolve("filho.txt")).strip())).orElseThrow();
+        try {
+            assertTrue(child.isAlive());
+            assertEquals("ALIVE", work.processes(run), "o processo principal terminou e ha um filho vivo");
+            assertTrue(work.busy(), "o computador continua ocupado");
+            work.discard(job.attemptId(), run);
+            assertTrue(Files.exists(Path.of(job.zip())), "com processo vivo, o ZIP fica");
+            assertTrue(Files.isDirectory(copy), "com processo vivo, a copia executada fica");
+        } finally {
+            child.destroyForcibly();
+        }
+        waitProcessesGone(run);
+        work.discard(job.attemptId(), run);
+        assertFalse(Files.exists(Path.of(job.zip())), "com a prova de que os processos acabaram, o descarte apaga");
+        assertFalse(Files.exists(copy));
+        assertTrue(Files.exists(dir.resolve("saida").resolve(run).resolve("filho.txt")), "a saida nao e apagada pela limpeza do codigo");
+    }
+
     @Test
     void limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado() throws Exception {
         RemoteMachine.Job job = job(OK, List.of());
@@ -192,7 +261,9 @@ class RemoteWorkTest {
         Path copy = data.resolve("remota").resolve("execucoes").resolve(run).resolve("pacote");
         Path out = dir.resolve("saida").resolve(run).resolve("resultado.txt");
         assertTrue(Files.isDirectory(copy), "a copia que foi executada");
-        // fim da tentativa: o ZIP, a copia extraida e a copia executada saem; o registro da execucao e a saida ficam
+        // fim da tentativa: o ZIP, a copia extraida e a copia executada saem; o registro da execucao e a saida ficam.
+        // (a limpeza espera a finalizacao: o teste tambem. Sem esta espera ele falhava quando a finalizacao ainda estava em curso)
+        waitProcessesGone(run);
         work.discard(job.attemptId(), run);
         assertFalse(Files.exists(Path.of(job.zip())));
         assertFalse(Files.exists(dir.resolve("pacote")));

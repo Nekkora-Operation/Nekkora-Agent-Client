@@ -92,6 +92,11 @@ class RunControllerTest {
         long deadline = System.nanoTime() + max.toNanos();
         while (c.isRunning() && System.nanoTime() < deadline) Thread.sleep(50);
         assertFalse(c.isRunning(), "terminou no prazo do teste");
+        // o fim por inteiro: a finalizacao (a espera dos processos da execucao) continua numa thread depois do processo principal.
+        // Enquanto ela corre o computador segue ocupado e a pasta da execucao ainda recebe gravacoes; quem quer olhar esse
+        // intervalo (um filho vivo) nao usa este metodo
+        long settle = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (c.finalizing() && System.nanoTime() < settle) Thread.sleep(20);
         return c.current().orElseThrow().record();
     }
 
@@ -586,5 +591,59 @@ class RunControllerTest {
         while (controller.occupied() && System.nanoTime() < deadline) Thread.sleep(50);
         assertFalse(controller.occupied(), "o filho acabou: a vaga foi liberada");
         assertEquals("", controller.hold(true));
+    }
+
+    /**
+     * Encerrar o aplicativo com uma execucao "finalizando" (o processo principal terminou e ha um filho vivo): a finalizacao
+     * para junto. Depois de {@code close()} nada mais e gravado na pasta de dados - nem quando o filho acaba mais tarde. Era a
+     * causa do erro de limpeza da suite: um evento gravado depois recriava a pasta que o teste acabara de apagar.
+     */
+    @Test
+    void depoisDeFecharAFinalizacaoParaENadaMaisEGravadoNaPastaDeDados() throws Exception {
+        String main = String.join("\n",
+                "import json, os, pathlib, subprocess, sys, time",
+                "from comum import saida, sinal",
+                "filho = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(pathlib.Path(__file__).with_name('filho.py'))],",
+                "                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+                "(saida() / 'pids.json').write_text(json.dumps({'pai': os.getpid(), 'filho': filho.pid}), encoding='utf-8')",
+                "sinal('BUSINESS_SUCCESS')",
+                "");
+        ExecutionPackage pkg = approved("fecha-finalizando", main);
+        ExecutionId id = controller.start(request(pkg, null)).record().id();
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (controller.isRunning() && System.nanoTime() < deadline) Thread.sleep(50);
+        assertEquals(ExecutionState.SUCCEEDED, controller.record(id).orElseThrow().state());
+        java.util.regex.Matcher m;
+        try (java.util.stream.Stream<Path> walk = Files.walk(tmp)) {
+            Path pids = walk.filter(f -> f.getFileName().toString().equals("pids.json")).findFirst().orElseThrow();
+            m = java.util.regex.Pattern.compile("\"filho\": *(\\d+)").matcher(Files.readString(pids, StandardCharsets.UTF_8));
+        }
+        assertTrue(m.find());
+        ProcessHandle child = ProcessHandle.of(Long.parseLong(m.group(1))).orElseThrow();
+        try {
+            assertTrue(child.isAlive());
+            assertTrue(controller.occupied() && controller.finalizing(), "finalizando: o filho continua vivo");
+            controller.close();
+            assertFalse(controller.finalizing(), "o encerramento esperou a finalizacao parar");
+            assertTrue(child.isAlive(), "encerrar o aplicativo nao mata o processo da automacao que ficou");
+            // sem a prova de que os processos acabaram, nada e afirmado no registro deles
+            Path tree = runs.dir(id).resolve(ProcessTree.FILE);
+            assertFalse(Files.readString(tree, StandardCharsets.UTF_8).lines().anyMatch(ProcessTree.EMPTY::equals), "nenhuma afirmacao de que os processos acabaram");
+            // os arquivos da execucao sao apagados (como no fim de um teste, ou por quem desinstala); a copia do pacote fica,
+            // porque o filho vivo roda dela...
+            try (Stream<Path> s = Files.walk(runs.dir(id))) {
+                for (Path p : s.filter(Files::isRegularFile).filter(x -> !x.startsWith(runs.dir(id).resolve("pacote"))).toList()) {
+                    Files.deleteIfExists(p);
+                }
+            }
+            assertFalse(Files.exists(runs.dir(id).resolve(RunStore.EVENTS_FILE)));
+        } finally {
+            child.destroyForcibly();
+        }
+        child.onExit().get(30, TimeUnit.SECONDS);
+        // ...o filho acabou: quem ainda estivesse esperando por ele gravaria agora. Nada e gravado
+        Thread.sleep(1500);
+        assertFalse(Files.exists(runs.dir(id).resolve(RunStore.EVENTS_FILE)), "nenhum evento gravado depois do encerramento");
+        assertFalse(Files.exists(runs.dir(id).resolve(ProcessTree.FILE)), "nenhum registro de processos gravado depois do encerramento");
     }
 }
