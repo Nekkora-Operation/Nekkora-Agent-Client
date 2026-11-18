@@ -56,8 +56,9 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
   ela **não declara nenhuma capacidade de execução remota**, então a Platform mostra o computador como *incompatível* e
   não lhe entrega nada.
 - **Pausa (sem botão na tela desde 17/11):** "Pausar novos trabalhos" e "Voltar a receber trabalhos" foram retirados da tela a
-  pedido do aceite. O mecanismo interno continua (`RemoteMachine.pause()`/`resume()` e o canal da máquina) e o estado "pausado"
-  continua sendo mostrado se vier; para sair dele pela tela, desabilitar e habilitar de novo. A pausa vale no servidor, que é a referência; a presença traz o valor de
+  pedido do aceite. O mecanismo interno continua (`RemoteMachine.pause()`/`resume()` e o canal da máquina). Um computador que **já
+  esteja pausado** mostra o estado e, só nele, "Voltar a receber trabalhos": a recuperação explícita, que preserva o vínculo e as
+  autorizações. Nada é retomado sozinho, e a tela não oferece pausar. A pausa vale no servidor, que é a referência; a presença traz o valor de
   lá. Pausar **não** desabilita o computador e **não** interrompe a execução em andamento. (Até o Client #41 os botões
   chamavam-se "Pausar recebimento" e "Retomar recebimento".)
 - **Desabilitar este computador:** pede um segundo passo de confirmação, encerra o vínculo na Platform e remove a

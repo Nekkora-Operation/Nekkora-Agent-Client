@@ -190,6 +190,9 @@ final class RemoteText {
     static final String CODE_FIELD = "Código de habilitação";
     static final String CONFIRM = "Confirmo que este computador poderá receber execuções solicitadas pela Platform.";
     static final String ENABLE = "Habilitar este computador";
+    /** Recuperacao explicita de um computador JA pausado (a tela nao oferece pausar). So aparece nesse estado. */
+    static final String RESUME = "Voltar a receber trabalhos";
+    static final String RESUMED_NOW = "Este computador voltou a receber novos trabalhos. O vínculo e as autorizações não mudaram.";
     static final String DISABLE = "Desabilitar este computador";
     static final String DISABLE_CONFIRM = "Confirmar desabilitação";
     static final String DISABLE_WARNING = "Desabilitar encerra o vínculo deste computador na Platform. Para habilitar de novo será preciso outro código.";
@@ -278,9 +281,10 @@ final class RemoteText {
             case UNAVAILABLE -> "Este computador não consegue proteger a credencial da máquina. A habilitação não está disponível aqui.";
             case NOT_ENABLED -> "Este computador não está habilitado. Ele não recebe execuções solicitadas pela Platform.";
             case RECEIVING -> "Este computador está habilitado e recebendo novos trabalhos.";
-            // a tela nao oferece pausar nem retomar; o estado ainda pode vir (pausado antes desta versao): diz como sair dele
-            case PAUSED -> "Novos trabalhos pausados. Este computador continua vinculado, mas não recebe novas execuções. "
-                    + "Uma execução já em andamento continua até o fim. Para voltar a receber, desabilite este computador e habilite de novo com um código novo.";
+            // a tela nao oferece PAUSAR; quem ja esta pausado sai do estado por um ato explicito ("Voltar a receber trabalhos"),
+            // sem desfazer o vinculo nem as autorizacoes. Nada e retomado sozinho
+            case PAUSED -> "Novos trabalhos pausados. Este computador continua vinculado, com as mesmas autorizações, mas não recebe novas execuções. "
+                    + "Uma execução já em andamento continua até o fim. Para voltar a receber, use \"" + RESUME + "\".";
             case ENDED -> "A habilitação deste computador expirou, foi revogada ou não pode mais ser usada. Remova-a para poder habilitar de novo "
                     + "com um código novo.";
         };

@@ -266,19 +266,38 @@ class RemoteDesktopTest {
         assertEquals("1 instalação de Python informada à Platform (só a versão).", read(p::pythonReportedText));
         assertFalse(gw.inventory.toLowerCase().contains("python312") || gw.inventory.contains("c:"), "o caminho nao sai deste computador");
 
-        // pausar e retomar NAO estao na tela (pedido do aceite); o mecanismo interno continua e a tela mostra o estado que vier
+        // PAUSAR nao esta na tela (pedido do aceite). Recebendo: nenhum controle de pausa nem de retomada
         assertEquals(java.util.List.of(), pauseControls(p), "nenhum controle de pausar ou retomar na tela, habilitado e recebendo");
+        assertFalse(read(() -> p.resumeButton().isShowing()));
+        // um computador JA pausado (o mecanismo interno continua; aqui, pausado por fora da tela): a tela mostra o estado e, so
+        // nele, a recuperacao explicita. Nada e retomado sozinho: continua pausado ate a pessoa pedir
+        String credentialBefore = gw.credential;
+        byte[] vaultBefore = Files.readAllBytes(vaultFile);
         machine.pause();
         answer();
-        assertTrue(gw.paused, "o mecanismo interno de pausa continua valendo no servidor");
+        assertTrue(gw.paused, "a pausa vale no servidor");
         assertEquals(RemoteText.status(Status.PAUSED), read(() -> p.statusNotice().text()));
-        assertTrue(read(() -> p.statusNotice().text()).contains("desabilite este computador e habilite de novo"), "pausado: a tela diz como sair");
-        assertEquals(java.util.List.of(), pauseControls(p), "nenhum controle de pausar ou retomar na tela, pausado");
+        assertTrue(read(() -> p.statusNotice().text()).contains("use \"Voltar a receber trabalhos\""), "pausado: a tela diz como sair");
+        assertFalse(read(() -> p.statusNotice().text()).contains("desabilite"), "sair do estado pausado nao exige desfazer o vinculo");
+        assertEquals(java.util.List.of(RemoteText.RESUME), pauseControls(p), "pausado: so a recuperacao explicita; pausar nao existe");
         assertTrue(read(() -> p.disableButton().isShowing() && p.disableButton().isEnabled()), "desabilitar continua oferecido");
-        machine.resume();
+        machine.beat();
         answer();
-        assertFalse(gw.paused);
+        assertEquals(Status.PAUSED, machine.view().status(), "uma presenca nao retoma nada: continua pausado");
+        assertTrue(gw.paused);
+        long callsBefore = gw.calls.size();
+        click(p.resumeButton());
+        answer();
+        assertFalse(gw.paused, "o pedido explicito retomou o recebimento no servidor");
+        assertEquals(Status.RECEIVING, machine.view().status());
         assertEquals(RemoteText.status(Status.RECEIVING), read(() -> p.statusNotice().text()));
+        assertEquals(RemoteText.RESUMED_NOW, read(() -> p.resultNotice().text()));
+        assertEquals(java.util.List.of(), pauseControls(p), "voltou a receber: o controle some");
+        // o vinculo e o mesmo: a mesma credencial, nenhum codigo novo, nenhum novo pareamento
+        assertEquals(credentialBefore, gw.credential);
+        assertTrue(gw.calls.subList((int) callsBefore, gw.calls.size()).stream().noneMatch(c -> c.path().contains("pair") || c.path().contains("unlink")),
+                "retomar nao pareia nem desfaz o vinculo");
+        assertTrue(Files.exists(vaultFile) && vaultBefore.length > 0);
 
         // de volta ao estado padrao da tela (detalhes recolhidos)
         click(p.detailsToggle());
