@@ -84,8 +84,11 @@ public final class NavText {
     public static final String RUN_LAST_TITLE = "Última execução";
     public static final String RUN_LAST_CODE = "Local de execução (a cópia que foi executada)";
     public static final String RUN_LAST_OUTPUT = "Saída desta execução";
+    public static final String RUN_LAST_TEXT = "O que o processo escreveu (arquivo só neste computador)";
+    public static final String RUN_OPEN_TEXT = "Abrir arquivo";
     public static final String RUN_OPEN_LAST_CODE = "Abrir a pasta da cópia executada";
     public static final String RUN_OPEN_LAST_OUTPUT = "Abrir a pasta de saída desta execução";
+    public static final String RUN_OPEN_LAST_TEXT = "Abrir o arquivo com o que o processo desta execução escreveu";
     public static final String RUN_FOLDER_GONE = "Esta pasta não existe mais neste computador.";
 
     /** A linha da automacao: nome e versao. O resto fica nos detalhes tecnicos. */

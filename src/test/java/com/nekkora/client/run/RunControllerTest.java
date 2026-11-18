@@ -99,12 +99,15 @@ class RunControllerTest {
         return waitEnd(controller, max);
     }
 
-    /** Tudo o que o aplicativo gravou (registros, eventos, aprovacoes), para procurar vazamento. A copia do pacote fica de fora. */
+    /**
+     * Tudo o que o aplicativo gravou (registros, eventos, aprovacoes), para procurar vazamento. Ficam de fora a copia do pacote
+     * e o arquivo com a saida do processo (T05: e o UNICO lugar onde o que o script imprime pode estar).
+     */
     String appFiles() throws Exception {
         StringBuilder b = new StringBuilder();
         try (Stream<Path> s = Files.walk(dataDir)) {
             for (Path p : s.filter(Files::isRegularFile).filter(f -> !f.toString().contains(java.io.File.separator + "pacote" + java.io.File.separator)
-                    && !f.getFileName().toString().endsWith(".py")).toList()) {
+                    && !f.getFileName().toString().endsWith(".py") && !f.getFileName().toString().equals(RunController.OUTPUT_TEXT)).toList()) {
                 b.append(Files.readString(p, StandardCharsets.UTF_8));
             }
         }
@@ -134,7 +137,7 @@ class RunControllerTest {
     }
 
     @Test
-    @DisplayName("sucesso sinalizado pelo script; roda da copia conferida, sem argumento de fora, com ambiente minimo; a saida nao e guardada")
+    @DisplayName("sucesso sinalizado pelo script; roda da copia conferida, sem argumento de fora, com ambiente minimo; a saida do processo fica so no arquivo local")
     void sucesso() throws Exception {
         List<RunController.Snapshot> seen = new CopyOnWriteArrayList<>();
         controller.addListener(seen::add);
@@ -150,7 +153,15 @@ class RunControllerTest {
         assertEquals(0, r.exitCode());
         assertEquals(RunFixtures.context(p), r.context());
         assertTrue(r.outputBytes() > 0, "saida drenada e contada");
-        assertFalse(appFiles().contains("SENTINELA-VALOR-DA-AUTOMACAO"), "nenhum valor da automacao no que o aplicativo grava");
+        assertFalse(appFiles().contains("SENTINELA-VALOR-DA-AUTOMACAO"), "nenhum valor da automacao no registro, nos eventos nem nas aprovacoes");
+        // T05: o que o processo escreveu fica num arquivo de texto, na pasta do registro desta execucao, so neste computador
+        Path text = controller.outputText(r.id()).orElseThrow();
+        assertEquals(runs.dir(r.id()).resolve(RunController.OUTPUT_TEXT), text);
+        List<String> rows = Files.readAllLines(text, StandardCharsets.UTF_8);
+        assertEquals(OutputText.HEADER, rows.get(0));
+        assertEquals(3, rows.size(), rows.toString());
+        assertTrue(rows.stream().anyMatch(l -> l.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3} saída +\\| SENTINELA-VALOR-DA-AUTOMACAO 12345")), rows.toString());
+        assertTrue(rows.stream().anyMatch(l -> l.matches(".* erro +\\| SENTINELA-VALOR-DA-AUTOMACAO erro")), rows.toString());
         List<String> ev = runs.events(r.id());
         assertTrue(ev.get(0).contains("STARTING") && ev.stream().anyMatch(l -> l.contains("\"RUNNING\"")) && ev.get(ev.size() - 1).contains("SUCCEEDED")
                 && ev.get(ev.size() - 1).contains("BUSINESS_SUCCESS"), ev.toString());
@@ -273,13 +284,22 @@ class RunControllerTest {
     }
 
     @Test
-    @DisplayName("saida volumosa (mais de 20 MiB em saida e erros) nao trava; so a contagem de bytes fica")
+    @DisplayName("saida volumosa (mais de 20 MiB em saida e erros) nao trava; o arquivo local para no limite, avisa e conta o que ficou de fora")
     void volume() throws Exception {
         controller.start(request(approved("volumoso", RunFixtures.VOLUMOSO), null));
         ExecutionRecord r = waitEnd(Duration.ofSeconds(120));
         assertEquals(ExecutionState.SUCCEEDED, r.state(), String.valueOf(r.code()));
         assertTrue(r.outputBytes() > 20_000_000L, String.valueOf(r.outputBytes()));
         assertFalse(appFiles().contains("SENTINELA-VALOR-DA-AUTOMACAO"));
+        // o limite do arquivo local nao para a leitura em silencio nem muda o resultado: avisa, conta e diz quantas ficaram de fora
+        Path text = controller.outputText(r.id()).orElseThrow();
+        assertTrue(Files.size(text) <= OutputText.MAX_BYTES, String.valueOf(Files.size(text)));
+        List<String> rows = Files.readAllLines(text, StandardCharsets.UTF_8);
+        assertEquals(1, rows.stream().filter(l -> l.endsWith("| " + OutputText.LIMIT_NOTICE)).count());
+        String last = rows.get(rows.size() - 1);
+        assertTrue(last.matches(".* aplicativo \\| \\d+ linhas do processo não foram guardadas neste arquivo\\."), last);
+        long left = Long.parseLong(last.replaceAll(".*\\| (\\d+) linhas.*", "$1"));
+        assertEquals(20_000, rows.size() - 3 + left, "guardadas + nao guardadas = todas as linhas que o processo escreveu");
     }
 
     @Test

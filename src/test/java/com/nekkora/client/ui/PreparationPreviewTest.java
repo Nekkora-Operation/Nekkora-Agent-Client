@@ -299,7 +299,8 @@ class PreparationPreviewTest {
                     ultima.showPythons(OPCOES, VIRTUAL.id(), Notice.Kind.PLAIN, NavText.PY_COMPATIBLE, List.of());
                     ultima.showOutput("D:\\Saidas\\conciliacao", null);
                     ultima.showStatus(new Runner.Status("01HZX", UUID.randomUUID(), UUID.randomUUID(), "sha256:" + "ab".repeat(32), "Conciliação bancária", false, true, true,
-                            "Concluída com sucesso", "", 65_000, "D:\\Saidas\\conciliacao\\01HZX", false, "D:\\Nekkora\\dados\\execucoes\\01HZX\\pacote"));
+                            "Concluída com sucesso", "", 65_000, "D:\\Saidas\\conciliacao\\01HZX", false, "D:\\Nekkora\\dados\\execucoes\\01HZX\\pacote",
+                            "D:\\Nekkora\\dados\\execucoes\\01HZX\\saida.txt"));
                     capture(tema + "-preparacao-ultima-execucao", ultima);
                 } catch (Exception e) {
                     throw new IllegalStateException(e);

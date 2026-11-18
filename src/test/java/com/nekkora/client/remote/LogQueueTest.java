@@ -64,6 +64,10 @@ class LogQueueTest {
             assertEquals(l.message(), q.redact(l.message()), "remocao repetida");
         }
         assertEquals("cabecalho Authorization: [removido] e o resto", q.redact(q.redact("cabecalho Authorization: Bearer abcdefghijklmnop e o resto")));
+        // os mesmos vetores do arquivo da execucao local: as duas remocoes tem de dar o mesmo resultado
+        for (com.nekkora.client.RedactionVectors.Vector v : com.nekkora.client.RedactionVectors.ALL) {
+            assertEquals(v.out(), q.redact(v.in()), v.in());
+        }
         // o aplicativo fecha e abre: a fila volta do disco, na mesma ordem, e continua a sequencia
         LogQueue again = open();
         assertTrue(again.existed());

@@ -647,6 +647,14 @@ class RunPreparationDesktopTest {
         edt(() -> f.openLastRunButton().doClick(0));
         edt(() -> f.openLastOutputButton().doClick(0));
         assertEquals(List.of(exibido.toString(), s.outputFolder()), abertas);
+        // T05: o que o processo escreveu esta num arquivo deste computador, mostrado com o caminho e aberto pelo sistema
+        Path texto = Path.of(read(() -> f.lastTextField().getText()));
+        assertEquals(tmp.resolve("dados").resolve("execucoes").resolve(s.id()).resolve("saida.txt").toRealPath(), texto.toRealPath());
+        assertTrue(Files.readString(texto).contains("Não é enviado à Platform."));
+        edt(() -> f.openLastTextButton().doClick(0));
+        assertEquals(texto.toString(), abertas.get(abertas.size() - 1));
+        assertTrue(runner.folderUri(texto.toString()).isPresent(), "o arquivo de saida de uma execucao local pode ser aberto");
+        assertTrue(runner.folderUri(texto.resolveSibling("registro.json").toString()).isEmpty(), "nenhum outro arquivo e aberto pelo aplicativo");
         evidence("sakura-dark-ultima-execucao", f);
         // nada foi a Platform
         assertTrue(session.directory.calls.stream().noneMatch(c -> c.contains("execu") || c.contains("run")), session.directory.calls.toString());
