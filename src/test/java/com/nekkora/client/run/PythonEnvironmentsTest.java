@@ -601,4 +601,24 @@ class PythonEnvironmentsTest {
             }
         }
     }
+
+    /** PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01c: as instalacoes deste computador, sem pacote nenhum (inventario). */
+    @Test
+    void instalacoesSemPacoteMesmaDescobertaSoComAVersao() throws Exception {
+        assertEquals(List.of(), service(sources(new PythonSources.Found(PythonSources.PATH, List.of(), false))).installed(PythonProbe.Cancel.NEVER));
+        needsPython();
+        Path outraGrafia = Path.of(python.toString().toUpperCase(java.util.Locale.ROOT));
+        Path semPython = Files.createDirectories(tmp.resolve("nao-e-python")).resolve("python.exe");
+        Files.writeString(semPython, "isto nao e um interpretador");
+        List<PythonEnvironments.Installed> found = service(sources(new PythonSources.Found(PythonSources.LAUNCHER, List.of(python), false),
+                new PythonSources.Found(PythonSources.REGISTRY, List.of(windows ? outraGrafia : python, semPython), false))).installed(PythonProbe.Cancel.NEVER);
+        assertEquals(1, found.size(), "duas fontes, a mesma instalacao; o que nao responde fica de fora: " + found);
+        assertTrue(found.get(0).version().matches("3[.][0-9]+[.][0-9]+.*"));
+        assertFalse(found.get(0).virtual());
+        // a mesma identidade local que a escolha da execucao local usa
+        assertEquals(service(sources(new PythonSources.Found(PythonSources.PATH, List.of(python), false))).discover(pkg("p", null, List.of()), PythonProbe.Cancel.NEVER)
+                .environments().get(0).id(), found.get(0).id());
+        // cancelado: para sem sondar
+        assertEquals(List.of(), service(sources(new PythonSources.Found(PythonSources.PATH, List.of(python), false))).installed(() -> true));
+    }
 }

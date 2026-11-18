@@ -17,6 +17,16 @@ final class RemoteText {
     static final String NOT_YET = "Esta versão do aplicativo ainda não executa solicitações da Platform. Até lá, a Platform mostra este computador como "
             + "incompatível e não envia nada para ele.";
 
+    static final String REPORTS_PYTHON = "Com o computador habilitado, o aplicativo informa à Platform quais versões de Python encontrou aqui, para que "
+            + "se possa escolher onde executar. Vai só a versão de cada instalação: nenhum caminho, nome de pasta ou lista de pacotes.";
+    static final String REFRESH_PYTHON = "Atualizar versões de Python";
+    static final String PYTHON_REFRESHED = "As versões de Python deste computador foram informadas à Platform.";
+
+    static String pythonReported(int count) {
+        return count == 0 ? "Nenhuma instalação de Python foi encontrada neste computador; a Platform foi informada disso."
+                : count == 1 ? "1 instalação de Python informada à Platform (só a versão)." : count + " instalações de Python informadas à Platform (só a versão).";
+    }
+
     static final String CODE_FIELD = "Código de habilitação";
     static final String CONFIRM = "Confirmo que este computador poderá receber execuções solicitadas pela Platform.";
     static final String ENABLE = "Habilitar este computador";

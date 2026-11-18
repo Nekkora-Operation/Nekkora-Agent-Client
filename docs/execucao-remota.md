@@ -72,6 +72,26 @@ dias, a cada presença (portanto só com o aplicativo aberto):
 Limite: com o aplicativo **fechado** durante toda a janela de 30 dias, a credencial vence e a habilitação precisa ser
 refeita.
 
+## Inventário de Python (T01c, parte 1)
+
+Com o computador habilitado, o aplicativo informa à Platform **quais versões de Python** encontrou aqui, para que se
+possa escolher onde executar. A tela diz isso antes de habilitar.
+
+- **O que vai:** por instalação, um identificador opaco, a versão, o tipo (instalação ou ambiente virtual) e o instante.
+- **O que não vai:** caminho, nome de usuário ou de pasta, lista de pacotes. O servidor recusa qualquer campo a mais.
+- **Identificador opaco:** HMAC-SHA-256 da identidade local do ambiente com um sal aleatório deste computador
+  (`remota\inventario.sal`). O mesmo ambiente tem o mesmo identificador nesta máquina; o mesmo caminho em outra máquina
+  tem outro. Desabilitar apaga o sal.
+- **Quando:** na primeira presença de cada abertura, depois a cada 6 horas, e pelo botão **Atualizar versões de Python**.
+  Sem habilitação, o Python nem é procurado para isso.
+- **Como é descoberto:** a mesma descoberta limitada e a mesma sondagem da execução local (inicializador do Python,
+  registro de instalações, PATH; nada da Microsoft Store; sem varrer discos). A camada `remote` não cria processos: recebe
+  de quem monta o aplicativo só a identidade local, o tipo e a versão.
+- Capacidade declarada na presença: `PY_INVENTORY_1_0`. Continua sem `REMOTE_RUN_1_0`: a Platform ainda mostra o
+  computador como incompatível.
+
+Publicar o inventário não escolhe ambiente nem verifica dependências; isso vem nas próximas partes.
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
@@ -91,6 +111,8 @@ temporária.
 | Habilitar, recusas, resposta perdida, pausar, desabilitar, vínculo encerrado, outro endereço, arquivo adulterado, sem proteção | `RemoteMachineTest` (canal simulado em HTTPS; DPAPI real) |
 | Tela: menu, diálogo modal, cliques, confirmação obrigatória, segundo passo, troca de tema | `RemoteDesktopTest` (`-Pdesktop`) |
 | Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
+| Inventário: nada de caminho no pedido, identificador estável e por máquina, filtros, falhas | `PythonInventoryTest` |
+| Descoberta sem pacote | `PythonEnvironmentsTest.instalacoesSemPacoteMesmaDescobertaSoComAVersao` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
 
 ## Limites desta entrega

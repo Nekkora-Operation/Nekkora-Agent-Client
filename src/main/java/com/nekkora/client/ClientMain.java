@@ -88,6 +88,10 @@ public final class ClientMain {
                 System.exit(0);
             }, BuildInfo.load(), background, workshop, runner);
             window.setPlatformOrigin(String.valueOf(origin.api()));
+            // inventario de Python: a descoberta e a da execucao local (limitada, com prazo); a camada remota so recebe a
+            // identidade local, o tipo e a versao, e manda a Platform um identificador opaco - nunca o caminho
+            remote.setPythonFinder(() -> runner.installedPythons().stream()
+                    .map(p -> new com.nekkora.client.remote.RemoteMachine.PythonSeen(p.id(), p.virtual(), p.version())).toList());
             window.setRemote(remote);
             remote.start();
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta
