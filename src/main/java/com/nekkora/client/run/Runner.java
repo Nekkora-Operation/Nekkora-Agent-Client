@@ -224,6 +224,11 @@ public final class Runner implements AutoCloseable {
      * e instalado. Devolve o identificador da execucao. Bloqueia (processos, com prazo): fora da linha de eventos.
      */
     public String startManaged(ManagedJob job) throws ManagedRefused {
+        return startManaged(job, null);
+    }
+
+    /** O mesmo, entregando a saida do processo, linha a linha, a {@code output} (nulo: lida e desprezada). */
+    public String startManaged(ManagedJob job, OutputLines.Sink output) throws ManagedRefused {
         if (managedRoot == null || job.dir() == null || !job.dir().toAbsolutePath().normalize().startsWith(managedRoot)) {
             throw new ManagedRefused(ManagedRefusal.STORAGE);
         }
@@ -242,7 +247,7 @@ public final class Runner implements AutoCloseable {
             Path out = Files.createDirectories(job.dir().resolve("saida"));
             RunContext run = new RunContext(job.organizationId(), job.workspaceId(), pkg.fingerprint(), pkg.name(), job.automationId(),
                     job.automationVersionId());
-            return controller.startManaged(new RunController.Request(pkg.dir(), run, python, out, null)).record().id().value();
+            return controller.startManaged(new RunController.Request(pkg.dir(), run, python, out, null), output).record().id().value();
         } catch (ExecRefused e) {
             throw new ManagedRefused(switch (e.code()) {
                 case EXEC_ALREADY_RUNNING -> ManagedRefusal.BUSY;

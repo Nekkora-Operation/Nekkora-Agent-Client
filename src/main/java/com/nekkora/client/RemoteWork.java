@@ -36,9 +36,10 @@ final class RemoteWork implements RemoteMachine.Work {
     @Override
     public String start(RemoteMachine.Job job) throws RemoteMachine.WorkRefused {
         try {
+            RemoteMachine.LogSink log = job.log();
             return runner.startManaged(Runner.ManagedJob.of(UUID.fromString(job.organizationId()), UUID.fromString(job.workspaceId()),
                     UUID.fromString(job.automationId()), UUID.fromString(job.automationVersionId()), job.zip(), job.sha256(), job.fingerprint(),
-                    job.dependencies(), job.pythonLocalId(), job.dir()));
+                    job.dependencies(), job.pythonLocalId(), job.dir()), log == null ? null : log::line);
         } catch (Runner.ManagedRefused e) {
             throw new RemoteMachine.WorkRefused(switch (e.why()) {
                 case BUSY -> "BUSY";

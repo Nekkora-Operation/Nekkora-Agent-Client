@@ -157,6 +157,35 @@ não executa, ou entrega sem o ambiente ou o Python).
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
 
+## Registros: a saída do processo (T05)
+
+**Captura de stdout/stderr é funcionalidade nova.** Antes desta missão o aplicativo lia a saída do processo e a
+descartava.
+
+| Ponto | Como é |
+|---|---|
+| O que é capturado | a saída padrão e a saída de erro do processo de uma **tentativa remota**, linha a linha, enquanto ele roda |
+| Para onde vai | para a Platform, em lotes: durante a execução (a cada consulta) e depois do término. É lá que se consulta |
+| O que o aplicativo mostra | **nada do conteúdo.** A tela continua mostrando só o estado da máquina |
+| Fila local | um arquivo por tentativa em `remota/fila/`, só para a entrega. Cada bloco gravado passa pela proteção do Windows (o mesmo usuário, neste computador) |
+| Quando a fila é apagada | quando a Platform confirma o fechamento do envio com as mesmas contagens. Tentativa que não iniciou não tem fila |
+| Sem confirmação | a fila fica no disco e é apagada **7 dias** depois de parada (`MachineVault.LOG_QUEUE_RETENTION`) |
+| Segredos | antes de entrar na fila saem do texto: a credencial da máquina, o token da atribuição, códigos de habilitação e valores de cabeçalho de autorização |
+| `STDERR` | é um **canal**, não um nível. Nada é classificado pelo texto |
+| Limite por linha | 8 KiB; o excedente da linha é lido e desprezado, e a linha vai marcada como cortada |
+| Limite por tentativa | 50.000 linhas e 20 MiB. Ao atingir, a fila grava **uma linha do aplicativo dizendo isso** e passa a **contar** o que chega, sem guardar. O número vai no fechamento |
+| Resultado do robô | **nunca muda** por causa de registro: nem limite, nem falha de envio, nem fila que não pôde ser confirmada |
+| Sem rede | a execução não é interrompida; a fila guarda e o envio é retomado, sem duplicar linha |
+| Aplicativo reaberto no meio | a fila volta do disco; uma linha do aplicativo diz que a saída a partir dali não foi capturada |
+| Execução iniciada neste computador | **não tem fila e não envia nada.** A saída dela continua sendo lida e descartada, como antes |
+
+Dois detalhes do Python que a captura trata:
+
+- O processo é lançado com `-u` quando há quem receba a saída, para as linhas saírem quando são escritas e não só no
+  fim. Isso muda **quando** a saída chega, não o que o script faz. Só vale para a tentativa remota.
+- O Python escreve num fluxo redirecionado na página de código do Windows. A linha é lida como UTF-8 se for UTF-8 válido;
+  senão, na página de código deste computador.
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
@@ -182,6 +211,10 @@ temporária.
 | Resultados: ordem, nome relativo, limites contados, retomada sem duplicar, fechamento, nada para o que não executou | `RemoteDeliveryTest` (3 dos 19) |
 | Limpeza e recuperação: resultado pendente não é apagado antes da confirmação; varredura preserva a pendente e os resultados; processo adotado ao reabrir, nada relançado; código sai, saída só quando pedida | `RemoteDeliveryTest.resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento`, `RemoteWorkTest.aplicativoReabertoComAExecucaoEmAndamentoAdotaOProcessoENaoLancaOutro`, `RemoteWorkTest.limpezaOCodigoSaiSempreASaidaSoQuandoPedidaEAVarreduraNuncaApagaResultado` |
 | Confirmação que corresponde ao enviado; pendência marcada, visível e com prazo; nada fora da tentativa é tocado | `RemoteDeliveryTest.aPastaDeSaidaSoSaiQuandoAConfirmacaoCorrespondeATentativaEAosArquivosEnviados`, `RemoteWorkTest.resultadoPendenteFicaMarcadoEVisivelESaiSoDepoisDoPrazoSemTocarEmNadaForaDaTentativa`, `RemoteDesktopTest.resultadoGuardadoSemConfirmacaoApareceNaTelaComAPastaEADataDeRemocao` |
+| Registros: leitura linha a linha, corte, página de código, quem recebe falhando | `OutputLinesTest` |
+| Registros: fila protegida no disco, sem segredos, limites contados, volta ao reabrir | `LogQueueTest` (DPAPI real) |
+| Registros: lotes durante a execução, sem rede, fechamento, fila apagada só com confirmação, prazo, reabertura, limite da Platform, tentativa que não executou | `RemoteDeliveryTest` (4 testes) |
+| Registros com Python real: linha chega com o processo rodando, acentos, stderr, linha cortada, resultado inalterado | `RemoteWorkTest.aSaidaDoProcessoChegaLinhaALinhaEnquantoEleRodaESemMudarOResultado` |
 | A ponte com o motor: ZIP real, conferência, execução gerenciada por Python real, código de saída, cancelamento, uma por vez, cada recusa | `RemoteWorkTest` (exige `NEKKORA_TEST_PYTHON`) |
 | O motor: execução gerenciada | `ManagedRunTest` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
@@ -190,9 +223,13 @@ temporária.
 
 - **Só pacote Python externo** é executado. Pacote do Studio é recusado (`CLIENT_INCOMPATIBLE`).
 - **Tela bloqueada ou sem sessão interativa: a execução não inicia** (`SESSION_UNAVAILABLE`), como na execução local.
-- **A saída do processo (stdout/stderr) não é capturada nem enviada.** A Platform vê o estado, o código de saída e os
-  arquivos de resultado. Os registros de texto vêm na próxima tarefa.
-- Pasta de saída que não pôde ser confirmada **fica no computador sem prazo**: não há limpeza por idade nem aviso de espaço.
+- **A saída de uma execução iniciada neste computador continua não sendo guardada**: a captura nova serve só à tentativa
+  remota. Não existe, no aplicativo, tela de registros de execução local.
+- Registros: sem nível (tudo `UNKNOWN`); sem limite de espaço total da fila; a fila que não pôde ser confirmada não aparece
+  na tela (o aplicativo não mostra conteúdo de registro remoto); até 1 segundo de saída pode se perder se o aplicativo cair.
+- Depois de o aplicativo ser reaberto no meio de uma execução, a saída do processo **não é mais capturada** (o fluxo ficou
+  sem leitor); a lacuna fica dita nos registros.
+- Não há aviso de espaço em disco para pasta de saída ou fila pendentes.
 - A limpeza não é informada à Platform (a rota de "limpeza confirmada ou pendente" do plano não existe).
 - Desligamento real da máquina durante a execução **não foi testado**; a adoção após reabrir foi provada com o processo
   Python real e um segundo motor sobre a mesma pasta de dados.
