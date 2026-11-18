@@ -92,6 +92,28 @@ possa escolher onde executar. A tela diz isso antes de habilitar.
 
 Publicar o inventário não escolhe ambiente nem verifica dependências; isso vem nas próximas partes.
 
+## Entrega de uma tentativa (T02)
+
+A máquina **puxa**: pergunta à Platform o que há para ela (`remote/next`). O caminho é:
+
+1. a tentativa entregue é **gravada no diário** (`remota/tentativa.json`, token protegido pela DPAPI) antes de qualquer
+   confirmação. Se não der para gravar, nada é confirmado e a Platform entrega de novo, com token e época novos;
+2. o recebimento é confirmado (`ack`) com o token e a época da entrega. Repetir (resposta perdida, aplicativo fechado)
+   não muda nada no servidor;
+3. o desfecho é informado (`state`). Só depois de a Platform aceitar, o diário é apagado.
+
+Token ou época que não valem mais, tentativa que a Platform já encerrou ou não tem: o diário é apagado e nada é alterado
+lá. Falha de rede: fica tudo como está, para a próxima consulta (a cada 15 s, ponto de partida de laboratório). O diário
+serve só para a entrega: não é histórico, não guarda registros nem resultados, e sai junto com o vínculo ao desabilitar.
+
+**Esta versão não executa o que a Platform solicitar.** Por isso:
+
+- por padrão o aplicativo **não declara** a capacidade de execução (`REMOTE_RUN_1_0`) e **não pergunta** pela entrega; a
+  Platform mostra a máquina como incompatível e nada lhe é entregue;
+- **ensaio de entrega, só para o laboratório**: com a variável de ambiente `NEKKORA_CLIENT_ENSAIO_ENTREGA=1`, a máquina
+  declara a capacidade e pergunta pela entrega, e toda tentativa recebida é **recusada** com o motivo
+  `CLIENT_INCOMPATIBLE`. Nada é baixado nem executado. O ensaio sai quando a execução de verdade entrar (T03).
+
 ## O que continua local
 
 Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
@@ -113,11 +135,12 @@ temporária.
 | Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
 | Inventário: nada de caminho no pedido, identificador estável e por máquina, filtros, falhas | `PythonInventoryTest` |
 | Descoberta sem pacote | `PythonEnvironmentsTest.instalacoesSemPacoteMesmaDescobertaSoComAVersao` (exige `NEKKORA_TEST_PYTHON`) |
+| Entrega: diário antes da confirmação, resposta perdida, fechamento no meio, token obsoleto, tentativa encerrada, entrega fora do contrato, pausa, desabilitar | `RemoteDeliveryTest` (canal simulado em HTTPS; DPAPI real) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
 
 ## Limites desta entrega
 
-- Não há execução remota: só o vínculo.
+- Não há execução remota: só o vínculo e o caminho da entrega, que por padrão fica desligado.
 - A renovação só acontece com o aplicativo aberto dentro da janela de 30 dias.
 - Desabilitar exige contato com a Platform.
 - Os testes automatizados usam um canal simulado; a prova contra a API real é a do laboratório, registrada na entrega.
