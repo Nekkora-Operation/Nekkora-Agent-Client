@@ -714,6 +714,20 @@ public final class Runner implements AutoCloseable {
     }
 
     /**
+     * O caminho do arquivo com a saida do processo de uma execucao iniciada aqui, conferido: e o UNICO arquivo que o aplicativo
+     * pede ao sistema para abrir, no programa padrao de texto. Qualquer outro caminho (pasta, outro arquivo): vazio. Pedir ao
+     * sistema para "navegar" ate o arquivo o abriria no navegador padrao; abrir outro tipo de arquivo poderia executa-lo.
+     */
+    public Optional<String> outputTextFile(String file) {
+        try {
+            Path p = file == null || file.isBlank() ? null : Path.of(file.trim()).toAbsolutePath();
+            return p != null && localOutputText(p) ? Optional.of(p.normalize().toString()) : Optional.empty();
+        } catch (InvalidPathException | SecurityException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * {@code true} so para o arquivo de texto com a saida do processo de uma execucao iniciada aqui: um arquivo comum, com o
      * nome fixo, dentro da pasta de um registro local. E o unico ARQUIVO que o aplicativo pede ao sistema para abrir.
      */

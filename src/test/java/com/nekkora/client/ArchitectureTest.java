@@ -377,6 +377,12 @@ class ArchitectureTest {
             String pkg = layer(f);
             String c = code(f);
             achados.addAll(matches(f, c, registro, "registro"));
+            // unica excecao: a linha que ENTREGA ao sistema, para abrir no programa de texto, o arquivo que o motor ja conferiu
+            // (a API do sistema so aceita esse tipo). Nada e lido nem gravado ali
+            if (f.endsWith("FolderOpener.java")) {
+                assertTrue(c.contains("Desktop.getDesktop().open(new java.io.File(path));"), "a entrega do arquivo de texto ao sistema mudou");
+                c = c.replace("Desktop.getDesktop().open(new java.io.File(path));", "");
+            }
             if (!DISK.contains(pkg)) {
                 achados.addAll(matches(f, c, disco, "disco fora das camadas de arquivo"));
             }

@@ -453,4 +453,17 @@ class RemoteWorkTest {
         assertEquals(managedBefore, Files.exists(managed.resolve("execucoes")) || Files.exists(managed.resolve("tentativas")), "nenhuma execucao, nenhuma pasta de tentativa");
         assertFalse(work.busy());
     }
+
+    /** "Abrir arquivo" so pede ao sistema o arquivo de saida de uma execucao LOCAL; qualquer outro caminho nao e aberto. */
+    @Test
+    void abrirArquivoSoAceitaASaidaDeTextoDeUmaExecucaoLocal() throws Exception {
+        Path other = Files.writeString(tmp.resolve("saida.txt"), "fora do registro de execucoes");
+        Path script = Files.writeString(tmp.resolve("qualquer.bat"), "echo nao");
+        Path foreign = Files.createDirectories(data.resolve("execucoes").resolve("nao-e-registro").resolve("sub")).resolve("saida.txt");
+        Files.writeString(foreign, "mais fundo que um registro");
+        for (String refused : new String[] {null, "", "   ", tmp.toString(), other.toString(), script.toString(), foreign.toString(), " "}) {
+            assertTrue(runner.outputTextFile(refused).isEmpty(), String.valueOf(refused));
+            assertFalse(com.nekkora.client.auth.FolderOpener.openText(script.toString()), "so arquivo .txt e entregue ao sistema");
+        }
+    }
 }
