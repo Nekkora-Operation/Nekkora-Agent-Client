@@ -168,11 +168,27 @@ public final class PythonProbe {
                     Thread.currentThread().interrupt();
                 }
             }
-            if (output != null) {
+            if (output != null) remove(output);
+        }
+    }
+
+    /**
+     * Apaga o arquivo de saida da sondagem. No Windows, logo depois de o processo terminar (ou ser encerrado), o arquivo pode
+     * ficar "em uso por outro processo" por um instante (o identificador do processo ainda fechando, ou o antivirus lendo o
+     * arquivo recem-criado): a remocao e tentada de novo por ate 1 segundo. Se ainda assim nao der, o arquivo fica na pasta de
+     * trabalho do aplicativo e a proxima limpeza o remove.
+     */
+    private static void remove(Path output) {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            try {
+                Files.deleteIfExists(output);
+                return;
+            } catch (IOException e) {
                 try {
-                    Files.deleteIfExists(output);
-                } catch (IOException e) {
-                    // fica na pasta de trabalho do aplicativo; a proxima limpeza remove
+                    Thread.sleep(50);
+                } catch (InterruptedException x) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
         }
