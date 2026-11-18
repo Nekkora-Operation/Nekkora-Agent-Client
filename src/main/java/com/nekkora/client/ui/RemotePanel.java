@@ -48,6 +48,7 @@ final class RemotePanel extends JPanel {
     private final WrappedText validity = new WrappedText(WIDTH).alignLeft();
     private final WrappedText reportsPython = new WrappedText(WIDTH).alignLeft();
     private final WrappedText pythonReported = new WrappedText(WIDTH).alignLeft();
+    private final Notice held = new Notice(WIDTH);
     private final GhostButton refreshPython = GhostButton.text(RemoteText.REFRESH_PYTHON);
     private final JLabel codeLabel = new JLabel(RemoteText.CODE_FIELD);
     private final JTextField code = new JTextField(20);
@@ -108,10 +109,11 @@ final class RemotePanel extends JPanel {
         footer.setOpaque(false);
         footer.add(close);
 
-        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, enableSection, enabledSection, disableSection,
-                result, footer};
+        JComponent[] all = {title, status, contact, what, local, reportsPython, notYet, validity, pythonReported, held, enableSection, enabledSection,
+                disableSection, result, footer};
         int[] gaps = {ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
-                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3, ClientTheme.SPACE_4, 0};
+                ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_4, ClientTheme.SPACE_2, ClientTheme.SPACE_2, ClientTheme.SPACE_3,
+                ClientTheme.SPACE_4, 0};
         for (int k = 0; k < all.length; k++) {
             all[k].setAlignmentX(Component.LEFT_ALIGNMENT);
             add(all[k]);
@@ -249,6 +251,17 @@ final class RemotePanel extends JPanel {
         pythonReported.setText(reported);
         pythonReported.setVisible(!reported.isEmpty());
         refreshPython.setVisible(linked);
+        // pendencia visivel em qualquer estado da habilitacao: o que ficou neste computador sem confirmacao de recebimento
+        java.util.List<RemoteMachine.Held> pending = machine.heldResults();
+        if (pending.isEmpty()) {
+            held.clear();
+        } else {
+            long first = pending.stream().mapToLong(RemoteMachine.Held::removeAtEpochSecond).min().orElse(0);
+            held.show(Notice.Kind.WARNING, RemoteText.held(pending.size(), pending.stream().mapToInt(RemoteMachine.Held::files).sum(),
+                    pending.stream().mapToLong(RemoteMachine.Held::bytes).sum(), pending.stream().anyMatch(h -> "OUT_OF_LIMIT".equals(h.reason())),
+                    java.time.Instant.ofEpochSecond(first).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                    RemoteMachine.heldFolder(pending)));
+        }
         what.setVisible(s == Status.NOT_ENABLED);
         enableSection.setVisible(s == Status.NOT_ENABLED);
         enabledSection.setVisible((linked || s == Status.ENDED) && !confirmingDisable);
@@ -363,6 +376,10 @@ final class RemotePanel extends JPanel {
 
     Notice resultNotice() {
         return result;
+    }
+
+    Notice heldNotice() {
+        return held;
     }
 
     String pythonReportedText() {

@@ -86,4 +86,15 @@ final class RemoteWork implements RemoteMachine.Work {
     public int sweep(String keepAttemptId) {
         return runner.sweepManaged(keepAttemptId);
     }
+
+    @Override
+    public void holdOutputs(String attemptId, String reason) {
+        runner.holdManagedOutputs(attemptId, reason);
+    }
+
+    @Override
+    public java.util.List<RemoteMachine.Held> held(String exceptAttemptId) {
+        return runner.heldManaged(exceptAttemptId).stream()
+                .map(h -> new RemoteMachine.Held(h.key(), h.reason(), h.dir(), h.files(), h.bytes(), h.sinceEpochSecond(), h.removeAtEpochSecond())).toList();
+    }
 }

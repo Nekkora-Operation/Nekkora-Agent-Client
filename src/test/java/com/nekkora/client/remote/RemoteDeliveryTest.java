@@ -100,6 +100,15 @@ class RemoteDeliveryTest {
         }
 
         final List<String> outputsDiscarded = new ArrayList<>();
+        /** tentativa -> motivo da pendencia. */
+        final java.util.Map<String, String> outputsHeld = new java.util.LinkedHashMap<>();
+        /** Roda depois da PRIMEIRA listagem dos resultados de uma tentativa (o envio), antes da conferencia final. */
+        volatile Runnable afterListing;
+
+        @Override
+        public void holdOutputs(String attemptId, String reason) {
+            outputsHeld.put(attemptId, reason);
+        }
         final List<String> swept = new ArrayList<>();
 
         @Override
@@ -138,6 +147,11 @@ class RemoteDeliveryTest {
                 }
             } catch (java.io.IOException x) {
                 throw new IllegalStateException(x);
+            }
+            Runnable then = afterListing;
+            afterListing = null;
+            if (then != null) {
+                then.run();
             }
             return out;
         }
@@ -293,6 +307,69 @@ class RemoteDeliveryTest {
     }
 
     @Test
+    void aPastaDeSaidaSoSaiQuandoAConfirmacaoCorrespondeATentativaEAosArquivosEnviados() throws Exception {
+        RemoteMachine m = enabled(true);
+        // (1) a Platform confirma um arquivo com OUTRO tamanho: nao e confirmacao; nada e fechado nem apagado, e o envio e retomado
+        String attempt = gw.queue();
+        m.pull();
+        work.outputs.put("um.txt", "1".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        gw.wrongResultSize = true;
+        m.pull();
+        assertNull(gw.resultsClosure);
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertTrue(work.outputsHeld.isEmpty());
+        assertTrue(Files.exists(journal()), "a tentativa continua pendente");
+        gw.wrongResultSize = false;
+        // (2) o fechamento volta com OUTRA contagem: nao e a confirmacao desta entrega; a pasta fica, marcada
+        gw.wrongClosure = true;
+        m.pull();
+        assertEquals("1|0", gw.resultsClosure);
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals("NOT_CONFIRMED", work.outputsHeld.get(attempt));
+        gw.wrongClosure = false;
+
+        // (3) tudo confirmado, mas o arquivo MUDOU na pasta depois do envio: o que esta no disco nao e o que a Platform tem
+        work.outputsHeld.clear();
+        String second = gw.queue();
+        work.outputs.clear();
+        work.outputs.put("dois.txt", "2".getBytes(StandardCharsets.UTF_8));
+        work.state = "RUNNING";
+        m.pull();
+        work.ends("SUCCEEDED", 0);
+        work.afterListing = () -> work.outputs.put("dois.txt", "outro conteudo".getBytes(StandardCharsets.UTF_8));
+        m.pull();
+        assertEquals("1|0", gw.resultsClosure);
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals("CHANGED_AFTER_SEND", work.outputsHeld.get(second));
+
+        // (4) apareceu um arquivo a mais depois do envio: tambem nao apaga
+        work.outputsHeld.clear();
+        String third = gw.queue();
+        work.outputs.clear();
+        work.outputs.put("tres.txt", "3".getBytes(StandardCharsets.UTF_8));
+        work.state = "RUNNING";
+        m.pull();
+        work.ends("SUCCEEDED", 0);
+        work.afterListing = () -> work.outputs.put("tardio.txt", "x".getBytes(StandardCharsets.UTF_8));
+        m.pull();
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals("CHANGED_AFTER_SEND", work.outputsHeld.get(third));
+
+        // (5) o caso bom: confirmado arquivo a arquivo, fechamento igual, pasta igual ao confirmado - so entao sai
+        work.outputsHeld.clear();
+        String fourth = gw.queue();
+        work.outputs.clear();
+        work.outputs.put("quatro.txt", "4".getBytes(StandardCharsets.UTF_8));
+        work.state = "RUNNING";
+        m.pull();
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals(List.of(fourth), work.outputsDiscarded);
+        assertTrue(work.outputsHeld.isEmpty());
+    }
+
+    @Test
     void resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento() throws Exception {
         RemoteMachine m = enabled(true);
         // (1) a rede cai no meio do envio: nada confirmado, nada apagado; os arquivos continuam no disco
@@ -332,6 +409,7 @@ class RemoteDeliveryTest {
         again.pull();
         assertEquals("1|1", gw.resultsClosure);
         assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals("OUT_OF_LIMIT", work.outputsHeld.get(gw.attemptId), "a pendencia fica marcada, com o motivo");
 
         // (3) a Platform diz que o envio ja foi fechado por outra entrega: sem confirmacao de que tudo chegou, nada e apagado
         gw.queue();
@@ -343,6 +421,7 @@ class RemoteDeliveryTest {
         gw.resultsClosure = "0|0";
         again.pull();
         assertTrue(work.outputsDiscarded.isEmpty());
+        assertEquals("NOT_CONFIRMED", work.outputsHeld.get(gw.attemptId));
         assertFalse(Files.exists(journal()));
         // sem quem execute, a varredura nao faz nada
         assertEquals(0, machine(false).sweep());
