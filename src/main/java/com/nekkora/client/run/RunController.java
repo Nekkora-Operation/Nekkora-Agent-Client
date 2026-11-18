@@ -146,8 +146,11 @@ public final class RunController implements AutoCloseable {
         volatile OutputText text;
         /** Gravacoes do {@code record} que falharam desde a ultima que deu certo (0 = o disco tem o {@code record}). */
         volatile int saveFailures;
+        /** Os descendentes do processo vistos durante o acompanhamento, e se o fim dele foi visto (ver {@link ProcessTree}). */
+        final ProcessTree tree;
 
         Active(ExecutionRecord r, Process p, Path output, Duration timeout) {
+            this.tree = new ProcessTree(storeOf(r.id()).dir(r.id()).resolve(ProcessTree.FILE));
             this.record = r;
             this.process = p;
             this.output = output;
@@ -545,6 +548,7 @@ public final class RunController implements AutoCloseable {
             lastWall = wall;
             if (a.saveFailures > 0 && !done) persist(a); // o disco ficou para tras; nova tentativa a cada volta
             if (done) break;
+            observeTree(a);
             if (System.nanoTime() - lastSession >= sessionEvery.toNanos()) {
                 lastSession = System.nanoTime();
                 boolean now = session.probe().locked();
@@ -574,6 +578,8 @@ public final class RunController implements AutoCloseable {
             if (a.process != null) a.process.destroyForcibly();
             storeOf(a.record.id()).event(a.record.id(), clock.instant(), "TERMINATED", Map.of("processes", killed));
         }
+        // o fim do processo principal foi VISTO aqui (terminou sozinho ou foi encerrado): so assim se pode, depois, conferir a arvore
+        a.tree.ended();
         for (Thread t : a.drains) {
             try {
                 t.join(3000);
@@ -742,6 +748,30 @@ public final class RunController implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         return false;
+    }
+
+    /** Anota os descendentes vivos do processo desta execucao (a cada volta do acompanhamento). */
+    private void observeTree(Active a) {
+        ProcessOwner o = a.record.owner();
+        if (o == null) return;
+        try {
+            Optional<ProcessHandle> root = a.process != null ? Optional.of(a.process.toHandle()) : o.handle();
+            root.filter(ProcessHandle::isAlive).ifPresent(h -> a.tree.observe(h, o.startMillis()));
+        } catch (RuntimeException e) {
+            // sem a anotacao, a conferencia posterior fica mais pobre; o acompanhamento segue
+        }
+    }
+
+    /**
+     * Ha PROVA de que nada da arvore de processos desta execucao (o processo lancado e os descendentes vistos) continua em
+     * andamento neste computador? {@code GONE} so com o fim visto pelo acompanhamento e nenhum deles vivo; em andamento ou com
+     * algum vivo, {@code ALIVE}; sem como saber, {@code UNCERTAIN}.
+     */
+    ProcessTree.Verdict processTree(ExecutionId id) {
+        if (isActive(id)) return ProcessTree.Verdict.ALIVE;
+        Optional<ExecutionRecord> r = record(id);
+        if (r.isEmpty() || !r.get().state().terminal()) return ProcessTree.Verdict.UNCERTAIN;
+        return ProcessTree.verdict(r.get().owner(), storeOf(id).dir(id).resolve(ProcessTree.FILE));
     }
 
     private boolean aliveAdopted(Active a) {

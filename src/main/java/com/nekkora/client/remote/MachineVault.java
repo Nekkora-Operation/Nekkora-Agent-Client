@@ -242,6 +242,11 @@ public final class MachineVault {
         return new LossLedger(dir.resolve("guarda"), keyring);
     }
 
+    /** As tentativas cujo fim foi informado sem a afirmacao de que nada delas continua em andamento aqui (ver {@link AbsenceLedger}). */
+    AbsenceLedger absences() {
+        return new AbsenceLedger(dir.resolve("confirmar"), keyring);
+    }
+
     /** Uma fila de registros parada no disco, sem confirmacao. {@code removeAt}: a partir de quando a limpeza a remove. */
     record QueueHeld(String attemptId, long sinceEpochSecond, long removeAtEpochSecond) {
     }
@@ -345,6 +350,7 @@ public final class MachineVault {
     public void clear() throws IOException {
         // os tokens das atribuicoes nao servem mais: o registro de perda fica (sem token), o resto sai
         losses().unlink(java.time.Instant.now().getEpochSecond());
+        absences().clear();
         clearPending();
         journal().clear();
         Files.deleteIfExists(dir.resolve(SALT));

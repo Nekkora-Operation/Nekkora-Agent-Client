@@ -283,6 +283,16 @@ public final class Runner implements AutoCloseable {
         }, r.exitCode()));
     }
 
+    /**
+     * Este computador CONFERIU que nada da execucao gerenciada continua em andamento nele: nem o processo lancado, nem os
+     * descendentes vistos durante o acompanhamento? Falso tambem quando nao ha como saber (fim nao visto, posse incerta).
+     */
+    public boolean managedProcessGone(String id) {
+        if (!ExecutionId.valid(id)) return false;
+        ExecutionId eid = new ExecutionId(id);
+        return controller.managed(eid) && controller.processTree(eid) == ProcessTree.Verdict.GONE;
+    }
+
     /** Pede o cancelamento de uma execucao gerenciada em andamento. {@code false}: nao esta em andamento. */
     public boolean cancelManaged(String id) {
         if (!ExecutionId.valid(id)) return false;

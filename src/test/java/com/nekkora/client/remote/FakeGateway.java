@@ -122,6 +122,8 @@ public final class FakeGateway implements AutoCloseable {
     public volatile Integer attemptExit;
     /** Os estados que a maquina informou, na ordem. */
     public final List<String> reported = new CopyOnWriteArrayList<>();
+    /** Os relatos de estado recebidos DEPOIS de a tentativa ter terminado (com "+ausente" quando afirmam o processo ausente). */
+    public final List<String> afterEnd = new CopyOnWriteArrayList<>();
 
     public static String sha256(byte[] data) {
         try {
@@ -523,6 +525,9 @@ public final class FakeGateway implements AutoCloseable {
                 return;
             }
         } else if (ended) {
+            // relato repetido de uma tentativa ja terminada: nada muda; fica anotado o que foi dito
+            afterEnd.add(field(text, "state") + (text.contains("\"processAbsent\":true") ? "+ausente" : ""));
+            lastProcessAbsent = text.contains("\"processAbsent\":true");
             proceed = false;
         } else {
             String wanted = field(text, "state");
