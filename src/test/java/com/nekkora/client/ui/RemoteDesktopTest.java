@@ -369,7 +369,30 @@ class RemoteDesktopTest {
         assertTrue(text.startsWith("Resultados pendentes neste computador: 2 arquivos (3,0 MB) de 1 execução remota."), text);
         assertTrue(text.contains("há arquivo acima do limite de envio"), text);
         assertTrue(text.contains("guardados em " + attempt + " e são removidos deste computador a partir de 22/11/2026"), text);
+        // o MOTIVO da remocao e dito junto com a data, antes de ela acontecer
+        assertTrue(text.contains("é quando vence o prazo de guarda de 7 dias sem confirmação de recebimento"), text);
+        assertEquals("", read(() -> q.heldLogsNotice().text()), "sem fila guardada, nada e mostrado");
+        assertEquals("", read(() -> q.lostNotice().text()), "sem perda, nada e mostrado");
         edt(() -> window.closeRemote());
+
+        // registros guardados sem confirmacao: a tela diz quantas execucoes, a data e o motivo - e nada do conteudo. O prazo
+        // configurado (3 dias) aparece nos dois avisos
+        Path fila = Files.createDirectories(tmp.resolve("remota").resolve("fila"));
+        Path queued = Files.write(fila.resolve("33333333-3333-4333-8333-333333333333.fila"), "conteudo protegido que a tela nao le".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        java.time.ZonedDateTime since = java.time.LocalDate.of(2026, 11, 10).atTime(9, 0).atZone(java.time.ZoneId.systemDefault());
+        Files.setLastModifiedTime(queued, java.nio.file.attribute.FileTime.from(since.toInstant()));
+        Files.writeString(tmp.resolve("remota").resolve(MachineVault.RETENTION_FILE), "3");
+        RemotePanel logs = openDialog();
+        String pendingLogs = read(() -> logs.heldLogsNotice().text());
+        assertTrue(pendingLogs.startsWith("Registros pendentes neste computador: a Platform não confirmou o recebimento de toda a saída do processo de 1 execução remota."),
+                pendingLogs);
+        assertTrue(pendingLogs.contains("É removido deste computador a partir de 13/11/2026: é quando vence o prazo de guarda de 3 dias sem confirmação de recebimento."),
+                pendingLogs);
+        assertFalse(pendingLogs.contains("conteudo protegido"), "a tela nao mostra conteudo de registro remoto");
+        assertTrue(read(() -> logs.heldNotice().text()).contains("prazo de guarda de 3 dias"));
+        edt(() -> window.closeRemote());
+        Files.delete(queued);
+        Files.delete(tmp.resolve("remota").resolve(MachineVault.RETENTION_FILE));
 
         // duas tentativas, nenhuma por limite: a pasta mostrada e a que reune as tentativas, e a data e a da mais antiga
         held.add(new RemoteMachine.Held("22222222-2222-4222-8222-222222222222", "NOT_CONFIRMED",
@@ -381,5 +404,23 @@ class RemoteDesktopTest {
         String both = read(() -> r.heldNotice().text());
         assertTrue(both.startsWith("Resultados pendentes neste computador: 3 arquivos (2 KB) de 2 execuções remotas. A Platform não confirmou o recebimento."), both);
         assertTrue(both.contains("guardados em " + tmp.resolve("remota").resolve("tentativas") + " e são removidos deste computador a partir de 22/11/2026"), both);
+    }
+
+    /** O que ja foi removido pelo prazo nunca e dito como entregue: o texto diz o que saiu, quando, e o que a Platform sabe. */
+    @Test
+    void oTextoDaPerdaPorPrazoDeGuardaDizOQueSaiuEOQueAPlatformSabe() {
+        String sent = RemoteText.lost(1, 4, 1, 1008, "23/11/2026", 0);
+        assertEquals("Removido deste computador pelo prazo de guarda, sem confirmação de recebimento pela Platform: 4 arquivos de resultado de 1 execução remota"
+                + " e registros (1008 linhas capturadas) de 1 execução remota. Última remoção em 23/11/2026. Esse conteúdo não foi entregue por inteiro e não pode"
+                + " mais ser recuperado daqui. A Platform foi avisada.", sent);
+        String pending = RemoteText.lost(0, 0, 2, 1, "23/11/2026", 1);
+        assertTrue(pending.contains("pela Platform: registros (1 linha capturada) de 2 execuções remotas. Última remoção"), pending);
+        assertTrue(pending.endsWith("A Platform ainda não foi avisada de tudo: o aviso é tentado de novo a cada hora, com este computador habilitado."), pending);
+        String impossible = RemoteText.lost(2, 1, 0, 0, "23/11/2026", 2);
+        assertTrue(impossible.contains("pela Platform: 1 arquivo de resultado de 2 execuções remotas. Última remoção"), impossible);
+        assertTrue(impossible.endsWith("Não foi possível avisar a Platform de tudo: ela não reconhece mais a atribuição dessas execuções."), impossible);
+        for (String t : java.util.List.of(sent, pending, impossible)) {
+            assertFalse(t.toLowerCase().contains("entregue à platform") || t.toLowerCase().contains("recebido pela platform"), t);
+        }
     }
 }

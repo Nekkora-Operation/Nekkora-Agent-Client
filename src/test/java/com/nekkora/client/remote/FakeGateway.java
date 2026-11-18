@@ -153,6 +153,39 @@ public final class FakeGateway implements AutoCloseable {
     /** Quantos lotes de registros chegaram (aceitos ou nao). */
     public final java.util.concurrent.atomic.AtomicInteger logBatches = new java.util.concurrent.atomic.AtomicInteger();
 
+    /** Avisos de perda por prazo de guarda aceitos: {@code tentativa|tipo|quanto havia}. */
+    public final List<String> losses = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** Quantos avisos de perda falham (503) antes de voltar a aceitar. */
+    public volatile int failLoss;
+
+    private void loss(HttpExchange x, String path, String text) throws IOException {
+        String attempt = path.substring("/agent/api/v1/remote/attempts/".length()).split("/")[0];
+        if (failLoss > 0) {
+            failLoss--;
+            respond(x, 503, "{\"error\":\"unavailable\"}");
+            return;
+        }
+        if (!attempt.equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        Map<String, Object> body = com.nekkora.client.auth.Json.object(text);
+        if (attemptToken == null || !attemptToken.equals(body.get("token")) || ((Number) body.get("epoch")).intValue() != attemptEpoch) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        if (!List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ENDED_UNKNOWN").contains(attemptState)) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            return;
+        }
+        String kind = String.valueOf(body.get("kind"));
+        int count = ((Number) body.get("localCount")).intValue();
+        if (losses.stream().noneMatch(l -> l.startsWith(attempt + "|" + kind + "|"))) {
+            losses.add(attempt + "|" + kind + "|" + count);
+        }
+        respond(x, 200, "{\"kind\":\"" + kind + "\",\"localCount\":" + count + ",\"reportedAt\":\"2026-11-16T12:00:00Z\"}");
+    }
+
     @SuppressWarnings("unchecked")
     private void logs(HttpExchange x, String path, String text) throws IOException {
         String[] parts = path.substring("/agent/api/v1/remote/attempts/".length()).split("/");
@@ -527,6 +560,12 @@ public final class FakeGateway implements AutoCloseable {
                 && "POST".equals(x.getRequestMethod())) {
             if (authenticated(x, auth)) {
                 logs(x, path, text);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/retention-loss") && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                loss(x, path, text);
             }
             return;
         }

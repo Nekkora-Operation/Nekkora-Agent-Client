@@ -353,8 +353,20 @@ public final class Runner implements AutoCloseable {
         });
     }
 
-    /** Por quanto tempo uma pasta de saida sem confirmacao de recebimento fica neste computador antes de ser removida. */
+    /**
+     * Por quanto tempo uma pasta de saida sem confirmacao de recebimento fica neste computador antes de ser removida, quando
+     * ninguem disse outro prazo ({@link #setManagedKeep}).
+     */
     public static final java.time.Duration MANAGED_OUTPUT_RETENTION = java.time.Duration.ofDays(7);
+
+    private volatile java.time.Duration managedKeep = MANAGED_OUTPUT_RETENTION;
+
+    /** O prazo de guarda vigente (de 1 a 90 dias; fora disso, fica o que estava). Quem conduz a execucao gerenciada o informa. */
+    public void setManagedKeep(java.time.Duration keep) {
+        if (keep != null && keep.toDays() >= 1 && keep.toDays() <= 90) {
+            managedKeep = keep;
+        }
+    }
 
     private static final String HELD_MARK = "pendente.txt";
     private volatile Clock managedClock = Clock.systemUTC();
@@ -395,7 +407,7 @@ public final class Runner implements AutoCloseable {
                 if (n[0] == 0) continue;
                 String[] m = mark(dir, "NOT_CONFIRMED");
                 long since = Long.parseLong(m[0]);
-                found.add(new ManagedHeld(key, m[1], dir.resolve("saida").toString(), (int) n[0], n[1], since, since + MANAGED_OUTPUT_RETENTION.toSeconds()));
+                found.add(new ManagedHeld(key, m[1], dir.resolve("saida").toString(), (int) n[0], n[1], since, since + managedKeep.toSeconds()));
             }
         } catch (java.io.IOException | RuntimeException e) {
             // o que ja foi lido vale
@@ -444,7 +456,7 @@ public final class Runner implements AutoCloseable {
     /**
      * Apaga o CODIGO (ZIP e copia extraida) das pastas de execucoes gerenciadas que nao sao a de {@code keepKey} - sobra de uma
      * queda entre o desfecho e a limpeza. Com uma execucao em andamento, nao faz nada. Uma pasta de saida so e apagada depois de
-     * {@link #MANAGED_OUTPUT_RETENTION} contados da marca de pendencia dela (a sobra sem marca e marcada agora). So mexe em
+     * o prazo de guarda vigente, contado da marca de pendencia dela (a sobra sem marca e marcada agora). So mexe em
      * pastas de tentativa (nome no formato) dentro da pasta das execucoes gerenciadas. Devolve quantas pastas foram limpas.
      */
     public int sweepManaged(String keepKey) {
@@ -464,7 +476,7 @@ public final class Runner implements AutoCloseable {
                 // resultado sem confirmacao de recebimento: fica ate o prazo de guarda vencer, contado da marca de pendencia
                 if (count(dir.resolve("saida"))[0] > 0) {
                     long since = Long.parseLong(mark(dir, "NOT_CONFIRMED")[0]);
-                    if (managedClock.instant().getEpochSecond() >= since + MANAGED_OUTPUT_RETENTION.toSeconds()) {
+                    if (managedClock.instant().getEpochSecond() >= since + managedKeep.toSeconds()) {
                         discardManagedOutputs(key);
                         if (!code) n++;
                     }

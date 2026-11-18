@@ -188,6 +188,56 @@ public final class RemoteMachine implements AutoCloseable {
         default List<Held> held(String exceptAttemptId) {
             return List.of();
         }
+
+        /** O prazo de guarda vigente, em dias: vale para {@link #held} e para a remocao em {@link #sweep}. */
+        default void retentionDays(int days) {
+        }
+    }
+
+    /** Registros de uma tentativa que ficaram neste computador sem confirmacao de recebimento. Nada do conteudo. */
+    public record HeldLogs(String attemptId, long sinceEpochSecond, long removeAtEpochSecond) {
+    }
+
+    /**
+     * O que este computador REMOVEU pelo prazo de guarda sem a Platform ter confirmado o recebimento. {@code logs}: registros
+     * (senao, arquivos de resultado). {@code count}: quanto havia aqui. {@code notice}: {@code PENDING} (a Platform ainda nao foi
+     * avisada), {@code SENT} (foi) ou {@code IMPOSSIBLE} (nao ha mais como avisar).
+     */
+    public record Lost(String attemptId, boolean logs, int count, long lostAtEpochSecond, String notice) {
+    }
+
+    /** O prazo de guarda vigente, em dias (ver {@link MachineVault#retentionDays}). */
+    public int retentionDays() {
+        return vault.retentionDays();
+    }
+
+    /** As filas de registros guardadas sem confirmacao (fora a da tentativa pendente). Nunca lanca. */
+    public List<HeldLogs> heldLogs() {
+        try {
+            MachineVault.Link current = usable();
+            String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
+            return vault.heldLogQueues(keep).stream().map(q -> new HeldLogs(q.attemptId(), q.sinceEpochSecond(), q.removeAtEpochSecond())).toList();
+        } catch (RuntimeException x) {
+            return List.of();
+        }
+    }
+
+    /** O que foi removido pelo prazo de guarda sem confirmacao de recebimento, e se a Platform ja sabe. Nunca lanca. */
+    public List<Lost> lost() {
+        try {
+            List<Lost> out = new java.util.ArrayList<>();
+            for (LossLedger.Entry e : vault.losses().all(clock.instant().getEpochSecond())) {
+                if (e.logsLost()) {
+                    out.add(new Lost(e.attemptId(), true, e.logLines(), e.logsLostAt(), e.logsNotice().name()));
+                }
+                if (e.resultsLost()) {
+                    out.add(new Lost(e.attemptId(), false, e.resultFiles(), e.resultsLostAt(), e.resultsNotice().name()));
+                }
+            }
+            return out;
+        } catch (RuntimeException x) {
+            return List.of();
+        }
     }
 
     /**
@@ -216,6 +266,7 @@ public final class RemoteMachine implements AutoCloseable {
         try {
             MachineVault.Link current = usable();
             String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
+            w.retentionDays(vault.retentionDays());
             return w.held(keep);
         } catch (RuntimeException x) {
             return List.of();
@@ -388,8 +439,16 @@ public final class RemoteMachine implements AutoCloseable {
             }
             // os registros primeiro (dizem por que um robo falhou); a fila so e apagada com o fechamento confirmado
             sendLogs(credential, current, e, true);
+            long noted = clock.instant().getEpochSecond();
+            if (heldLines >= 0) {
+                // a fila ficou no disco sem confirmacao: fica dito, para a pessoa ver e para avisar a Platform se o prazo vencer
+                vault.losses().logsHeld(e.attemptId(), e.token(), e.epoch(), noted, heldLines);
+            }
             // a pasta de saida so e apagada com o recebimento de TUDO confirmado pela Platform; senao, fica neste computador
             String pending = sendResults(credential, e, w);
+            if (pending != null && w != null) {
+                vault.losses().resultsHeld(e.attemptId(), e.token(), e.epoch(), noted);
+            }
             forget(e, w);
             if (w != null) {
                 try {
@@ -624,6 +683,8 @@ public final class RemoteMachine implements AutoCloseable {
     /** A fila de registros aberta neste processo e a tentativa dela (uma por vez). */
     private LogQueue queue;
     private String queueAttempt;
+    /** Do ultimo fechamento de registros: quantas linhas a fila que FICOU no disco tem; -1 = nenhuma fila ficou. */
+    private int heldLines = -1;
 
     /** A fila da tentativa (aberta uma vez por processo). Nulo: este computador nao consegue proteger a fila, entao nao ha fila. */
     private LogQueue queue(MachineVault.Link current, AttemptJournal.Entry e) {
@@ -662,6 +723,7 @@ public final class RemoteMachine implements AutoCloseable {
      * lotes por consulta, e qualquer falha fica para a proxima - registro nunca interrompe a execucao nem muda o resultado.
      */
     private void sendLogs(String credential, MachineVault.Link current, AttemptJournal.Entry e, boolean close) throws Refused {
+        heldLines = -1;
         LogQueue q = queue(current, e);
         if (q == null) {
             return;
@@ -698,6 +760,9 @@ public final class RemoteMachine implements AutoCloseable {
                     }
                     if (x.problem() == Problem.LOG_CONFLICT) {
                         // o envio ja foi fechado por outra entrega, ou a Platform tem outra coisa nessas linhas: nao ha o que enviar
+                        if (close) {
+                            heldLines = q.lines();
+                        }
                         dropQueue(false);
                         return;
                     }
@@ -718,6 +783,7 @@ public final class RemoteMachine implements AutoCloseable {
                 }
             }
             // sem a confirmacao do fechamento, a fila fica no disco ate o prazo de guarda
+            heldLines = q.lines();
             dropQueue(false);
         } catch (Refused x) {
             if (close || x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.LINK_ENDED
@@ -1144,13 +1210,74 @@ public final class RemoteMachine implements AutoCloseable {
         synchronized (operation) {
             MachineVault.Link current = usable();
             String keep = current == null ? null : journal.load(current.agentId()).map(AttemptJournal.Entry::attemptId).orElse(null);
-            // filas de registros de tentativas ja resolvidas, sem confirmacao, paradas ha mais que o prazo de guarda
-            vault.sweepLogQueues(keep, clock.instant());
+            long now = clock.instant().getEpochSecond();
+            LossLedger ledger = vault.losses();
+            int cleaned = 0;
             try {
-                return w.sweep(keep);
+                // filas de registros de tentativas ja resolvidas, sem confirmacao, paradas ha mais que o prazo de guarda. A fila da
+                // tentativa pendente (em andamento, ou ainda enviando) nunca entra na conta
+                for (String attempt : vault.sweepLogQueues(keep, clock.instant())) {
+                    ledger.logsLost(attempt, now);
+                    cleaned++;
+                }
+                w.retentionDays(vault.retentionDays());
+                List<Held> before = w.held(keep);
+                cleaned += w.sweep(keep);
+                java.util.Set<String> still = new java.util.HashSet<>();
+                w.held(keep).forEach(h -> still.add(h.attemptId()));
+                for (Held h : before) {
+                    if (!still.contains(h.attemptId()) && h.removeAtEpochSecond() <= now) {
+                        // a pasta de saida foi removida pelo prazo: fica o registro minimo (quantos arquivos havia e quando)
+                        ledger.resultsLost(h.attemptId(), h.files(), now);
+                    }
+                }
             } catch (RuntimeException x) {
-                return 0;
+                // fica para a proxima limpeza
             }
+            reportLosses(current, ledger, now);
+            return cleaned;
+        }
+    }
+
+    /**
+     * Avisa a Platform de cada perda por prazo de guarda que ela ainda nao conhece. So com o vinculo utilizavel; falha de rede
+     * fica para a proxima limpeza (de hora em hora, e ao abrir). Se a Platform nao reconhece mais a atribuicao, o aviso e dado
+     * por impossivel e o registro local continua dizendo que houve a perda. Nunca lanca.
+     */
+    private void reportLosses(MachineVault.Link current, LossLedger ledger, long now) {
+        if (current == null) {
+            return;
+        }
+        boolean any = false;
+        for (LossLedger.Entry e : ledger.all(now)) {
+            if (!e.owes() || e.token().isEmpty()) {
+                continue;
+            }
+            for (boolean logs : new boolean[] {true, false}) {
+                boolean due = logs ? e.logsLost() && e.logsNotice() == LossLedger.Notice.PENDING : e.resultsLost() && e.resultsNotice() == LossLedger.Notice.PENDING;
+                if (!due) {
+                    continue;
+                }
+                try {
+                    if (channel.reportLoss(current.credential(), e.attemptId(), e.token(), e.epoch(), logs, logs ? e.logLines() : e.resultFiles())) {
+                        ledger.noticed(e.attemptId(), logs, LossLedger.Notice.SENT);
+                        any = true;
+                    }
+                } catch (Refused x) {
+                    if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
+                        ledger.noticed(e.attemptId(), logs, LossLedger.Notice.IMPOSSIBLE);
+                        any = true;
+                    } else {
+                        // sem rede, vinculo encerrado ou resposta inesperada: nada muda; a proxima limpeza tenta de novo
+                        return;
+                    }
+                } catch (RuntimeException x) {
+                    return;
+                }
+            }
+        }
+        if (any) {
+            changed();
         }
     }
 

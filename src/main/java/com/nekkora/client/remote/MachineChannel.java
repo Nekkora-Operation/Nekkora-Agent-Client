@@ -462,6 +462,34 @@ public final class MachineChannel {
         return whole(o.get("lines")) == lines && whole(o.get("droppedLines")) == droppedLines;
     }
 
+    /**
+     * Avisa a Platform que este computador REMOVEU, pelo prazo de guarda, o que guardava de uma tentativa sem confirmacao de
+     * recebimento: a fila de registros ({@code logs}) ou a pasta de saida. {@code localCount}: quanto havia aqui (linhas
+     * capturadas, ou arquivos). Nada do conteudo vai junto. {@code true}: a Platform gravou o aviso (ou ja o tinha).
+     */
+    boolean reportLoss(String credential, String attemptId, String token, int epoch, boolean logs, int localCount) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        String kind = logs ? "LOGS" : "RESULTS";
+        String body = "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"kind\":\"" + kind + "\",\"localCount\":" + Math.max(0, localCount) + "}";
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + "/retention-loss", credential).POST(HttpRequest.BodyPublishers.ofString(body)));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        return kind.equals(ok(authenticated(r)).get("kind"));
+    }
+
     /** Fecha o envio de resultados: quantos arquivos foram enviados e quantos ficaram de fora por limite. */
     boolean completeResults(String credential, String attemptId, String token, int epoch, int sent, int skippedByLimit) throws Refused {
         if (!UUID.matcher(attemptId).matches()) {
