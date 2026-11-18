@@ -520,26 +520,66 @@ public final class Runner implements AutoCloseable {
 
     /** As dependencias indicadas por quem pede ({@code nome==versao}) estao no Python, na versao exata. Nada e instalado. */
     private void requireListed(Path python, List<String> dependencies) throws ManagedRefused {
+        ManagedCheck c = listed(python, dependencies);
+        switch (c.outcome()) {
+            case SATISFIED -> {
+            }
+            case MISSING, NOT_VERIFIED -> throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+            case ENVIRONMENT_GONE -> throw new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE);
+        }
+    }
+
+    /** O resultado de {@link #verifyManaged}. */
+    public enum ManagedCheckOutcome {
+        SATISFIED, MISSING, ENVIRONMENT_GONE, NOT_VERIFIED
+    }
+
+    /** {@code missing}: os itens PEDIDOS que nao estao no Python na versao exata (ou que nao estao no formato {@code nome==versao}). */
+    public record ManagedCheck(ManagedCheckOutcome outcome, List<String> missing) {
+    }
+
+    /**
+     * A conferencia sob demanda (plano 5.9): as dependencias estao no Python de {@code pythonId} (uma instalacao de
+     * {@link #installedPythons}), na versao exata? E a MESMA conferencia feita antes de iniciar uma execucao gerenciada, sem
+     * iniciar nada. Nada e instalado, nenhum ambiente e criado, e o resultado diz so o que falta do que foi perguntado.
+     */
+    public ManagedCheck verifyManaged(String pythonId, List<String> dependencies) {
+        Path python = installedPath(pythonId).orElse(null);
+        if (python == null) return new ManagedCheck(ManagedCheckOutcome.ENVIRONMENT_GONE, List.of());
+        return listed(python, dependencies);
+    }
+
+    private ManagedCheck listed(Path python, List<String> dependencies) {
         java.util.Map<String, String> wanted = new java.util.LinkedHashMap<>();
+        java.util.Map<String, String> asked = new java.util.LinkedHashMap<>();
+        List<String> missing = new java.util.ArrayList<>();
         for (String d : dependencies == null ? List.<String>of() : dependencies) {
-            if (!ExecutionPackage.validDependency(d)) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+            if (!ExecutionPackage.validDependency(d)) {
+                // fora do formato nao ha como conferir: conta como ausente (a execucao seria recusada do mesmo jeito)
+                missing.add(d);
+                continue;
+            }
             int at = d.indexOf("==");
             String name = d.substring(0, at);
             int extras = name.indexOf('[');
-            wanted.put(ExecutionPackage.normalized(extras < 0 ? name : name.substring(0, extras)), d.substring(at + 2).strip());
+            String key = ExecutionPackage.normalized(extras < 0 ? name : name.substring(0, extras));
+            wanted.put(key, d.substring(at + 2).strip());
+            asked.put(key, d);
         }
-        if (wanted.isEmpty()) return;
+        if (wanted.isEmpty()) return new ManagedCheck(missing.isEmpty() ? ManagedCheckOutcome.SATISFIED : ManagedCheckOutcome.MISSING, List.copyOf(missing));
         PythonProbe.Info info;
         try {
             info = PythonProbe.run(python, List.copyOf(wanted.keySet()), controller.probeDir(), PythonProbe.DEFAULT_TIMEOUT, PythonProbe.Cancel.NEVER);
         } catch (PythonProbe.Failed | RuntimeException e) {
-            throw new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE);
+            // o Python nao respondeu: sem conferencia. Antes de iniciar uma execucao isto e tratado como ambiente ausente
+            return new ManagedCheck(Files.isRegularFile(python) ? ManagedCheckOutcome.NOT_VERIFIED : ManagedCheckOutcome.ENVIRONMENT_GONE, List.of());
         }
-        if (info.installed() == null) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+        if (info.installed() == null) return new ManagedCheck(ManagedCheckOutcome.NOT_VERIFIED, List.of());
         for (java.util.Map.Entry<String, String> w : wanted.entrySet()) {
             String found = info.installed().get(w.getKey());
-            if (found == null || !found.strip().equals(w.getValue())) throw new ManagedRefused(ManagedRefusal.DEPENDENCIES_MISSING);
+            if (found == null || !found.strip().equals(w.getValue())) missing.add(asked.get(w.getKey()));
         }
+        return new ManagedCheck(missing.isEmpty() ? ManagedCheckOutcome.SATISFIED : ManagedCheckOutcome.MISSING, List.copyOf(missing));
     }
 
     /** Uma vez, ao abrir o aplicativo: fecha os registros de execucoes que ficaram abertas de uma sessao anterior. */

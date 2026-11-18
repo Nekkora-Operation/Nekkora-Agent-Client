@@ -255,6 +255,52 @@ public final class RemoteMachine implements AutoCloseable {
         /** O prazo de guarda vigente, em dias: vale para {@link #held} e para a remocao em {@link #sweep}. */
         default void retentionDays(int days) {
         }
+
+        /**
+         * CONFERE, sem instalar nem executar nada, se as dependencias ({@code nome==versao}) estao no Python de {@code pythonLocalId}
+         * (o identificador local, com o caminho; nao sai deste computador), na versao exata. Quem nao sabe conferir diz que nao
+         * conferiu.
+         */
+        default Verified verify(String pythonLocalId, List<String> dependencies) {
+            return new Verified("NOT_VERIFIED", List.of());
+        }
+    }
+
+    /**
+     * O resultado de uma conferencia de dependencias. {@code outcome}: {@code SATISFIED}, {@code MISSING} (com {@code missing}: os
+     * itens pedidos que faltam ou estao em outra versao), {@code ENVIRONMENT_GONE} ou {@code NOT_VERIFIED}.
+     */
+    public record Verified(String outcome, List<String> missing) {
+    }
+
+    /**
+     * Um pedido da Platform para conferir as dependencias de uma automacao no Python escolhido para ela nesta maquina (plano
+     * 5.9). So a conferencia: nada e instalado, nenhum ambiente e criado ou trocado, nada e executado. A resposta diz so o que
+     * FALTA do que foi perguntado - nunca o que esta instalado, nunca um caminho. Ambiente que nao esta mais aqui:
+     * ENVIRONMENT_GONE, sem escolher outro. Qualquer falha ao conferir: NOT_VERIFIED. Falha ao responder: a Platform fica sem
+     * resposta e diz "nao foi possivel verificar". Nunca lanca.
+     */
+    private void verify(MachineVault.Link current, MachineChannel.Check check, Work w) {
+        if (check == null) {
+            return;
+        }
+        Verified v;
+        try {
+            String python = localPython(check.pythonEnvironmentId());
+            v = python == null ? new Verified("ENVIRONMENT_GONE", List.of()) : w == null ? new Verified("NOT_VERIFIED", List.of()) : w.verify(python, check.dependencies());
+            if (v == null || !List.of("SATISFIED", "MISSING", "ENVIRONMENT_GONE", "NOT_VERIFIED").contains(v.outcome())
+                    || ("MISSING".equals(v.outcome())) != (v.missing() != null && !v.missing().isEmpty())
+                    || (v.missing() != null && !check.dependencies().containsAll(v.missing()))) {
+                v = new Verified("NOT_VERIFIED", List.of());
+            }
+        } catch (RuntimeException | LinkageError x) {
+            v = new Verified("NOT_VERIFIED", List.of());
+        }
+        try {
+            channel.answerCheck(current.credential(), check.checkId(), v.outcome(), v.missing());
+        } catch (Refused | RuntimeException x) {
+            // sem resposta, a Platform diz que nao foi possivel verificar
+        }
     }
 
     /**
@@ -437,6 +483,11 @@ public final class RemoteMachine implements AutoCloseable {
             }
             try {
                 deliver(current, pending);
+                if (pending != null) {
+                    // com uma tentativa no diario a maquina nao pergunta por trabalho: o pedido de conferencia vem pela rota propria.
+                    // Conferir nao e executar: nao mexe na execucao em andamento
+                    verify(current, channel.pendingCheck(current.credential()), work);
+                }
                 // o que tentativas ja terminadas deixaram aqui sem confirmacao continua sendo enviado, a parte do diario
                 deliverHeld(current, work, false);
             } catch (Refused e) {
@@ -502,7 +553,10 @@ public final class RemoteMachine implements AutoCloseable {
     private void deliver(MachineVault.Link current, AttemptJournal.Entry e) throws Refused {
         String credential = current.credential();
         if (e == null) {
-            MachineChannel.Offer o = channel.next(credential).offer();
+            MachineChannel.Next next = channel.next(credential);
+            // o pedido de conferencia de dependencias vem junto com a consulta de trabalho e nao depende dela
+            verify(current, next.check(), work);
+            MachineChannel.Offer o = next.offer();
             if (o == null) {
                 return;
             }

@@ -114,6 +114,20 @@ class RemoteDeliveryTest {
         }
         final List<String> swept = new ArrayList<>();
 
+        /** O que a conferencia de dependencias responde, e com o que foi chamada ({@code python|dependencias}). */
+        volatile RemoteMachine.Verified verified = new RemoteMachine.Verified("SATISFIED", List.of());
+        volatile RuntimeException verifyCrash;
+        final List<String> verifications = new ArrayList<>();
+
+        @Override
+        public RemoteMachine.Verified verify(String pythonLocalId, List<String> dependencies) {
+            verifications.add(pythonLocalId + "|" + dependencies);
+            if (verifyCrash != null) {
+                throw verifyCrash;
+            }
+            return verified;
+        }
+
         @Override
         public void discardOutputs(String attemptId) {
             outputsDiscarded.add(attemptId);
@@ -1436,5 +1450,84 @@ class RemoteDeliveryTest {
         assertFalse(j.load(gw.agentId).orElseThrow().toString().contains(gw.attemptToken));
         Files.writeString(journal(), "{\"versao\":2,", StandardCharsets.UTF_8);
         assertTrue(j.load(gw.agentId).isEmpty());
+    }
+
+    private static final String CHECK = "5c5c5c5c-5c5c-4c5c-8c5c-5c5c5c5c5c5c";
+
+    private void asks(String environment, String... dependencies) {
+        gw.dependencyCheck = "{\"checkId\":\"" + CHECK + "\",\"pythonEnvironmentId\":\"" + environment + "\",\"dependencies\":[\""
+                + String.join("\",\"", dependencies) + "\"]}";
+    }
+
+    @Test
+    void aPlatformPedeAConferenciaDasDependenciasEAMaquinaRespondeSoOQueFaltaSemCaminhoNemExecucao() throws Exception {
+        RemoteMachine m = enabled(true);
+        // parada: o pedido vem com a consulta de trabalho. A maquina confere no Python LOCAL do identificador opaco e responde
+        asks(gw.offerPython, "idna==3.7", "requests==2.32.3");
+        work.verified = new RemoteMachine.Verified("MISSING", List.of("requests==2.32.3"));
+        m.pull();
+        assertEquals(List.of(LOCAL_PYTHON + "|[idna==3.7, requests==2.32.3]"), work.verifications);
+        assertEquals(List.of(CHECK + "|{\"outcome\":\"MISSING\",\"missing\":[\"requests==2.32.3\"]}"), gw.checkAnswers);
+        assertFalse(gw.checkAnswers.get(0).toLowerCase().contains("python312"), "o caminho do Python nunca vai a Platform");
+        assertTrue(work.jobs.isEmpty(), "conferir nao e executar: nada foi iniciado");
+        assertFalse(Files.exists(journal()), "nem ha tentativa: o diario continua vazio");
+        // respondido, o pedido nao volta; satisfeito vai sem lista
+        asks(gw.offerPython, "idna==3.7");
+        work.verified = new RemoteMachine.Verified("SATISFIED", List.of());
+        m.pull();
+        assertEquals(CHECK + "|{\"outcome\":\"SATISFIED\"}", gw.checkAnswers.get(1));
+        // o ambiente pedido nao e (mais) deste computador: dito assim, sem conferir em outro e sem escolher outro
+        work.verifications.clear();
+        asks("Z".repeat(43), "idna==3.7");
+        m.pull();
+        assertEquals(CHECK + "|{\"outcome\":\"ENVIRONMENT_GONE\"}", gw.checkAnswers.get(2));
+        assertTrue(work.verifications.isEmpty());
+        // a conferencia falhou, ou respondeu algo que nao foi perguntado: a maquina diz que nao conseguiu verificar - nunca inventa
+        asks(gw.offerPython, "idna==3.7");
+        work.verifyCrash = new IllegalStateException("o python nao respondeu");
+        m.pull();
+        assertEquals(CHECK + "|{\"outcome\":\"NOT_VERIFIED\"}", gw.checkAnswers.get(3));
+        work.verifyCrash = null;
+        asks(gw.offerPython, "idna==3.7");
+        work.verified = new RemoteMachine.Verified("MISSING", List.of("numpy==2.1.0"));
+        m.pull();
+        assertEquals(CHECK + "|{\"outcome\":\"NOT_VERIFIED\"}", gw.checkAnswers.get(4));
+        // pedido fora do formato (identificador que nao e opaco): ignorado, sem resposta e sem erro
+        gw.dependencyCheck = "{\"checkId\":\"" + CHECK + "\",\"pythonEnvironmentId\":\"C:\\\\Python312\\\\python.exe\",\"dependencies\":[]}";
+        m.pull();
+        assertEquals(5, gw.checkAnswers.size());
+        gw.dependencyCheck = null;
+
+        // com uma execucao em andamento a maquina nao pergunta por trabalho: o pedido vem pela rota propria, e a execucao segue
+        String attempt = gw.queue();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState);
+        asks(gw.offerPython, "idna==3.7");
+        work.verified = new RemoteMachine.Verified("SATISFIED", List.of());
+        long nexts = calls("/remote/next");
+        m.pull();
+        assertEquals(nexts, calls("/remote/next"));
+        assertEquals(6, gw.checkAnswers.size());
+        assertEquals("RUNNING", gw.attemptState);
+        assertTrue(work.cancelled.isEmpty());
+        assertEquals(1, work.jobs.size());
+        // a resposta nao chega (503): a Platform fica sem resposta e dira "nao foi possivel verificar"; nada quebra aqui
+        asks(gw.offerPython, "idna==3.7");
+        gw.failCheckAnswers = 1;
+        m.pull();
+        assertEquals(6, gw.checkAnswers.size());
+        assertEquals("RUNNING", gw.attemptState);
+        work.ends("SUCCEEDED", 0);
+        gw.dependencyCheck = null;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertNotNull(attempt);
+        // sem quem execute, a maquina nao tem como conferir: responde que nao verificou
+        m.close();
+        RemoteMachine plain = machine(false);
+        plain.setWork(null);
+        asks(gw.offerPython, "idna==3.7");
+        plain.pull();
+        assertEquals(6, gw.checkAnswers.size(), "sem quem execute, a maquina nem pergunta por trabalho");
     }
 }
