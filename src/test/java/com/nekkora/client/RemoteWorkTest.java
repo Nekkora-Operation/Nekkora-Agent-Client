@@ -124,6 +124,12 @@ class RemoteWorkTest {
         // o que a automacao gravou esta na pasta de saida DA TENTATIVA
         Path out = Path.of(job.dir()).resolve("saida").resolve(run).resolve("resultado.txt");
         assertEquals("ok", Files.readString(out));
+        // os resultados: so o que a automacao gravou, com o nome relativo a pasta de saida; o sinal do aplicativo fica de fora
+        java.util.List<RemoteMachine.ResultFile> results = work.results(job.attemptId(), run);
+        assertEquals(java.util.List.of("resultado.txt"), results.stream().map(RemoteMachine.ResultFile::name).toList());
+        assertEquals(out.toString(), results.get(0).file());
+        assertEquals(2, results.get(0).size());
+        assertTrue(work.results(job.attemptId(), "ex-" + "0".repeat(32)).isEmpty(), "execucao que nao e desta tentativa");
         // nenhuma aprovacao local foi criada, e o historico das execucoes locais continua vazio
         assertFalse(Files.exists(ApprovalLedger.defaultFile(data)));
         assertFalse(Files.exists(RunStore.defaultRoot(data)), "nada em <dados>/execucoes");

@@ -112,8 +112,15 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 6. **em execução**: a cada consulta o estado é repetido (renova o prazo da comunicação) e o pedido de cancelamento é
    obedecido. O estado só vira "cancelada" quando o processo para de fato;
 7. o **desfecho** é informado (`SUCCEEDED`, `FAILED`, `TIMED_OUT` com o código de saída quando há; `CANCELLED`;
-   `ENDED_UNKNOWN` quando o fim não foi observado). Só depois de a Platform aceitar, o diário é apagado e o **código da
-   tentativa** (o ZIP e a cópia extraída) é removido. O que a automação gravou na pasta de saída fica.
+   `ENDED_UNKNOWN` quando o fim não foi observado);
+8. **resultados**: depois de a Platform aceitar o desfecho, os arquivos que a automação gravou na pasta de saída são
+   enviados, um a um, e o envio é fechado. Vai o nome **relativo à pasta de saída**, nunca o caminho deste computador.
+   Limites (os da Platform): 50 arquivos, 20 MiB cada, 50 MiB no total, nome de até 200 caracteres. **O que passa do limite
+   não é enviado e é contado**: o fechamento diz quantos foram e quantos ficaram de fora. **Os arquivos não mudam o
+   desfecho.** Só arquivos comuns dentro da pasta: ligações não são seguidas e nada fora dela é alcançado; o arquivo de
+   sinal do aplicativo não é enviado;
+9. só depois do fechamento o diário é apagado e o **código da tentativa** (o ZIP e a cópia extraída) é removido. O que a
+   automação gravou na pasta de saída **fica neste computador**.
 
 | Situação | O que acontece |
 |---|---|
@@ -122,6 +129,7 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 | Aplicativo fechado entre pedir o início e gravar a execução | termina como "sem prova do resultado"; **nada é lançado de novo** |
 | Token ou época que não valem mais, tentativa que a Platform não tem | o que esta entrega iniciou aqui é parado, o diário é apagado, nada é alterado na Platform |
 | Recebimento pausado | nada novo é entregue; o que está em execução continua |
+| Sem rede no meio do envio dos resultados | o envio é retomado na próxima consulta; o desfecho não é informado de novo e nenhum arquivo é duplicado |
 
 Motivos de recusa que esta máquina dá: `BUSY` (há outra execução, local ou não), `PACKAGE_INVALID`, `ENVIRONMENT_GONE`,
 `ENVIRONMENT_INCOMPATIBLE`, `DEPENDENCIES_MISSING`, `SESSION_UNAVAILABLE` (tela bloqueada ou sem sessão interativa),
@@ -152,7 +160,8 @@ temporária.
 | Renovação: janela, troca, resposta perdida, fechamento no meio, espera crescente, vencida/revogada, pendente adulterado | `CredentialRenewalTest` (relógio do teste; DPAPI real) |
 | Inventário: nada de caminho no pedido, identificador estável e por máquina, filtros, falhas | `PythonInventoryTest` |
 | Descoberta sem pacote | `PythonEnvironmentsTest.instalacoesSemPacoteMesmaDescobertaSoComAVersao` (exige `NEKKORA_TEST_PYTHON`) |
-| Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (16; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
+| Entrega e condução da tentativa: ordem dos estados, download, Python escolhido, reconferência antes de iniciar, cancelamento, cada desfecho, recusas, pacote que não confere, resposta perdida, fechamento no meio, entrega obsoleta, sem rede, pausa, desabilitar | `RemoteDeliveryTest` (19; canal simulado em HTTPS; DPAPI real; quem executa simulado) |
+| Resultados: ordem, nome relativo, limites contados, retomada sem duplicar, fechamento, nada para o que não executou | `RemoteDeliveryTest` (3 dos 19) |
 | A ponte com o motor: ZIP real, conferência, execução gerenciada por Python real, código de saída, cancelamento, uma por vez, cada recusa | `RemoteWorkTest` (exige `NEKKORA_TEST_PYTHON`) |
 | O motor: execução gerenciada | `ManagedRunTest` (exige `NEKKORA_TEST_PYTHON`) |
 | Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
@@ -161,8 +170,9 @@ temporária.
 
 - **Só pacote Python externo** é executado. Pacote do Studio é recusado (`CLIENT_INCOMPATIBLE`).
 - **Tela bloqueada ou sem sessão interativa: a execução não inicia** (`SESSION_UNAVAILABLE`), como na execução local.
-- **A saída do processo (stdout/stderr) não é capturada nem enviada**; os arquivos de resultado também não. A Platform vê o
-  estado e o código de saída. Registros e resultados vêm nas próximas tarefas.
+- **A saída do processo (stdout/stderr) não é capturada nem enviada.** A Platform vê o estado, o código de saída e os
+  arquivos de resultado. Os registros de texto vêm na próxima tarefa.
+- Os arquivos de resultado **não são apagados deste computador** depois do envio.
 - A cópia do pacote que o motor executa (`remota/execucoes/<id>/pacote`) não é apagada no fim da tentativa: sai com a
   limpeza das execucoes antigas (as 50 mais recentes ficam). A limpeza completa é da próxima tarefa.
 - Localizar o Python escolhido refaz a descoberta das instalações (alguns segundos); enquanto isso, pausar e desabilitar

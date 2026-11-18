@@ -109,6 +109,25 @@ class RemoteDeliveryTest {
             }
         }
 
+        /** Arquivos que a "execucao" deixou na pasta de saida: nome relativo -> conteudo. */
+        final java.util.Map<String, byte[]> outputs = new java.util.LinkedHashMap<>();
+
+        @Override
+        public List<RemoteMachine.ResultFile> results(String attemptId, String run) {
+            List<RemoteMachine.ResultFile> out = new ArrayList<>();
+            try {
+                Path dir = Files.createDirectories(root.resolve(attemptId).resolve("saida"));
+                for (java.util.Map.Entry<String, byte[]> e : outputs.entrySet()) {
+                    Path f = dir.resolve(e.getKey().replace('/', '_'));
+                    Files.write(f, e.getValue());
+                    out.add(new RemoteMachine.ResultFile(e.getKey(), f.toString(), e.getValue().length));
+                }
+            } catch (java.io.IOException x) {
+                throw new IllegalStateException(x);
+            }
+            return out;
+        }
+
         void ends(String how, Integer exit) {
             state = how;
             exitCode = exit;
@@ -236,6 +255,86 @@ class RemoteDeliveryTest {
         m.beat();
         assertTrue(gw.lastHeartbeat.contains("\"busy\":false"));
         assertEquals(Status.RECEIVING, m.view().status());
+    }
+
+    @Test
+    void depoisDoDesfechoOsResultadosSaoEnviadosEOEnvioEFechadoSemMudarODesfecho() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        work.outputs.put("relatorio.txt", "ok".getBytes(StandardCharsets.UTF_8));
+        work.outputs.put("dados/relatório final.csv", "a;b\n".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState, "o desfecho e informado antes dos arquivos, e nao muda por causa deles");
+        // o nome que vai a Platform e o RELATIVO a pasta de saida; o caminho deste computador nao vai
+        assertEquals(2, gw.results.size());
+        assertTrue(gw.results.get(1).startsWith("relatorio.txt|" + FakeGateway.sha256("ok".getBytes(StandardCharsets.UTF_8)) + "|2"));
+        assertTrue(gw.results.get(2).startsWith("dados/relatório final.csv|"));
+        assertTrue(gw.calls.stream().filter(c -> c.path().contains("/results/")).noneMatch(c -> c.path().contains(gw.attemptToken)), "token nunca na URL");
+        assertEquals("2|0", gw.resultsClosure);
+        assertFalse(Files.exists(journal()), "so depois do fechamento o diario some");
+    }
+
+    @Test
+    void oQuePassaDoLimiteNaoEEnviadoEEContadoNoFechamento() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        work.outputs.put("a.txt", new byte[10]);
+        work.outputs.put("grande-demais.bin", new byte[(int) MachineChannel.MAX_RESULT_BYTES + 1]);
+        work.outputs.put("recusado-pela-platform.bin", new byte[5]);
+        work.outputs.put("nome-" + "x".repeat(200) + ".txt", new byte[1]);
+        work.outputs.put("b.txt", new byte[3]);
+        gw.resultOverLimit = "recusado-pela-platform.bin";
+        work.ends("FAILED", 3);
+        m.pull();
+        assertEquals("FAILED", gw.attemptState, "o resultado do robo nao muda por causa dos arquivos");
+        assertEquals(3, gw.attemptExit);
+        assertEquals(2, gw.results.size());
+        assertTrue(gw.results.get(1).startsWith("a.txt|"));
+        assertTrue(gw.results.get(2).startsWith("b.txt|"), "o numero segue a ordem do que foi ENVIADO");
+        assertEquals("2|3", gw.resultsClosure, "tres ficaram de fora por limite, e isso e dito");
+        assertFalse(Files.exists(journal()));
+    }
+
+    @Test
+    void semRedeNoMeioDoEnvioEleERetomadoSemRepetirODesfechoNemDuplicarArquivo() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        m.pull();
+        work.outputs.put("um.txt", "1".getBytes(StandardCharsets.UTF_8));
+        work.outputs.put("dois.txt", "2".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        gw.failResults = 1; // o primeiro arquivo nao chega
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertTrue(journalText().contains("\"fase\":\"RESULTS\""), "o desfecho ja foi aceito; falta so o envio");
+        assertNull(gw.resultsClosure);
+        long finals = gw.reported.stream().filter("SUCCEEDED"::equals).count();
+        // o aplicativo fecha e abre: retoma o envio, sem informar o desfecho de novo
+        m.close();
+        RemoteMachine again = machine(true);
+        again.pull();
+        assertEquals(finals, gw.reported.stream().filter("SUCCEEDED"::equals).count());
+        assertEquals(2, gw.results.size());
+        assertEquals("2|0", gw.resultsClosure);
+        assertFalse(Files.exists(journal()));
+        // execucao sem arquivo nenhum: o envio e fechado com zero
+        gw.queue();
+        work.outputs.clear();
+        work.state = "RUNNING";
+        again.pull();
+        work.ends("SUCCEEDED", 0);
+        again.pull();
+        assertEquals("0|0", gw.resultsClosure);
+        // tentativa que nao chegou a executar: nenhum envio, nenhum fechamento
+        gw.queue();
+        work.refusal = "DEPENDENCIES_MISSING";
+        again.pull();
+        assertEquals("REFUSED", gw.attemptState);
+        assertNull(gw.resultsClosure);
+        assertTrue(gw.calls.stream().filter(c -> c.path().contains(gw.attemptId)).noneMatch(c -> c.path().contains("/results/")));
     }
 
     @Test
@@ -374,6 +473,11 @@ class RemoteDeliveryTest {
             @Override
             public void discard(String a) {
                 real.discard(a);
+            }
+
+            @Override
+            public List<RemoteMachine.ResultFile> results(String a, String run) {
+                return real.results(a, run);
             }
         });
         m.pull();

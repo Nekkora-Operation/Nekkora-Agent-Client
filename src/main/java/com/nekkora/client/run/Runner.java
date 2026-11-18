@@ -283,6 +283,35 @@ public final class Runner implements AutoCloseable {
         return r == RunController.CancelResult.REQUESTED || r == RunController.CancelResult.ALREADY_REQUESTED;
     }
 
+    /** Um arquivo que uma execucao gerenciada gravou na pasta de saida: o nome relativo a ela (com {@code /}), o caminho e o tamanho. */
+    public record ManagedOutput(String name, String file, long size) {
+    }
+
+    /**
+     * O que a execucao gerenciada gravou na pasta de saida DELA, em ordem estavel (pelo nome relativo). So arquivos comuns
+     * dentro da pasta: ligacoes nao sao seguidas nem listadas, e nada fora da pasta e alcancado. O arquivo de sinal do
+     * aplicativo fica de fora. No maximo 10.000 entradas sao percorridas.
+     */
+    public List<ManagedOutput> managedOutputs(String key, String id) {
+        Path dir = managedDir(key).orElse(null);
+        if (dir == null || !ExecutionId.valid(id)) return List.of();
+        Path out = dir.resolve("saida").resolve(id);
+        if (!Files.isDirectory(out, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return List.of();
+        List<ManagedOutput> found = new java.util.ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(out, 16)) {
+            for (Path p : walk.limit(10_000).toList()) {
+                if (!Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
+                String name = out.relativize(p).toString().replace('\\', '/');
+                if (name.equals(ExternalSignal.SIGNAL_FILE)) continue;
+                found.add(new ManagedOutput(name, p.toString(), Files.size(p)));
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            // o que ja foi lido vale; o resto fica de fora
+        }
+        found.sort(java.util.Comparator.comparing(ManagedOutput::name));
+        return List.copyOf(found);
+    }
+
     /** Apaga o CODIGO de uma execucao gerenciada (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
     public void discardManaged(String key) {
         managedDir(key).ifPresent(dir -> {

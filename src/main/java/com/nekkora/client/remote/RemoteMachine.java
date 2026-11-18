@@ -157,6 +157,13 @@ public final class RemoteMachine implements AutoCloseable {
 
         /** Apaga o codigo da tentativa (o ZIP e a copia extraida). O que a automacao gravou na saida fica. */
         void discard(String attemptId);
+
+        /** Os arquivos que a execucao gravou na pasta de saida dela, em ordem estavel (a mesma a cada chamada). */
+        List<ResultFile> results(String attemptId, String run);
+    }
+
+    /** {@code name}: relativo a pasta de saida, com {@code /}; e o que vai a Platform. {@code file}: o caminho neste computador; nao sai daqui. */
+    public record ResultFile(String name, String file, long size) {
     }
 
     /** {@code pythonLocalId}: a identidade LOCAL do Python escolhido (com o caminho); nunca sai deste computador. */
@@ -290,7 +297,18 @@ public final class RemoteMachine implements AutoCloseable {
                 e = e.reporting(end, null, coded ? p.exitCode() : null);
                 keep(e);
             }
-            channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode());
+            if (e.phase() != AttemptJournal.Phase.RESULTS) {
+                channel.state(credential, e.attemptId(), e.token(), e.epoch(), e.report(), e.reason(), e.exitCode());
+                if (w == null || e.phase() != AttemptJournal.Phase.RUNNING) {
+                    // nao chegou a executar: nao ha o que enviar
+                    forget(e, w);
+                    return;
+                }
+                // o desfecho esta na Platform; os arquivos de resultado vao depois e NAO o alteram
+                e = e.results();
+                keep(e);
+            }
+            sendResults(credential, e, w);
             forget(e, w);
         } catch (Refused x) {
             if (x.problem() == Problem.ATTEMPT_STALE || x.problem() == Problem.ATTEMPT_GONE || x.problem() == Problem.ATTEMPT_TRANSITION) {
@@ -379,6 +397,56 @@ public final class RemoteMachine implements AutoCloseable {
             w.cancel(run);
         }
         return e;
+    }
+
+    /**
+     * Envia o que a execucao gravou na pasta de saida e fecha o envio. Limites (os da Platform): 50 arquivos, 20 MiB cada, 50 MiB
+     * no total, nome de ate 200 caracteres. O que passa do limite NAO e enviado e e CONTADO: o fechamento diz quantos foram e
+     * quantos ficaram de fora. Falha de rede: o envio e retomado na proxima consulta (repetir um arquivo ja enviado nao muda
+     * nada). Se a Platform disser que o envio ja foi fechado, ou que esta entrega nao vale mais, para aqui.
+     */
+    private void sendResults(String credential, AttemptJournal.Entry e, Work w) throws Refused {
+        List<ResultFile> files;
+        try {
+            files = w == null ? List.of() : w.results(e.attemptId(), e.run());
+        } catch (RuntimeException x) {
+            files = List.of();
+        }
+        int sent = 0;
+        int skipped = 0;
+        long total = 0;
+        for (ResultFile f : files) {
+            boolean fits = sent < MachineChannel.MAX_RESULTS && f.size() <= MachineChannel.MAX_RESULT_BYTES
+                    && total + f.size() <= MachineChannel.MAX_RESULTS_TOTAL_BYTES && f.name() != null && !f.name().isEmpty() && f.name().length() <= 200;
+            if (!fits) {
+                skipped++;
+                continue;
+            }
+            try {
+                channel.sendResult(credential, e.attemptId(), e.token(), e.epoch(), sent + 1, f.name(), Path.of(f.file()));
+                sent++;
+                total += f.size();
+            } catch (Refused x) {
+                if (x.problem() == Problem.RESULT_LIMIT || x.problem() == Problem.STORAGE) {
+                    // a Platform nao aceitou este arquivo (limite ou nome), ou ele nao pode ser lido aqui: fica de fora, contado
+                    skipped++;
+                } else if (x.problem() == Problem.RESULT_CONFLICT) {
+                    // o envio desta tentativa ja foi fechado (ou este numero ja tem outro arquivo): nao ha mais o que enviar
+                    return;
+                } else {
+                    throw x;
+                }
+            } catch (java.nio.file.InvalidPathException x) {
+                skipped++;
+            }
+        }
+        try {
+            channel.completeResults(credential, e.attemptId(), e.token(), e.epoch(), sent, skipped);
+        } catch (Refused x) {
+            if (x.problem() != Problem.RESULT_CONFLICT) {
+                throw x;
+            }
+        }
     }
 
     private AttemptJournal.Entry refuse(AttemptJournal.Entry e, String reason) {

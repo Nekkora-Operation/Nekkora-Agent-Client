@@ -81,6 +81,10 @@ public final class MachineChannel {
         ATTEMPT_TRANSITION,
         /** A Platform nao tem os bytes do pacote da tentativa, ou eles nao conferem; ou o que chegou aqui nao confere. */
         PACKAGE_UNAVAILABLE,
+        /** O numero do resultado ja tem outro arquivo, ou o envio de resultados desta tentativa ja foi fechado. */
+        RESULT_CONFLICT,
+        /** O arquivo faria a tentativa passar do limite total de resultados: nao foi guardado. */
+        RESULT_LIMIT,
         UNEXPECTED
     }
 
@@ -323,6 +327,83 @@ public final class MachineChannel {
         return attempt(credential, attemptId, "/state", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"state\":" + Json.quote(state)
                 + (refusalReason == null ? "" : ",\"refusalReason\":" + Json.quote(refusalReason)) + (exitCode == null ? "" : ",\"exitCode\":" + exitCode)
                 + "}");
+    }
+
+    /** Limites dos resultados de uma tentativa (os mesmos da Platform; pontos de partida de laboratorio). */
+    static final int MAX_RESULTS = 50;
+    static final long MAX_RESULT_BYTES = 20L * 1024 * 1024;
+    static final long MAX_RESULTS_TOTAL_BYTES = 50L * 1024 * 1024;
+
+    /**
+     * Envia UM arquivo de resultado da tentativa. O nome e o RELATIVO a pasta de saida (nunca o caminho do arquivo neste
+     * computador) e vai num cabecalho, com escape de URL; os bytes vao no corpo, com o SHA-256 calculado aqui. O token e a epoca
+     * vao em cabecalhos. Repetir o mesmo arquivo no mesmo numero nao muda nada na Platform.
+     */
+    void sendResult(String credential, String attemptId, String token, int epoch, int number, String name, java.nio.file.Path file) throws Refused {
+        if (!UUID.matcher(attemptId).matches() || number < 1 || number > MAX_RESULTS) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        byte[] data;
+        String sha;
+        try {
+            if (java.nio.file.Files.size(file) > MAX_RESULT_BYTES) {
+                throw new Refused(Problem.RESULT_LIMIT);
+            }
+            data = java.nio.file.Files.readAllBytes(file);
+            sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));
+        } catch (IOException | java.security.NoSuchAlgorithmException e) {
+            throw new Refused(Problem.STORAGE);
+        }
+        HttpRequest.Builder b = HttpRequest.newBuilder(origin.apiPath(ATTEMPTS + attemptId + "/results/" + number)).timeout(Duration.ofMinutes(5))
+                .header("Accept", "application/json").header("Content-Type", "application/octet-stream").header("Nekkora-Agent-Contract", CONTRACT)
+                .header("Authorization", "Bearer " + credential).header("Nekkora-Attempt-Token", token).header("Nekkora-Attempt-Epoch", String.valueOf(epoch))
+                .header("Nekkora-Result-Name", java.net.URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20"))
+                .header("Nekkora-Result-Sha256", sha).PUT(HttpRequest.BodyPublishers.ofByteArray(data));
+        HttpResponse<String> r = send(b);
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                case "remote_result_conflict" -> Problem.RESULT_CONFLICT;
+                case "remote_result_limit" -> Problem.RESULT_LIMIT;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            // nome ou tamanho que a Platform nao aceita: este arquivo fica de fora, como os que passam do limite
+            throw new Refused(Problem.RESULT_LIMIT);
+        }
+        Map<String, Object> o = ok(authenticated(r));
+        if (!sha.equals(o.get("sha256"))) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+    }
+
+    /** Fecha o envio de resultados: quantos arquivos foram enviados e quantos ficaram de fora por limite. */
+    void completeResults(String credential, String attemptId, String token, int epoch, int sent, int skippedByLimit) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        String body = "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"sent\":" + sent + ",\"skippedByLimit\":" + skippedByLimit + "}";
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + "/results/complete", credential).POST(HttpRequest.BodyPublishers.ofString(body)));
+        if (r.statusCode() == 409) {
+            throw new Refused(switch (reason(r)) {
+                case "remote_attempt_stale" -> Problem.ATTEMPT_STALE;
+                case "remote_attempt_transition" -> Problem.ATTEMPT_TRANSITION;
+                case "remote_result_conflict" -> Problem.RESULT_CONFLICT;
+                default -> Problem.UNEXPECTED;
+            });
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        ok(authenticated(r));
     }
 
     /** Limite do pacote baixado (o mesmo da Platform para um pacote publicado). */
