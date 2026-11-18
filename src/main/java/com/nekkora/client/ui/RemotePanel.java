@@ -260,6 +260,9 @@ final class RemotePanel extends JPanel {
         }
         // T06 - o estado operacional: para qual organizacao, o que esta rodando agora e de quem e, e onde ver o que foi produzido
         String org = linked ? machine.organizationId().map(id -> RemoteText.organization(organizationName.apply(id))).orElse("") : "";
+        // o posto desta maquina na Platform, pelo nome que ela informou na presenca (ate ela chegar, so a organizacao)
+        String seat = linked ? machine.seatName().map(RemoteText::seat).orElse("") : "";
+        org = org.isEmpty() || seat.isEmpty() ? org : org + " " + seat;
         organization.setText(org);
         organization.setVisible(!org.isEmpty());
         RemoteMachine.Activity now = machine.activity();

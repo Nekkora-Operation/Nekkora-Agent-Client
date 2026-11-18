@@ -112,7 +112,17 @@ public final class MachineChannel {
     }
 
     /** {@code paused}: o recebimento segundo o servidor. */
-    record Presence(boolean paused, String credentialExpiresAt) {
+    /** {@code workerName}: o nome atual, na Platform, do Worker desta maquina; nulo se a Platform nao o informou. */
+    record Presence(boolean paused, String credentialExpiresAt, String workerName) {
+    }
+
+    /** O nome do Worker como veio, sem caracteres de controle e com ate 120 caracteres; nulo se ausente ou vazio. So para exibir. */
+    private static String workerName(Object value) {
+        if (!(value instanceof String s)) {
+            return null;
+        }
+        String clean = s.replaceAll("\\p{Cntrl}", " ").strip();
+        return clean.isEmpty() ? null : clean.substring(0, Math.min(clean.length(), 120));
     }
 
     private final PlatformOrigin origin;
@@ -182,7 +192,7 @@ public final class MachineChannel {
             // vinculada, mas a Platform nao a tem como habilitada
             throw new Refused(Problem.NOT_ENABLED);
         }
-        return new Presence(paused(remote.get("receiving")), text(o, "credentialExpiresAt"));
+        return new Presence(paused(remote.get("receiving")), text(o, "credentialExpiresAt"), workerName(remote.get("workerName")));
     }
 
     /** Pausa ou retoma; devolve o recebimento que ficou valendo no servidor ({@code true} = pausado). */

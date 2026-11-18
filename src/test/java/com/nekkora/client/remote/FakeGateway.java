@@ -58,6 +58,8 @@ public final class FakeGateway implements AutoCloseable {
     public volatile boolean enabled;
     public volatile boolean paused;
     public volatile boolean workerTaken;
+    /** O nome do Worker desta maquina, como a presenca o devolve; nulo = a "Platform" nao informa (API anterior). */
+    public volatile String workerName;
     /** Substitui a resposta de TODA rota, quando nao nulo. */
     public volatile Integer status;
     public volatile String body;
@@ -600,7 +602,8 @@ public final class FakeGateway implements AutoCloseable {
                     declaredRun = text.contains("\"REMOTE_RUN_1_0\"");
                     lastHeartbeat = text;
                     respond(x, 200, "{\"serverTime\":\"2026-11-15T12:00:00Z\",\"credentialExpiresAt\":\"" + credentialExpiresAt + "\",\"contractVersion\":\"1.0\""
-                            + (enabled ? ",\"remote\":{\"receiving\":\"" + (paused ? "PAUSED" : "ENABLED") + "\"}" : "") + "}");
+                            + (enabled ? ",\"remote\":{\"receiving\":\"" + (paused ? "PAUSED" : "ENABLED") + "\""
+                                    + (workerName == null ? "" : ",\"workerName\":" + com.nekkora.client.auth.Json.quote(workerName)) + "}" : "") + "}");
                 }
             }
             case "/agent/api/v1/remote/receiving" -> {

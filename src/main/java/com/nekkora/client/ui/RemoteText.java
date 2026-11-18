@@ -51,6 +51,14 @@ final class RemoteText {
                 : "Habilitado para a organização " + name + ".";
     }
 
+    /**
+     * O posto, na Platform, a que este computador está associado: é em nome dele que as execuções chegam aqui. A Platform o chama
+     * de Worker, e é com esse nome que a pessoa o encontra lá; por isso a palavra aparece neste texto, e só nele.
+     */
+    static String seat(String name) {
+        return "Worker na Platform: " + name + ". É para ele que as versões são autorizadas e é em nome dele que este computador recebe execuções.";
+    }
+
     /** T06 - onde ver o que as execuções pedidas pela Platform escreveram e produziram. Este aplicativo não mostra esse conteúdo. */
     static final String SEE_ON_PLATFORM = "Registros e resultados das execuções solicitadas pela Platform são consultados na Platform, na página da versão da "
             + "automação, em \"Execução remota\". Este aplicativo não mostra esse conteúdo. O que você executa aqui fica só aqui: veja em \"Última execução\", "

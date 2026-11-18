@@ -103,6 +103,13 @@ class ArchitectureTest {
             }
             // AGENT-CLIENT-PREPARACAO-002: a segunda lista fechada (os dois nomes de pasta procurados dentro do projeto) SAIU. A
             // pessoa aponta a pasta do ambiente virtual, com o nome que ele tiver, e o aplicativo nao procura nome nenhum
+            // PLATFORM-CLIENT-EXECUCAO-REMOTA-001 (pedido da titular, 16/11): a tela "Execucao remota" mostra o NOME do posto desta
+            // maquina, que a Platform chama de Worker. A palavra entra num unico texto exibido, e so nele; identificador, chamada
+            // ou qualquer outra funcao com esse nome fora da camada remote continuam proibidos
+            if (f.endsWith("RemoteText.java")) {
+                assertTrue(c.contains("\"Worker na Platform: \""), "o texto que mostra o posto desta maquina mudou");
+                c = c.replace("\"Worker na Platform: \"", "\"\"");
+            }
             boolean remota = "remote".equals(layer(f));
             if (remota) {
                 // campo do contrato da maquina (lista sempre vazia nesta versao), nao a classe do Agent administrativo
