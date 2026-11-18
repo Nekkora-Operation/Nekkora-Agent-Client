@@ -82,6 +82,9 @@ public final class ClientWindow extends JFrame {
     private transient com.nekkora.client.remote.RemoteMachine remote;
     private transient javax.swing.JDialog remoteDialog;
     private transient RemotePanel remotePanel;
+    /** Tela principal (depois da entrada): o resumo do vinculo e da comunicacao deste computador com a Platform. */
+    private RemoteSummary remoteSummary;
+    private final JPanel summarySlot = new JPanel(new java.awt.BorderLayout());
     /** Os testes de tela abrem a janela sem bloquear a fila de eventos. */
     boolean remoteModal = true;
     private transient Navigation navigation;
@@ -184,7 +187,13 @@ public final class ClientWindow extends JFrame {
         content.add(signInView, SIGN_IN);
         content.add(organizationsView, ORGANIZATIONS);
         content.add(contextView, CONTEXT);
-        setContentPane(content);
+        // o resumo da execucao remota fica acima das telas de depois da entrada (vazio enquanto ninguem entrou)
+        JPanel root = new JPanel(new java.awt.BorderLayout());
+        summarySlot.setOpaque(false);
+        summarySlot.setVisible(false);
+        root.add(summarySlot, java.awt.BorderLayout.NORTH);
+        root.add(content, java.awt.BorderLayout.CENTER);
+        setContentPane(root);
 
         avatar = new AvatarButton(this::requestSignOut, this::requestExit);
         avatar.setVisible(false);
@@ -294,6 +303,9 @@ public final class ClientWindow extends JFrame {
             return;
         }
         avatar.setProfile(state.profile().isReady() ? state.profile().value() : null);
+        if (remoteSummary != null) {
+            remoteSummary.refresh(); // a lista de organizacoes pode ter chegado: o nome da organizacao do vinculo entra no resumo
+        }
         organizationsView.show(state.organizations());
         organizationsView.showRefresh(state.selected() == null ? state.refresh() : Navigation.Refresh.NONE,
                 state.organizations().status() != Loadable.Status.LOADING && state.organizations().status() != Loadable.Status.IDLE);
@@ -401,6 +413,12 @@ public final class ClientWindow extends JFrame {
     public void setRemote(com.nekkora.client.remote.RemoteMachine remote) {
         this.remote = remote;
         avatar.setOnRemote(remote == null ? null : this::openRemote);
+        summarySlot.removeAll();
+        remoteSummary = remote == null ? null : new RemoteSummary(remote, this::organizationName, this::openRemote);
+        if (remoteSummary != null) {
+            summarySlot.add(remoteSummary, java.awt.BorderLayout.CENTER);
+        }
+        showSummary();
     }
 
     /** O nome da organizacao pelo identificador, na lista de quem entrou; vazio se nao ha lista ou ela nao esta nela. */
@@ -418,6 +436,22 @@ public final class ClientWindow extends JFrame {
         } catch (RuntimeException e) {
             return "";
         }
+    }
+
+    /** O resumo so aparece nas telas de depois da entrada; o nome da organizacao e relido (a lista pode ter chegado agora). */
+    private void showSummary() {
+        boolean on = remoteSummary != null && !SIGN_IN.equals(showing);
+        if (on) {
+            remoteSummary.refresh();
+        }
+        if (summarySlot.isVisible() != on) {
+            summarySlot.setVisible(on);
+            summarySlot.revalidate();
+        }
+    }
+
+    RemoteSummary remoteSummary() {
+        return remoteSummary != null && summarySlot.isVisible() ? remoteSummary : null;
     }
 
     void openRemote() {
@@ -531,6 +565,7 @@ public final class ClientWindow extends JFrame {
             }
         }
         getRootPane().setDefaultButton(SIGN_IN.equals(target) ? signInView.signInButton() : null);
+        showSummary();
     }
 
     String showing() {

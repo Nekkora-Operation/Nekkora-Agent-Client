@@ -370,6 +370,64 @@ class RemoteDesktopTest {
         assertTrue(machine.seatName().isEmpty());
     }
 
+    /** Tela principal: o resumo separa vinculo de comunicacao, mostra organizacao, Worker e atividade, e leva aos detalhes. */
+    @Test
+    void oResumoDaTelaPrincipalSeparaVinculoDeConexaoEMostraOrganizacaoWorkerEAtividade() throws Exception {
+        assertNull(read(() -> window.remoteSummary()), "sem a execucao remota entregue, nao ha resumo");
+        edt(() -> window.setRemote(machine));
+        RemoteSummary r = read(() -> window.remoteSummary());
+        assertNotNull(r);
+        // sem vinculo: diz isso, sem organizacao nem Worker
+        assertEquals("Execução remota: não vinculado à Platform", read(r::stateText));
+        assertEquals("", read(r::organizationText));
+        assertEquals("", read(r::seatText));
+        assertEquals("Atividade: nenhuma execução em andamento.", read(r::activityText));
+        // vinculado e com a presenca aceita: conectado; a organizacao fora da lista de quem entrou nao mostra identificador
+        machine.enable(gw.code("remote"));
+        gw.workerName = "Worker financeiro";
+        machine.beat();
+        settle();
+        assertEquals("Execução remota: vinculado · conectado", read(r::stateText));
+        assertEquals("Organização: fora da sua lista", read(r::organizationText));
+        assertEquals("Worker na Platform: Worker financeiro", read(r::seatText));
+        assertEquals("Atividade: nenhuma execução em andamento.", read(r::activityText));
+        assertFalse(read(r::organizationText).contains(gw.organizationId));
+        assertTrue(read(r::stateFits), "a linha do vinculo e da comunicacao cabe inteira na janela padrao");
+        // os textos curtos de cada estado: vinculo e comunicacao nunca se confundem
+        assertEquals("Execução remota: vinculado (pausado) · sem contato agora", RemoteText.summaryState(Status.PAUSED, false));
+        assertEquals("Execução remota: vínculo encerrado · sem contato", RemoteText.summaryState(Status.ENDED, true));
+        assertEquals("Organização: Fábrica Norte", RemoteText.summaryOrganization(true, "Fábrica Norte"));
+        assertEquals("Worker na Platform: ainda não informado", RemoteText.summarySeat(true, ""));
+        assertEquals("", RemoteText.summaryOrganization(false, "Fábrica Norte") + RemoteText.summarySeat(false, "W-01"));
+        assertEquals("Atividade: executando uma solicitação da Platform.", RemoteText.summaryActivity(RemoteMachine.Activity.REMOTE_RUNNING));
+        assertEquals("Atividade: execução local em andamento.", RemoteText.summaryActivity(RemoteMachine.Activity.LOCAL_RUNNING));
+        // a Platform deixa de responder: continua VINCULADO, e a comunicacao passa a "sem contato agora"
+        gw.status = 503;
+        machine.beat();
+        settle();
+        assertEquals(Status.RECEIVING, machine.view().status());
+        assertEquals("Execução remota: vinculado · sem contato agora", read(r::stateText));
+        assertTrue(read(r::stateFits), "sem contato agora aparece inteiro, nao cortado");
+        // na largura minima da janela a primeira linha continua inteira
+        edt(() -> window.setSize(window.getMinimumSize()));
+        settle();
+        assertTrue(read(r::stateFits), "inteiro tambem na largura minima da janela");
+        gw.status = null;
+        // "Ver detalhes" abre a tela de execucao remota
+        // (dialogo modal, como em producao: o clique vai pela fila de eventos, sem esperar o dialogo fechar)
+        assertTrue(read(() -> r.detailsButton().isShowing() && r.detailsButton().isEnabled()));
+        SwingUtilities.invokeLater(() -> r.detailsButton().doClick(0));
+        settle();
+        assertNotNull(read(() -> window.remoteDialog()));
+        assertTrue(read(() -> window.remoteDialog().isModal()));
+        edt(() -> window.closeRemote());
+        // o resumo e so das telas de depois da entrada: na tela de entrada ele nao aparece (o vinculo da maquina continua)
+        edt(() -> window.show(com.nekkora.client.signin.SignInState.INITIAL));
+        assertEquals("entrada", read(() -> window.showing()));
+        assertNull(read(() -> window.remoteSummary()));
+        assertEquals(Status.RECEIVING, machine.view().status());
+    }
+
     @Test
     void semContatoATelaDizQueOEstadoEOUltimoConhecido() throws Exception {
         machine.enable(gw.code("remote"));
@@ -377,12 +435,23 @@ class RemoteDesktopTest {
         machine.beat();
         edt(() -> window.setRemote(machine));
         RemotePanel p = openDialog();
-        assertEquals(RemoteText.NO_CONTACT, read(() -> p.contactNotice().text()));
-        // a presenca volta com a janela aberta: o aviso some sem a pessoa fazer nada
+        // VINCULADO (ha credencial guardada) e SEM CONTATO sao ditos em linhas separadas: o vinculo nao comprova contato
+        assertTrue(read(p::linkText).startsWith("Vínculo: este computador está vinculado à Platform"), read(p::linkText));
+        assertTrue(read(p::linkText).contains("não comprova contato agora"));
+        String semContato = read(() -> p.contactNotice().text());
+        assertTrue(semContato.startsWith("Comunicação: sem contato agora."), semContato);
+        assertTrue(semContato.matches(".*O último contato aceito foi às [0-9]{2}:[0-9]{2}:[0-9]{2}\\. O estado mostrado é o último conhecido\\."), semContato);
+        // o resumo da tela principal diz o mesmo, em poucas palavras
+        RemoteSummary resumo = read(() -> window.remoteSummary());
+        assertNotNull(resumo, "o resumo aparece na tela principal depois da entrada");
+        assertEquals("Execução remota: vinculado · sem contato agora", read(resumo::stateText));
+        // a presenca volta com a janela aberta: a comunicacao passa a conectado sem a pessoa fazer nada, na tela e no resumo
         gw.status = null;
         machine.beat();
         settle();
-        assertEquals("", read(() -> p.contactNotice().text()));
+        String conectado = read(() -> p.contactNotice().text());
+        assertTrue(conectado.matches("Comunicação: conectado\\. A Platform aceitou o último contato deste computador às [0-9]{2}:[0-9]{2}:[0-9]{2}\\."), conectado);
+        assertEquals("Execução remota: vinculado · conectado", read(resumo::stateText));
         // terminar a sessao da pessoa nao desabilita a maquina
         edt(() -> window.closeRemote());
         edt(() -> flow.close());
