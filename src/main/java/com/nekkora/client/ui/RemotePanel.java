@@ -135,6 +135,8 @@ final class RemotePanel extends JPanel {
         }
 
         code.addActionListener(e -> submitEnable());
+        // a confirmacao desmarcada desabilita o botao (a validacao na acao continua existindo)
+        confirm.addActionListener(e -> enable.setEnabled(!busy && confirm.isSelected()));
         enable.addActionListener(e -> submitEnable());
         toggle.addActionListener(e -> {
             boolean paused = machine.view().status() == Status.PAUSED;
@@ -178,8 +180,12 @@ final class RemotePanel extends JPanel {
         code.setText("");
     }
 
+    /**
+     * O botao so fica habilitado com a confirmacao marcada; a confirmacao e conferida AQUI de novo (Enter no campo do codigo
+     * chega por este caminho): sem ela, nada sai deste computador.
+     */
     private void submitEnable() {
-        if (busy || !enable.isEnabled()) {
+        if (busy) {
             return;
         }
         String typed = code.getText().strip();
@@ -336,6 +342,7 @@ final class RemotePanel extends JPanel {
         for (JComponent c : new JComponent[] {code, confirm, enable, toggle, disable, disableConfirm, keep, refreshPython}) {
             c.setEnabled(!busy);
         }
+        enable.setEnabled(!busy && confirm.isSelected());
         relayout();
     }
 
