@@ -5,10 +5,12 @@
 | Componente | Versão | Licença | Uso |
 |---|---|---|---|
 | FlatLaf (`com.formdev:flatlaf`) | 3.7.2 | Apache-2.0 | Aparência base do Swing e barra de título |
+| JNA (`net.java.dev.jna:jna-platform` e `jna`) | 5.17.0 | Apache-2.0 (dupla licença Apache-2.0 / LGPL-2.1; usada sob Apache-2.0) | DPAPI do Windows, para proteger a credencial **da máquina** (só `remote.WindowsKeyring`) |
 | OpenJDK (runtime reduzido por `jlink`) | 21 | GPLv2 com Classpath Exception | Runtime Java embarcado |
 
-É a única biblioteca de execução. O teste `ArchitectureTest.umaUnicaDependenciaDeExecucao` falha se outra for
-acrescentada sem atualizar este inventário.
+São as únicas bibliotecas de execução. O teste `ArchitectureTest.dependenciasDeExecucaoSaoUmaListaFechada` falha se
+outra for acrescentada sem atualizar este inventário, e `aCamadaRemotaESeparadaDaEntradaEDaExecucaoLocal` falha se o JNA
+for usado fora da proteção da credencial.
 
 ## Só na construção e nos testes (não vão no aplicativo)
 
@@ -32,6 +34,9 @@ A Nekkora-lib é privada (`"license": "UNLICENSED"`), da própria Nekkora.
 O núcleo local do Client foi **portado** (copiado e adaptado) do repositório `Nekkora-Operation/Nekkora-Agent`, branch
 `dev`, commit `9b1e7e1`. É código da própria Nekkora; o Client continua **sem depender do JAR** do Nekkora Agent e sem
 referenciar os pacotes dele (`ArchitectureTest.nenhumCodigoNemIntegracaoDoAgentAdministrativo`). Só o JDK é usado.
+
+A camada `com.nekkora.client.remote` (vínculo deste computador para execução remota) **não** foi portada: foi escrita
+para o Client, sobre o contrato da máquina publicado pela API.
 
 ### Pacotes locais — `com.nekkora.client.pack`
 

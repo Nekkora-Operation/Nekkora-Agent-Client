@@ -11,7 +11,7 @@ import java.util.Map;
  * {@code false} e {@code null}. Qualquer coisa fora da gramatica, chave repetida ou sobra depois do valor:
  * {@link IllegalArgumentException} - resposta malformada nunca e interpretada "pelo que deu para ler".
  */
-final class Json {
+public final class Json {
 
     private final String s;
     private int i;
@@ -41,7 +41,7 @@ final class Json {
 
     /** O objeto da raiz, ou erro se a raiz nao for um objeto. */
     @SuppressWarnings("unchecked")
-    static Map<String, Object> object(String text) {
+    public static Map<String, Object> object(String text) {
         return object(text, 16_384);
     }
 
@@ -55,7 +55,7 @@ final class Json {
     }
 
     /** Um texto como literal JSON (aspas, barra e controles escapados). */
-    static String quote(String text) {
+    public static String quote(String text) {
         StringBuilder b = new StringBuilder(text.length() + 2).append('"');
         for (int k = 0; k < text.length(); k++) {
             char c = text.charAt(k);

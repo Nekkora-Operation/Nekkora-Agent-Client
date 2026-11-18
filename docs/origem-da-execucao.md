@@ -10,8 +10,10 @@ iniciada na máquina podia ser monitorada pela Platform quando havia autorizaç�
 | **No Agent** (botão Executar deste aplicativo) | Só para este computador. Nada vai à Platform, nem depois |
 | **Na Platform** (pedido real, com vínculo de máquina, Worker e autorizações) | Para a Platform, pelo canal da máquina |
 
-Executar no Agent é local **mesmo** com a conta conectada, a organização escolhida, a rede disponível ou uma autorização
-de monitoramento válida. Não há envio retroativo quando a rede volta, nem quando a máquina for pareada no futuro.
+Executar no Agent é local **mesmo** com a conta conectada, a organização escolhida, a rede disponível, uma autorização
+de monitoramento válida ou **este computador habilitado para execução remota**. Não há envio retroativo quando a rede
+volta, nem depois de habilitar a máquina (`docs/execucao-remota.md`): a camada `remote` não conhece `run` nem `pack`, e
+`run`, `pack` e `nav` não conhecem `remote` (`ArchitectureTest.aCamadaRemotaESeparadaDaEntradaEDaExecucaoLocal`).
 
 Login, catálogo (organizações, ambientes, automações, versões) e download de pacote continuam sendo operações remotas.
 Elas têm a auditoria delas na Platform e não são registros de execução.

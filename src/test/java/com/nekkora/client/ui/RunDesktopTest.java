@@ -253,9 +253,9 @@ class RunDesktopTest {
         assertFalse(read(() -> v.statusLabel().isVisible()), "sem ambiente, nenhum estado de integracao e afirmado");
         edt(() -> v.workspaceBox().setSelectedItem(fin));
         answer();
-        assertEquals("Somente local — integração com a Platform não configurada", read(() -> v.statusLabel().getText()));
+        assertEquals("Executar aqui é somente local", read(() -> v.statusLabel().getText()));
         assertTrue(read(() -> v.statusLabel().isShowing()));
-        assertTrue(read(() -> v.statusLabel().getToolTipText()).contains("sem gatilhos da Platform e sem envio de registros de monitoramento"));
+        assertTrue(read(() -> v.statusLabel().getToolTipText()).contains("nenhum registro ou resultado é enviado à Platform"));
         assertEquals("", read(v::unavailableNote), "todas as acoes existem: a nota de indisponibilidade nao aparece");
         evidence("sakura-dark-estado-somente-local", window.getRootPane());
         // nenhum botao promete integracao

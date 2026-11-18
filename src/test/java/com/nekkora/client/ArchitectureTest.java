@@ -22,7 +22,10 @@ import org.junit.jupiter.api.Test;
 /**
  * Fronteiras do Client, conferidas no codigo-fonte e no pom, por CAMADA:
  * <ul>
- * <li>{@code auth}: a unica camada que fala com a rede e abre o navegador;</li>
+ * <li>{@code auth}: o canal DA PESSOA com a Platform (entrada, navegacao, download) e a unica camada que abre o navegador;</li>
+ * <li>{@code remote}: o canal DA MAQUINA com a Platform (PLATFORM-CLIENT-EXECUCAO-REMOTA-001): habilitacao deste computador,
+ * presenca, pausar e desabilitar. Fala com a rede e guarda a credencial da maquina protegida pelo sistema; sem tela, sem
+ * processo. Nao conhece a sessao da pessoa, nem a execucao local, nem as aprovacoes locais;</li>
  * <li>{@code storage}: pasta de dados, tema e instancia unica; nao conhece a entrada;</li>
  * <li>{@code pack}: pacote local (leitura segura de ZIP, validador, impressao digital, empacotador, pacotes guardados por
  * organizacao e ambiente). Le e grava arquivos; sem rede, sem tela, sem processo;</li>
@@ -30,9 +33,10 @@ import org.junit.jupiter.api.Test;
  * <li>{@code nav}: regras da navegacao; sem rede, sem tela, sem disco, sem processo;</li>
  * <li>{@code ui}: a unica camada com Swing.</li>
  * </ul>
- * E, em todas: nenhum codigo, classe ou integracao do Nekkora Agent administrativo (maquina pareada, canal da maquina,
- * pedidos remotos, envio de registros, instalacao de dependencias); uma unica dependencia de execucao (FlatLaf); nenhum
- * login simulado; nenhum segredo, endereco de laboratorio ou certificado embarcado; nenhum registro em log ou console.
+ * E, em todas: nenhuma classe do Nekkora Agent administrativo; o canal da maquina so em {@code remote}; nenhum envio de
+ * registros da execucao local, nenhuma instalacao de dependencias; duas dependencias de execucao (FlatLaf e JNA, esta so
+ * para a protecao da credencial da maquina); nenhum login simulado; nenhum segredo, endereco de laboratorio ou certificado
+ * embarcado; nenhum registro em log ou console.
  */
 class ArchitectureTest {
 
@@ -40,11 +44,13 @@ class ArchitectureTest {
     private static final Path RESOURCES = Path.of("src/main/resources");
 
     /** Camadas sem interface grafica. */
-    private static final Set<String> NO_SCREEN = Set.of("theme", "storage", "signin", "auth", "pack", "run", "nav");
+    private static final Set<String> NO_SCREEN = Set.of("theme", "storage", "signin", "auth", "pack", "run", "nav", "remote");
+    /** Camadas que falam com a rede: a da pessoa e a da maquina. */
+    private static final Set<String> NETWORK = Set.of("auth", "remote");
     /** Nucleo local: nem rede, nem tela. */
     private static final Set<String> LOCAL_CORE = Set.of("pack", "run", "nav");
     /** Camadas que podem ler e gravar arquivos. */
-    private static final Set<String> DISK = Set.of("storage", "pack", "run");
+    private static final Set<String> DISK = Set.of("storage", "pack", "run", "remote");
 
     private static List<Path> javaFiles(Path root) throws IOException {
         try (Stream<Path> s = Files.walk(root)) {
@@ -72,18 +78,20 @@ class ArchitectureTest {
     }
 
     /**
-     * Nada do Nekkora Agent administrativo: nem os pacotes e classes dele, nem a integracao da maquina com a Platform
-     * (credencial da maquina, canal {@code /agent/api/}, codigos de vinculo), nem as funcoes que nao pertencem ao Client.
-     * O nucleo local foi PORTADO (ver THIRD-PARTY-NOTICES.md), nao referenciado: as classes cujo papel mudou tem outro
-     * nome aqui, e o nome antigo continua proibido.
+     * Nada do Nekkora Agent administrativo: nem os pacotes e classes dele, nem as funcoes que nao pertencem ao Client. O
+     * nucleo local foi PORTADO (ver THIRD-PARTY-NOTICES.md), nao referenciado: as classes cujo papel mudou tem outro nome
+     * aqui, e o nome antigo continua proibido. O canal da maquina ({@code /agent/api/}, credencial e codigo de vinculo) so
+     * existe na camada {@code remote}, escrita para o Client; fora dela continua proibido, como sempre.
      */
     @Test
     void nenhumCodigoNemIntegracaoDoAgentAdministrativo() throws IOException {
         Pattern proibido = Pattern.compile("com\\.nekkora\\.agent\\b|com\\.nekkora\\.ui\\b|com\\.nekkora\\.tokens\\b"
                 + "|ImportFlow|ImportDialog|PackageHistory|MachineClient|PlatformService|RemoteCatalog|AgentBootstrap|AgentApp|CredentialVault|DpapiSecretStore"
                 + "|RunRequest|ExecutionController|ApprovalStore|PackageShelf|ExternalBindings|ZipStager|FaultPoints"
-                + "|/agent/api/|nka1\\.|nkp1\\.|enrollments|Runtime\\.getRuntime\\(\\)\\.exec");
-        Pattern funcao = Pattern.compile("(?iu)\\b(pareamento|pairing|worker|catalog|cat[aá]logo|supervis|licen[cç]a|upload|pip install|venv)\\w*");
+                + "|Runtime\\.getRuntime\\(\\)\\.exec");
+        Pattern canalDaMaquina = Pattern.compile("/agent/api/|nka1\\.|nkp1\\.|enrollments|Nekkora-Agent-|pair-remote");
+        Pattern funcao = Pattern.compile("(?iu)\\b(pareamento|pairing|catalog|cat[aá]logo|supervis|licen[cç]a|upload|pip install|venv)\\w*");
+        Pattern posto = Pattern.compile("(?iu)\\bworker\\w*");
         List<String> achados = new ArrayList<>();
         for (Path f : javaFiles(MAIN)) {
             String c = code(f);
@@ -95,10 +103,75 @@ class ArchitectureTest {
             }
             // AGENT-CLIENT-PREPARACAO-002: a segunda lista fechada (os dois nomes de pasta procurados dentro do projeto) SAIU. A
             // pessoa aponta a pasta do ambiente virtual, com o nome que ele tiver, e o aplicativo nao procura nome nenhum
+            boolean remota = "remote".equals(layer(f));
+            if (remota) {
+                // campo do contrato da maquina (lista sempre vazia nesta versao), nao a classe do Agent administrativo
+                c = c.replace("launchedRunRequests", "");
+            } else {
+                achados.addAll(matches(f, c, canalDaMaquina, "canal da maquina fora de remote"));
+                achados.addAll(matches(f, c, posto, "funcao fora do Client"));
+            }
             achados.addAll(matches(f, c, proibido, "Nekkora Agent administrativo"));
             achados.addAll(matches(f, c, funcao, "funcao fora do Client"));
         }
         assertEquals(List.of(), achados);
+    }
+
+    /**
+     * PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01a. As rotas do canal da maquina sao uma lista FECHADA: resgate do codigo,
+     * presenca, recebimento e encerramento do vinculo. Nesta versao nenhuma e de solicitacao, download, registro ou
+     * resultado de execucao (essas entram com as proximas tarefas, cada uma acrescentada aqui de forma explicita).
+     */
+    @Test
+    void rotasDoCanalDaMaquinaSaoUmaListaFechada() throws IOException {
+        Pattern rota = Pattern.compile("\"(/agent/api/[^\"]*)\"");
+        Set<String> rotas = new TreeSet<>();
+        for (Path f : javaFiles(MAIN)) {
+            Matcher m = rota.matcher(code(f));
+            while (m.find()) {
+                rotas.add(m.group(1));
+            }
+        }
+        assertEquals(new TreeSet<>(Set.of("/agent/api/v1/enrollments/redeem", "/agent/api/v1/heartbeat", "/agent/api/v1/remote/receiving",
+                "/agent/api/v1/link/unlink")), rotas);
+    }
+
+    /**
+     * Entrar no aplicativo e habilitar a maquina sao atos distintos, e executar aqui continua local:
+     * <ul>
+     * <li>{@code remote} nao conhece a sessao da pessoa: de {@code auth} so usa o endereco da Platform e o leitor de JSON;
+     * nada de {@code signin}. O token de quem entrou nunca vira credencial de maquina;</li>
+     * <li>{@code remote} nao conhece a execucao local nem os pacotes ({@code run}, {@code pack}, {@code nav}) e, portanto,
+     * nao le aprovacoes locais: uma aprovacao antiga nao pode virar solicitacao remota;</li>
+     * <li>as camadas da execucao local, da entrada e do armazenamento nao conhecem {@code remote}: nenhum registro, resultado
+     * ou estado de uma execucao local chega ao canal da maquina, com o computador habilitado ou nao. So a tela e a raiz
+     * (que monta o aplicativo) a referenciam;</li>
+     * <li>codigo nativo (JNA) so na protecao da credencial da maquina.</li>
+     * </ul>
+     */
+    @Test
+    void aCamadaRemotaESeparadaDaEntradaEDaExecucaoLocal() throws IOException {
+        Pattern daPessoa = Pattern.compile("com\\.nekkora\\.client\\.(signin|run|pack|nav|ui|storage)\\b|com\\.nekkora\\.client\\.auth\\.(?!Json\\b|PlatformOrigin\\b)\\w+"
+                + "|DesktopSession|PlatformApi|BrowserSignIn|access_token|ApprovalLedger|aprovac");
+        Pattern remota = Pattern.compile("com\\.nekkora\\.client\\.remote\\b");
+        Pattern nativo = Pattern.compile("com\\.sun\\.jna");
+        List<String> achados = new ArrayList<>();
+        int conferidos = 0;
+        for (Path f : javaFiles(MAIN)) {
+            String pkg = layer(f);
+            String c = code(f);
+            if ("remote".equals(pkg)) {
+                conferidos++;
+                achados.addAll(matches(f, c, daPessoa, "a camada remota nao conhece a pessoa nem a execucao local"));
+            } else if (!"ui".equals(pkg) && !"client".equals(pkg)) {
+                achados.addAll(matches(f, c, remota, "so a tela e a raiz conhecem a camada remota"));
+            }
+            if (!f.endsWith("WindowsKeyring.java")) {
+                achados.addAll(matches(f, c, nativo, "codigo nativo fora da protecao da credencial"));
+            }
+        }
+        assertEquals(List.of(), achados);
+        assertTrue(conferidos > 0, "a camada remota existe e foi conferida");
     }
 
     @Test
@@ -112,14 +185,15 @@ class ArchitectureTest {
             assertEquals(MAIN.relativize(f.getParent()).toString().replace('\\', '/').replace('/', '.'), m.group(1), f.toString());
         }
         Set<String> permitidos = Set.of("com.nekkora.client", "com.nekkora.client.theme", "com.nekkora.client.storage", "com.nekkora.client.signin",
-                "com.nekkora.client.auth", "com.nekkora.client.ui", "com.nekkora.client.pack", "com.nekkora.client.run", "com.nekkora.client.nav");
+                "com.nekkora.client.auth", "com.nekkora.client.ui", "com.nekkora.client.pack", "com.nekkora.client.run", "com.nekkora.client.nav",
+                "com.nekkora.client.remote");
         for (String p : pacotes) {
             assertTrue(permitidos.contains(p), "pacote fora da lista: " + p);
         }
     }
 
     @Test
-    void umaUnicaDependenciaDeExecucao() throws IOException {
+    void dependenciasDeExecucaoSaoUmaListaFechada() throws IOException {
         String pom = Files.readString(Path.of("pom.xml"));
         Matcher dep = Pattern.compile("(?s)<dependency>(.*?)</dependency>").matcher(pom);
         Set<String> execucao = new TreeSet<>();
@@ -131,13 +205,17 @@ class ArchitectureTest {
                 execucao.add(a.group(1) + ":" + a.group(2));
             }
         }
-        assertEquals(Set.of("com.formdev:flatlaf"), execucao);
+        // FlatLaf (tela) e JNA (DPAPI do Windows, para a credencial DA MAQUINA; so WindowsKeyring a usa)
+        assertEquals(Set.of("com.formdev:flatlaf", "net.java.dev.jna:jna-platform"), execucao);
         assertFalse(pom.contains("nekkora-agent<"), "o Client nao depende do JAR do Nekkora Agent");
         assertFalse(pom.contains("<systemPath>"), "nenhum JAR local embarcado");
-        assertFalse(pom.contains("net.java.dev.jna") || pom.contains("nekkora-swing-ui"), "nem JNA nem a biblioteca de telas do Studio");
+        assertFalse(pom.contains("nekkora-swing-ui"), "nem a biblioteca de telas do Studio");
     }
 
-    /** So {@code ui} (e a raiz, que monta a janela) conhece Swing; so {@code auth} fala com a rede e abre o navegador. */
+    /**
+     * So {@code ui} (e a raiz, que monta a janela) conhece Swing; so {@code auth} (a pessoa) e {@code remote} (a maquina)
+     * falam com a rede; so {@code auth} abre o navegador.
+     */
     @Test
     void camadasSemInterfaceNaoImportamSwingNemRede() throws IOException {
         List<String> achados = new ArrayList<>();
@@ -149,8 +227,11 @@ class ArchitectureTest {
             if (NO_SCREEN.contains(pkg)) {
                 achados.addAll(matches(f, c, tela, "interface grafica numa camada sem tela"));
             }
-            if (!"auth".equals(pkg)) {
-                achados.addAll(matches(f, c, rede, "rede ou navegador fora de auth"));
+            if (!NETWORK.contains(pkg)) {
+                achados.addAll(matches(f, c, rede, "rede ou navegador fora de auth e remote"));
+            }
+            if ("remote".equals(pkg)) {
+                achados.addAll(matches(f, c, Pattern.compile("java\\.awt\\.Desktop|ServerSocket|com\\.sun\\.net"), "a camada remota so faz chamadas de saida"));
             }
             if (NO_SCREEN.contains(pkg) && !"auth".equals(pkg) && c.contains("java.awt.")) {
                 achados.add(f.getFileName() + ": AWT numa camada sem tela");

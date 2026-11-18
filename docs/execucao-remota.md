@@ -1,0 +1,78 @@
+# Execução remota: habilitação deste computador
+
+PLATFORM-CLIENT-EXECUCAO-REMOTA-001, T01a. Esta entrega traz **só a habilitação**: o vínculo deste computador com a
+Platform, a presença, pausar/retomar e desabilitar. **O aplicativo ainda não executa o que a Platform solicitar**; isso
+vem nas próximas tarefas, e a tela diz isso enquanto for verdade.
+
+Contrato do servidor: `docs/platform-client-execucao-remota-001/t01a-habilitacao-e-elegibilidade.md`, no repositório da API.
+
+## Dois atos distintos
+
+| Ato | O que é | Onde |
+|---|---|---|
+| **Entrar** | A pessoa, com a conta dela, pelo navegador | camadas `auth` e `signin` |
+| **Habilitar este computador** | A máquina, com um código criado na Platform por quem administra as máquinas, e a confirmação explícita aqui | camada `remote` |
+
+Entrar não habilita. Sair não desabilita. Fechar o aplicativo não desabilita (só a presença para). A camada `remote` não
+recebe, não lê e não guarda a sessão da pessoa; o token de quem entrou nunca vira credencial de máquina.
+
+## Habilitar
+
+Menu da conta → **Execução remota**. A pessoa informa o código de habilitação, marca a confirmação e clica em
+**Habilitar este computador**. Sem as duas coisas, nada sai deste computador.
+
+- O aplicativo declara ao servidor que a confirmação foi feita na máquina (`Nekkora-Agent-Intent: pair-remote`). Um
+  código de pareamento comum é recusado pelo servidor, e a tela diz por quê.
+- Só vale a resposta que **diz** que a máquina foi habilitada. Qualquer outra coisa é falha, nunca sucesso.
+- O código some do campo assim que a tentativa termina, com sucesso ou não. Ele não é gravado.
+- Resposta perdida: repetir **o mesmo código na mesma abertura do aplicativo** reaproveita o segredo gerado e conclui.
+  Se o aplicativo for fechado antes, é preciso um código novo (e quem administra revoga a máquina que ficou na Platform).
+
+## A credencial da máquina
+
+- O segredo é gerado aqui (32 bytes aleatórios) e viaja uma vez, no resgate.
+- Fica em `%LOCALAPPDATA%\Nekkora\AgentClient\remota\maquina.json`, **protegido pela DPAPI do usuário do Windows**
+  (`WindowsKeyring`, via JNA). O arquivo traz a identidade (sem segredo) e o segredo cifrado; nunca a credencial em claro.
+- Sem a proteção do sistema disponível, o aplicativo **não habilita** e não grava nada.
+- Se o servidor habilitar e este computador não conseguir gravar, o aplicativo encerra o vínculo no servidor.
+- A credencial só é enviada ao endereço da Platform em que foi emitida. Arquivo de outro endereço, adulterado ou de outro
+  usuário do Windows não é usado: a tela oferece só **Remover deste computador**.
+- Nada disso aparece em log (o aplicativo não tem log), exceção, argumento de processo ou ZIP.
+
+## Presença, pausar, desabilitar
+
+- **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Nesta versão
+  ela **não declara nenhuma capacidade de execução remota**, então a Platform mostra o computador como *incompatível* e
+  não lhe entrega nada.
+- **Pausar / Retomar recebimento:** vale no servidor, que é a referência; a presença traz o valor de lá.
+- **Desabilitar este computador:** pede um segundo passo de confirmação, encerra o vínculo na Platform e remove a
+  credencial daqui. **Sem contato com a Platform, nada é removido** e a tela avisa: a pessoa tenta de novo, ou quem
+  administra revoga a máquina na Platform.
+- **Vínculo encerrado na Platform** (máquina revogada): a credencial deixa de ser enviada e a tela oferece só remover.
+
+## O que continua local
+
+Executar pelo botão **Executar** é local, com o computador habilitado ou não. `run`, `pack` e `nav` não conhecem
+`remote`, e `remote` não conhece a execução local nem as aprovações locais: uma aprovação antiga não vira solicitação
+remota, e nenhum registro ou resultado de execução local chega ao canal da máquina. Ver `docs/origem-da-execucao.md`.
+
+## Dependência nova
+
+JNA 5.17.0 (`jna-platform`), só para a DPAPI. É a segunda biblioteca de execução do aplicativo; o inventário está em
+`THIRD-PARTY-NOTICES.md`. No pacote, a biblioteca nativa do JNA vem da pasta do aplicativo: nada é descompactado em pasta
+temporária.
+
+## Testes
+
+| O que | Teste |
+|---|---|
+| Habilitar, recusas, resposta perdida, pausar, desabilitar, vínculo encerrado, outro endereço, arquivo adulterado, sem proteção | `RemoteMachineTest` (canal simulado em HTTPS; DPAPI real) |
+| Tela: menu, diálogo modal, cliques, confirmação obrigatória, segundo passo, troca de tema | `RemoteDesktopTest` (`-Pdesktop`) |
+| Camadas, rotas fechadas, JNA só na proteção, dependências | `ArchitectureTest` |
+
+## Limites desta entrega
+
+- Não há execução remota: só o vínculo.
+- Renovação da credencial (90 dias) sem refazer a habilitação: T01b.
+- Desabilitar exige contato com a Platform.
+- Os testes automatizados usam um canal simulado; a prova contra a API real é a do laboratório, registrada na entrega.
