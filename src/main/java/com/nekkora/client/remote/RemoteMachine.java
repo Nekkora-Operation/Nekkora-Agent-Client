@@ -580,7 +580,8 @@ public final class RemoteMachine implements AutoCloseable {
                 abandonIfEnded();
                 return;
             }
-            AttemptJournal.Entry pending = journal.load(current.agentId()).orElse(null);
+            // o diario do disco, ou a etapa que este processo ja conhece e nao conseguiu gravar (o disco ficou para tras)
+            AttemptJournal.Entry pending = known(current, journal.load(current.agentId()).orElse(null));
             if (pending == null && work == null) {
                 return;
             }
@@ -988,9 +989,37 @@ public final class RemoteMachine implements AutoCloseable {
     private void keep(AttemptJournal.Entry e) {
         try {
             journal.save(e);
+            unsavedEntry = null;
         } catch (IOException x) {
-            // o que ja estava gravado continua valendo: a etapa e repetida (sem efeito no servidor) na proxima abertura
+            // O disco ficou para tras. ENQUANTO ESTE PROCESSO ESTIVER ABERTO ele sabe o que fez (a execucao que iniciou, o desfecho
+            // que vai informar): a proxima consulta parte daqui e tenta gravar de novo. Se o aplicativo fechar antes, so resta o que
+            // esta no disco - e ai a duvida e legitima (nada e presumido, nada e relancado).
+            unsavedEntry = e;
         }
+    }
+
+    /**
+     * A etapa da tentativa que este processo conhece e NAO conseguiu gravar no diario (nulo: o diario esta em dia). So em memoria.
+     * Nao e evidencia nova: e o que este mesmo processo acabou de fazer.
+     */
+    private AttemptJournal.Entry unsavedEntry;
+
+    /**
+     * O que vale para a consulta: o que esta no diario, ou a etapa mais recente DESTA tentativa que este processo conhece e nao
+     * conseguiu gravar. A etapa em memoria so vale para a mesma maquina e a mesma tentativa que o diario ainda tem; se o diario
+     * ja e de outra, ou nao ha diario, ela e descartada.
+     */
+    private AttemptJournal.Entry known(MachineVault.Link current, AttemptJournal.Entry onDisk) {
+        AttemptJournal.Entry memory = unsavedEntry;
+        if (memory == null) {
+            return onDisk;
+        }
+        if (onDisk == null || !memory.agentId().equals(current.agentId()) || !memory.attemptId().equals(onDisk.attemptId())) {
+            unsavedEntry = null;
+            return onDisk;
+        }
+        keep(memory);
+        return memory;
     }
 
     /** A tentativa esta resolvida com a Platform: o diario e apagado e o codigo dela e removido deste computador. */
@@ -1419,6 +1448,7 @@ public final class RemoteMachine implements AutoCloseable {
         if (e.attemptId().equals(queueAttempt) && vault.losses().load(e.attemptId()).filter(LossLedger.Entry::logsHeld).isEmpty()) {
             dropQueue(false);
         }
+        unsavedEntry = null;
         try {
             journal.clear();
         } catch (IOException x) {

@@ -2,11 +2,9 @@ package com.nekkora.client.remote;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -130,8 +128,13 @@ final class AttemptJournal {
         this.keyring = keyring;
     }
 
+    /*
+     * Ler, gravar e apagar sao sincronizados: dentro deste aplicativo, uma leitura (a tela, a presenca) nunca esta com o arquivo
+     * aberto enquanto a consulta o troca. Sem isso o Windows nega a troca e o diario fica para tras.
+     */
+
     /** A tentativa pendente DESTA maquina ({@code agentId}); de outra maquina (vinculo anterior), nao vale. */
-    Optional<Entry> load(String agentId) {
+    synchronized Optional<Entry> load(String agentId) {
         Path f = dir.resolve(FILE);
         try {
             if (!Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS) || Files.size(f) > MAX_FILE) {
@@ -164,7 +167,7 @@ final class AttemptJournal {
     }
 
     /** Grava (substitui) a tentativa pendente. Sem protecao disponivel, nada e gravado. */
-    void save(Entry e) throws IOException {
+    synchronized void save(Entry e) throws IOException {
         if (!keyring.available()) {
             throw new IOException("protecao indisponivel");
         }
@@ -196,14 +199,11 @@ final class AttemptJournal {
         Files.createDirectories(dir);
         Path tmp = dir.resolve(FILE + ".novo");
         Files.writeString(tmp, b.toString(), StandardCharsets.UTF_8);
-        try {
-            Files.move(tmp, dir.resolve(FILE), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException x) {
-            Files.move(tmp, dir.resolve(FILE), StandardCopyOption.REPLACE_EXISTING);
-        }
+        // a troca e negada no Windows enquanto outra leitura tem o diario aberto: tentada de novo, nunca dada por feita
+        Replace.into(tmp, dir.resolve(FILE));
     }
 
-    void clear() throws IOException {
+    synchronized void clear() throws IOException {
         Files.deleteIfExists(dir.resolve(FILE + ".novo"));
         Files.deleteIfExists(dir.resolve(FILE));
     }

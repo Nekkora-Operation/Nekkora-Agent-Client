@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -79,7 +78,7 @@ final class AbsenceLedger {
             Path target = file(e.attemptId());
             Path fresh = target.resolveSibling(target.getFileName() + ".novo");
             Files.write(fresh, keyring.protect(text.getBytes(StandardCharsets.UTF_8)));
-            Files.move(fresh, target, StandardCopyOption.REPLACE_EXISTING);
+            Replace.into(fresh, target);
         } catch (IOException | RuntimeException x) {
             // fica como estava
         }

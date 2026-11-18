@@ -58,6 +58,8 @@ class RemoteDeliveryTest {
         /** Quando nao nulo, o que o motor diz dos processos (GONE, ALIVE ou UNCERTAIN); senao vale {@link #treeGone}. */
         volatile String processes;
         volatile byte[] zipSeen;
+        /** Roda dentro do inicio da execucao (depois de o diario dizer "iniciando", antes de ele dizer "em execucao"). */
+        volatile Runnable onStart;
 
         FakeWork(Path root) {
             this.root = root;
@@ -91,6 +93,10 @@ class RemoteDeliveryTest {
                 throw new RemoteMachine.WorkRefused(refusal);
             }
             busy = true;
+            Runnable then = onStart;
+            if (then != null) {
+                then.run();
+            }
             return "ex-" + "1".repeat(32);
         }
 
@@ -321,6 +327,154 @@ class RemoteDeliveryTest {
         assertEquals(0, gw.count(NEXT));
         assertEquals("QUEUED", gw.attemptState);
         assertFalse(Files.exists(journal()));
+    }
+
+    /**
+     * A ocorrencia de 17/11: no instante em que a execucao comeca, OUTRA leitura tem o diario aberto (a propria tela o le ao se
+     * redesenhar; um antivirus faria o mesmo). No Windows a troca do arquivo e negada enquanto isso. O aplicativo CONTINUA aberto e
+     * sabe qual execucao iniciou: a tentativa nao pode virar "resultado nao confirmado" por causa de uma gravacao que nao entrou.
+     */
+    @Test
+    void diarioQueNaoPodeSerTrocadoNoInicioNaoViraResultadoNaoConfirmadoEnquantoOAplicativoSegueAberto() throws Exception {
+        RemoteMachine m = enabled(true);
+        gw.queue();
+        java.util.concurrent.atomic.AtomicReference<java.io.InputStream> reader = new java.util.concurrent.atomic.AtomicReference<>();
+        work.onStart = () -> {
+            try {
+                reader.set(Files.newInputStream(journal()));
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        try {
+            m.pull();
+        } finally {
+            if (reader.get() != null) {
+                reader.get().close();
+            }
+        }
+        work.onStart = null;
+        assertEquals(List.of("PREPARING", "STARTING", "RUNNING"), gw.reported);
+        // a execucao termina bem; a consulta seguinte informa o desfecho verdadeiro, com o codigo de saida
+        work.ends("SUCCEEDED", 0);
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState, "o desfecho informado a Platform");
+        assertEquals(0, gw.attemptExit);
+        assertFalse(gw.reported.contains("ENDED_UNKNOWN"), String.valueOf(gw.reported));
+        assertFalse(Files.exists(journal()));
+    }
+
+    /**
+     * A duvida LEGITIMA continua sendo duvida: o diario ficou em "iniciando" e o aplicativo FECHOU antes de gravar a execucao. O
+     * processo novo nao sabe se algo foi lancado: informa "resultado nao confirmado", diz que nao sabe dos processos, nao inicia
+     * de novo e nao da a maquina por livre.
+     */
+    @Test
+    void aplicativoReabertoComODiarioEmIniciandoContinuaSendoResultadoNaoConfirmado() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        java.util.concurrent.atomic.AtomicReference<java.io.InputStream> reader = new java.util.concurrent.atomic.AtomicReference<>();
+        work.onStart = () -> {
+            try {
+                reader.set(Files.newInputStream(journal()));
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        try {
+            m.pull();
+        } finally {
+            reader.get().close();
+        }
+        work.onStart = null;
+        assertTrue(journalText().contains("\"fase\":\"STARTING\""), "o disco ficou para tras: o diario nao pode ser trocado naquele instante");
+        // o aplicativo fecha e abre: o que o processo anterior sabia se perdeu; so o disco vale
+        work.ends("SUCCEEDED", 0);
+        RemoteMachine reopened = machine(true);
+        reopened.pull();
+        assertEquals("ENDED_UNKNOWN", gw.attemptState, "sem prova do que foi lancado, nada e presumido");
+        assertFalse(gw.lastProcessAbsent, "nenhuma afirmacao de que nao ha processo: a Platform nao recebe prova que nao existe");
+        assertFalse("ABSENT".equals(gw.lastProcessTree), gw.lastProcessTree);
+        assertEquals(1, work.jobs.size(), "nada e iniciado de novo");
+        assertFalse(gw.reported.contains("SUCCEEDED"), String.valueOf(gw.reported));
+        assertEquals(attempt, gw.attemptId);
+    }
+
+    /**
+     * Dentro do aplicativo, a tela le o diario (atividade, pendencias) enquanto a consulta o grava. Essas leituras nunca deixam o
+     * diario para tras: em cada inicio o disco passa a dizer "em execucao", e toda tentativa termina com o desfecho verdadeiro.
+     */
+    @Test
+    void leiturasDaTelaDuranteAConsultaNaoDeixamODiarioParaTras() throws Exception {
+        RemoteMachine m = enabled(true);
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicLong reads = new java.util.concurrent.atomic.AtomicLong();
+        List<Thread> screens = new ArrayList<>();
+        for (int k = 0; k < 3; k++) {
+            Thread t = new Thread(() -> {
+                while (!stop.get()) {
+                    m.activity();
+                    m.heldResults();
+                    reads.incrementAndGet();
+                }
+            }, "tela-" + k);
+            t.setDaemon(true);
+            t.start();
+            screens.add(t);
+        }
+        try {
+            for (int round = 1; round <= 25; round++) {
+                gw.reported.clear();
+                work.state = "RUNNING";
+                work.exitCode = null;
+                gw.queue();
+                m.pull();
+                assertTrue(journalText().contains("\"fase\":\"RUNNING\""), "rodada " + round + ": o diario diz em execucao");
+                work.ends("SUCCEEDED", 0);
+                m.pull();
+                assertEquals("SUCCEEDED", gw.attemptState, "rodada " + round + ": " + gw.reported);
+                assertFalse(gw.reported.contains("ENDED_UNKNOWN"), "rodada " + round + ": " + gw.reported);
+                assertFalse(Files.exists(journal()), "rodada " + round);
+            }
+        } finally {
+            stop.set(true);
+            for (Thread t : screens) {
+                t.join(5_000);
+            }
+        }
+        assertTrue(reads.get() > 100, "as leituras concorrentes aconteceram: " + reads.get());
+    }
+
+    /** A troca de um arquivo de estado e tentada de novo enquanto o destino esta aberto por outra leitura; nunca e dada por feita. */
+    @Test
+    void aTrocaDoArquivoDeEstadoEsperaALeituraTerminarEFalhaSeElaNaoTerminar() throws Exception {
+        Path target = tmp.resolve("estado.json");
+        Path fresh = tmp.resolve("estado.json.novo");
+        Files.writeString(target, "antigo");
+        // leitura que termina logo: a troca entra numa das novas tentativas
+        Files.writeString(fresh, "novo-1");
+        java.io.InputStream brief = Files.newInputStream(target);
+        Thread closer = new Thread(() -> {
+            try {
+                Thread.sleep(120);
+                brief.close();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        closer.start();
+        Replace.into(fresh, target);
+        closer.join();
+        assertEquals("novo-1", Files.readString(target));
+        assertFalse(Files.exists(fresh));
+        // leitura que nao termina: esgotadas as tentativas a falha e lancada e o destino continua como estava
+        Files.writeString(fresh, "novo-2");
+        try (java.io.InputStream held = Files.newInputStream(target)) {
+            assertTrue(held.read() >= 0);
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> Replace.into(fresh, target));
+        }
+        assertEquals("novo-1", Files.readString(target), "o destino nao mudou");
+        assertTrue(Files.exists(fresh), "o arquivo novo continua la para a proxima tentativa");
     }
 
     @Test
