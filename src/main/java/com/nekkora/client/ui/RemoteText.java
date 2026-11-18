@@ -31,6 +31,21 @@ final class RemoteText {
                 : count == 1 ? "1 instalação de Python informada à Platform (só a versão)." : count + " instalações de Python informadas à Platform (só a versão).";
     }
 
+    /** O que este computador mantém sem apagar e se falta espaço: dito junto do que ele está fazendo. Vazio: nada a dizer. */
+    static String kept(com.nekkora.client.remote.RemoteMachine.Kept k) {
+        StringBuilder b = new StringBuilder();
+        if (k.folders() > 0) {
+            b.append(" Pastas mantidas neste computador: ").append(k.folders()).append(k.folders() == 1 ? " execução" : " execuções").append(" (")
+                    .append(String.format(java.util.Locale.forLanguageTag("pt-BR"), "%.1f MB", k.bytes() / 1_000_000.0))
+                    .append("), sem prova de que os processos terminaram. Elas não são apagadas automaticamente: saem quando houver essa prova.");
+        }
+        if (k.spaceLow()) {
+            b.append(" Pouco espaço livre no disco: este computador não aceita novos trabalhos da Platform até haver espaço. Nada do que está "
+                    + "guardado é apagado para abrir espaço.");
+        }
+        return b.toString();
+    }
+
     /** T06 - o que este computador está fazendo agora, e de quem é a execução. */
     static String activity(com.nekkora.client.remote.RemoteMachine.Activity a) {
         return switch (a) {
@@ -47,6 +62,12 @@ final class RemoteText {
             case REMOTE_UNCERTAIN -> "Ocupação incerta: uma execução solicitada pela Platform terminou e este computador não consegue confirmar se restou "
                     + "algum processo dela. A Platform não envia novos trabalhos até haver confirmação. Sair da conta do Windows ou reiniciar o "
                     + "computador encerra essa dúvida; o resultado da automação não muda.";
+            case LOCAL_FINISHING -> "Finalizando: o processo principal de uma execução iniciada neste computador (botão Executar) terminou, mas há "
+                    + "processos dela ainda ativos. Ela é local: nada dela é enviado à Platform. Enquanto eles não terminarem, este computador não "
+                    + "inicia outra execução, daqui nem da Platform.";
+            case LOCAL_UNCERTAIN -> "Ocupação incerta: uma execução iniciada neste computador (botão Executar) terminou e não há como confirmar se "
+                    + "restou algum processo dela. Ela é local: nada dela é enviado à Platform. Este computador não inicia outra execução, daqui nem "
+                    + "da Platform, até haver confirmação. Sair da conta do Windows ou reiniciar o computador encerra essa dúvida.";
         };
     }
 

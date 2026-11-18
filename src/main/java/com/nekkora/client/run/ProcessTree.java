@@ -12,7 +12,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 
 /**
  * O que se sabe dos PROCESSOS de uma execucao gerenciada - o processo lancado pelo aplicativo e os descendentes dele - gravado
@@ -32,9 +31,10 @@ import java.util.function.Function;
  *
  * <p>{@link #verdict}:
  * <ul>
- * <li>{@link Verdict#GONE}: ha {@link #EMPTY}; ou a marca foi gravada e NAO existe mais - a sessao do Windows em que a
- * execucao rodou acabou (saida do usuario ou reinicio), e com ela todos os processos dela. Isso encerra a duvida sobre os
- * processos; nao diz nada sobre o resultado da automacao;</li>
+ * <li>{@link Verdict#GONE}: ha {@link #EMPTY}; ou esta COMPROVADO que a sessao do Windows em que a execucao rodou acabou
+ * (saida do usuario ou reinicio), e com ela todos os processos dela - a marca gravada e conferida no lancamento nao existe
+ * mais, a tabela de marcas esta funcionando agora, e nenhum processo existente e daquela sessao desde antes do lancamento
+ * ({@link Evidence}). Isso encerra a duvida sobre os processos; nao diz nada sobre o resultado da automacao;</li>
  * <li>{@link Verdict#ALIVE}: algum processo anotado esta vivo (mesmo PID, mesmo inicio);</li>
  * <li>{@link Verdict#UNCERTAIN}: todo o resto. Sem o grupo vazio e sem a sessao encerrada NAO se afirma que acabou, mesmo
  * que nenhum processo anotado esteja vivo: um descendente criado por um processo que ja terminou nao aparece em nenhuma
@@ -49,6 +49,8 @@ final class ProcessTree {
     static final String END = "FIM";
     static final String EMPTY = "VAZIO";
     static final String BROKEN = "FALHA";
+    /** Seguido do numero da sessao do Windows em que a execucao foi lancada. */
+    static final String SESSION = "SESSAO";
     private static final Set<String> FACTS = Set.of(GROUP, MARK, END, EMPTY, BROKEN);
     private static final int MAX_NODES = 4096;
 
@@ -98,21 +100,61 @@ final class ProcessTree {
         }
     }
 
-    /**
-     * Ha prova de que nada desta execucao continua em andamento?
-     *
-     * @param sessionMark a marca da execucao ainda existe na sessao do Windows? ({@code null}: nao ha como saber)
-     */
-    static Verdict verdict(ProcessOwner owner, Path file, Function<String, Boolean> sessionMark, String name) {
+    /** A sessao do Windows em que a execucao foi lancada (uma vez). */
+    boolean session(int id) {
+        String line = SESSION + " " + id;
+        if (noted.contains(line)) return true;
+        if (!append(line + "\n")) return false;
+        noted.add(line);
+        return true;
+    }
+
+    /** As evidencias sobre a SESSAO do Windows que hospedava a execucao. Todas tem de concordar para ela ser dada por encerrada. */
+    interface Evidence {
+        /** A marca da execucao ainda existe? {@code null}: sem resposta. */
+        Boolean marked(String name);
+
+        /** A tabela de marcas esta funcionando agora (grava, le e retira uma sonda)? */
+        boolean working();
+
+        /** A sessao {@code session}, que existia em {@code sinceMillis}, acabou - pelos processos que existem agora? {@code null}: nao da para saber. */
+        Boolean sessionEnded(int session, long sinceMillis);
+    }
+
+    /** As evidencias do Windows de verdade. */
+    static final Evidence WINDOWS = new Evidence() {
+        @Override
+        public Boolean marked(String name) {
+            return WindowsProcessGroup.marked(name);
+        }
+
+        @Override
+        public boolean working() {
+            return WindowsProcessGroup.working();
+        }
+
+        @Override
+        public Boolean sessionEnded(int session, long sinceMillis) {
+            return WindowsProcessGroup.sessionEnded(session, sinceMillis);
+        }
+    };
+
+    /** Ha prova de que nada desta execucao continua em andamento? */
+    static Verdict verdict(ProcessOwner owner, Path file, Evidence evidence, String name) {
         List<long[]> nodes = new ArrayList<>();
         if (owner != null && owner.startMillis() >= 0) nodes.add(new long[] {owner.pid(), owner.startMillis()});
         Set<String> facts = new HashSet<>();
+        int session = -1;
         boolean readable = true;
         try {
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) > 1024 * 1024) {
                 readable = false;
             } else {
                 for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    if (line.startsWith(SESSION + " ")) {
+                        session = Integer.parseInt(line.substring(SESSION.length() + 1));
+                        continue;
+                    }
                     if (FACTS.contains(line)) {
                         facts.add(line);
                         continue;
@@ -130,14 +172,17 @@ final class ProcessTree {
         }
         // a prova: o Windows disse que o grupo esta vazio (so vale se a supervisao nao falhou), ou a sessao dele acabou
         if (readable && facts.contains(EMPTY) && facts.contains(GROUP) && !facts.contains(BROKEN)) return Verdict.GONE;
-        if (readable && facts.contains(MARK)) {
-            Boolean still;
+        // a sessao do Windows que hospedava a execucao ACABOU: so com TODAS as evidencias de acordo. A falta da marca, sozinha, nao
+        // basta - pode ser falha de leitura, remocao por outro programa ou gravacao que nao se completou
+        if (readable && facts.contains(MARK) && session >= 0 && owner != null && owner.startMillis() > 0) {
             try {
-                still = sessionMark.apply(name);
+                if (Boolean.FALSE.equals(evidence.marked(name)) && evidence.working()
+                        && Boolean.TRUE.equals(evidence.sessionEnded(session, owner.startMillis()))) {
+                    return Verdict.GONE;
+                }
             } catch (RuntimeException e) {
-                still = null;
+                // sem resposta: nao prova nada
             }
-            if (Boolean.FALSE.equals(still)) return Verdict.GONE;
         }
         for (long[] n : nodes) {
             try {

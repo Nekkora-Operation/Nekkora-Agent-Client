@@ -203,7 +203,7 @@ class ArchitectureTest {
             declaradas.add(m.group(1));
         }
         assertEquals(new TreeSet<>(Set.of("CreateJobObjectW", "OpenJobObjectW", "AssignProcessToJobObject", "QueryInformationJobObject", "TerminateJobObject",
-                "SetHandleInformation", "OpenProcess", "CloseHandle", "GlobalAddAtomW", "GlobalFindAtomW", "GlobalDeleteAtom")), declaradas);
+                "SetHandleInformation", "OpenProcess", "CloseHandle", "GlobalAddAtomW", "GlobalFindAtomW", "GlobalDeleteAtom", "ProcessIdToSessionId")), declaradas);
         // uma biblioteca so, carregada num lugar so; nada de funcao chamada por nome montado
         assertEquals(1, c.split("Native\\.load\\(", -1).length - 1);
         assertTrue(c.contains("Native.load(\"kernel32\", Api.class)"));
