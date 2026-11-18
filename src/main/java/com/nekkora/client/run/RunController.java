@@ -223,6 +223,17 @@ public final class RunController implements AutoCloseable {
         return pending != null ? Optional.of(pending) : storeOf(id).record(id);
     }
 
+    /**
+     * Apaga a copia EXECUTADA do pacote de uma execucao gerenciada ja terminada (o registro e os eventos ficam). Nao toca em
+     * execucao local, nem em execucao ainda em andamento.
+     */
+    public void discardManagedCopy(ExecutionId id) {
+        if (!managed(id) || isActive(id)) return;
+        Optional<ExecutionRecord> r = record(id);
+        if (r.isEmpty() || !r.get().state().terminal()) return;
+        RunStore.deleteTree(managedStore.dir(id).resolve("pacote"));
+    }
+
     private RunStore storeOf(ExecutionId id) {
         return managed(id) ? managedStore : store;
     }

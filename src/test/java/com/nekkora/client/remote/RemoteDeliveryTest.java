@@ -99,8 +99,22 @@ class RemoteDeliveryTest {
             busy = false;
         }
 
+        final List<String> outputsDiscarded = new ArrayList<>();
+        final List<String> swept = new ArrayList<>();
+
         @Override
-        public void discard(String attemptId) {
+        public void discardOutputs(String attemptId) {
+            outputsDiscarded.add(attemptId);
+        }
+
+        @Override
+        public int sweep(String keepAttemptId) {
+            swept.add(String.valueOf(keepAttemptId));
+            return 0;
+        }
+
+        @Override
+        public void discard(String attemptId, String run) {
             discarded.add(attemptId);
             try {
                 Files.deleteIfExists(root.resolve(attemptId).resolve("pacote.zip"));
@@ -274,6 +288,64 @@ class RemoteDeliveryTest {
         assertTrue(gw.calls.stream().filter(c -> c.path().contains("/results/")).noneMatch(c -> c.path().contains(gw.attemptToken)), "token nunca na URL");
         assertEquals("2|0", gw.resultsClosure);
         assertFalse(Files.exists(journal()), "so depois do fechamento o diario some");
+        // T04: com o recebimento de TUDO confirmado, a pasta de saida pode sair deste computador
+        assertEquals(List.of(gw.attemptId), work.outputsDiscarded);
+    }
+
+    @Test
+    void resultadoPendenteNaoEApagadoAntesDeAPlatformConfirmarORecebimento() throws Exception {
+        RemoteMachine m = enabled(true);
+        // (1) a rede cai no meio do envio: nada confirmado, nada apagado; os arquivos continuam no disco
+        String attempt = gw.queue();
+        m.pull();
+        work.outputs.put("um.txt", "1".getBytes(StandardCharsets.UTF_8));
+        work.outputs.put("dois.txt", "2".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        gw.failResults = 5;
+        m.pull();
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertNull(gw.resultsClosure);
+        assertTrue(work.outputsDiscarded.isEmpty(), "sem confirmacao de recebimento, a pasta de saida fica");
+        assertTrue(Files.exists(work.root.resolve(attempt).resolve("saida").resolve("um.txt")));
+        assertTrue(Files.exists(journal()));
+        // o aplicativo fecha e abre: a varredura de sobras preserva a tentativa pendente e nao apaga resultado nenhum
+        m.close();
+        RemoteMachine again = machine(true);
+        again.sweep();
+        assertEquals(List.of(attempt), work.swept);
+        assertTrue(work.outputsDiscarded.isEmpty());
+        gw.failResults = 0;
+        again.pull();
+        assertEquals("2|0", gw.resultsClosure);
+        assertEquals(List.of(attempt), work.outputsDiscarded, "so agora, com o fechamento aceito");
+
+        // (2) algum arquivo ficou de fora por limite: ele so existe neste computador, entao a pasta de saida NAO e apagada
+        work.outputsDiscarded.clear();
+        gw.queue();
+        work.outputs.clear();
+        work.outputs.put("a.txt", new byte[1]);
+        work.outputs.put("grande-demais.bin", new byte[(int) MachineChannel.MAX_RESULT_BYTES + 1]);
+        work.state = "RUNNING";
+        again.pull();
+        work.ends("SUCCEEDED", 0);
+        again.pull();
+        assertEquals("1|1", gw.resultsClosure);
+        assertTrue(work.outputsDiscarded.isEmpty());
+
+        // (3) a Platform diz que o envio ja foi fechado por outra entrega: sem confirmacao de que tudo chegou, nada e apagado
+        gw.queue();
+        work.outputs.clear();
+        work.outputs.put("b.txt", new byte[1]);
+        work.state = "RUNNING";
+        again.pull();
+        work.ends("SUCCEEDED", 0);
+        gw.resultsClosure = "0|0";
+        again.pull();
+        assertTrue(work.outputsDiscarded.isEmpty());
+        assertFalse(Files.exists(journal()));
+        // sem quem execute, a varredura nao faz nada
+        assertEquals(0, machine(false).sweep());
     }
 
     @Test
@@ -471,8 +543,18 @@ class RemoteDeliveryTest {
             }
 
             @Override
-            public void discard(String a) {
-                real.discard(a);
+            public void discard(String a, String run) {
+                real.discard(a, run);
+            }
+
+            @Override
+            public void discardOutputs(String a) {
+                real.discardOutputs(a);
+            }
+
+            @Override
+            public int sweep(String keep) {
+                return real.sweep(keep);
             }
 
             @Override

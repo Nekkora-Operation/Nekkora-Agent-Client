@@ -97,6 +97,8 @@ public final class ClientMain {
             // execucao do que a Platform solicitar: o canal da maquina recebe e baixa; quem confere e executa e o motor, numa
             // execucao gerenciada (mesma vaga da local, registro proprio, sem as aprovacoes locais). So esta ponte ve os dois
             remote.setWork(new RemoteWork(runner));
+            // sobra de uma queda entre o desfecho e a limpeza: o codigo de tentativas antigas sai; pasta de saida nunca
+            remote.sweep();
             window.setRemote(remote);
             remote.start();
             // "Abrir pasta do arquivo" depois de gerar um pacote: so pede ao sistema que mostre a pasta

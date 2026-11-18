@@ -73,7 +73,17 @@ final class RemoteWork implements RemoteMachine.Work {
     }
 
     @Override
-    public void discard(String attemptId) {
-        runner.discardManaged(attemptId);
+    public void discard(String attemptId, String run) {
+        runner.discardManaged(attemptId, run);
+    }
+
+    @Override
+    public void discardOutputs(String attemptId) {
+        runner.discardManagedOutputs(attemptId);
+    }
+
+    @Override
+    public int sweep(String keepAttemptId) {
+        return runner.sweepManaged(keepAttemptId);
     }
 }
