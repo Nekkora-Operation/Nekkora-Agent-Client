@@ -1366,6 +1366,77 @@ class RemoteDeliveryTest {
     }
 
     @Test
+    void comOutraTentativaAtivaOQueFicouGuardadoCedeAVezUmLotePorConsultaENenhumArquivoEOCancelamentoNaoEspera() throws Exception {
+        RemoteMachine m = enabled(true);
+        String first = gw.queue();
+        m.pull();
+        String[] many = new String[850];
+        for (int i = 0; i < many.length; i++) {
+            many[i] = "linha " + i;
+        }
+        writes(0, many);
+        work.outputs.put("saida.txt", "x".getBytes(StandardCharsets.UTF_8));
+        work.ends("SUCCEEDED", 0);
+        m.heldSendBudgetMillis = 0;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(400, gw.logs.size(), "dois lotes na consulta do desfecho; 450 linhas e o arquivo ficam guardados");
+        // a fatia volta ao normal (10 s): sem a regra de ceder a vez, a consulta seguinte enviaria tudo de uma vez
+        m.heldSendBudgetMillis = 10_000;
+        work.state = "RUNNING";
+        work.exitCode = null;
+        gw.queueKeepingEarlier();
+        m.pull();
+        assertEquals("RUNNING", gw.attemptState, "a tentativa nova foi recebida e esta em execucao");
+        assertEquals(600, gw.earlierLogs.size(), "com tentativa ativa: UM lote dos registros guardados por consulta");
+        assertEquals(1, gw.earlierLogBatches.get());
+        assertNull(gw.earlierLogsClosure);
+        assertTrue(gw.earlierResults.isEmpty(), "com tentativa ativa: nenhum arquivo de resultado guardado e enviado");
+        // o pedido de cancelamento da tentativa ativa e obedecido na consulta em que chega - antes do lote guardado
+        gw.cancelRequested = true;
+        m.pull();
+        assertEquals(1, work.cancelled.size(), "a maquina mandou parar na mesma consulta");
+        assertEquals(800, gw.earlierLogs.size(), "e o que estava guardado andou mais um lote, sem perder o lugar");
+        assertTrue(gw.earlierResults.isEmpty());
+        // a tentativa ativa termina: a maquina fica livre e o que estava guardado e entregue ate a confirmacao
+        work.ends("CANCELLED", null);
+        m.pull();
+        assertEquals("CANCELLED", gw.attemptState);
+        m.pull();
+        assertEquals(850, gw.earlierLogs.size());
+        assertEquals("850|0", gw.earlierLogsClosure);
+        assertEquals("1|0", gw.earlierResultsClosure);
+        assertEquals("STDOUT|false|linha 849", gw.earlierLogs.get(850), "na ordem, sem repeticao");
+        assertFalse(Files.exists(queueFile(first)));
+    }
+
+    @Test
+    void arquivosDeResultadoGuardadosVaoEmFatiasENaoSaoEnviadosDeNovoNaRetomada() throws Exception {
+        RemoteMachine m = enabled(true);
+        String attempt = gw.queue();
+        m.pull();
+        for (int i = 1; i <= 4; i++) {
+            work.outputs.put("arquivo-" + i + ".txt", ("conteudo " + i).getBytes(StandardCharsets.UTF_8));
+        }
+        work.ends("SUCCEEDED", 0);
+        // fatia esgotada logo depois de um arquivo: cada passada envia UM e devolve a vez; a consulta do desfecho tem duas passadas
+        m.heldSendBudgetMillis = 0;
+        m.pull();
+        assertEquals("SUCCEEDED", gw.attemptState);
+        assertEquals(2, gw.results.size());
+        assertNull(gw.resultsClosure, "com arquivos por enviar, o envio nao e fechado");
+        assertTrue(work.outputsDiscarded.isEmpty(), "e a pasta de saida nao e apagada");
+        long uploads = calls("/results/");
+        m.pull();
+        assertEquals(3, gw.results.size());
+        assertEquals(uploads + 1, calls("/results/"), "so o arquivo seguinte foi enviado: os confirmados nao vao de novo");
+        m.pull();
+        assertEquals(4, gw.results.size());
+        assertEquals("4|0", gw.resultsClosure);
+        assertEquals(List.of(attempt), work.outputsDiscarded, "so com tudo confirmado a pasta sai");
+    }
+
+    @Test
     void impedimentoDeAutorizacaoFicaDitoComOMotivoENaoEContornado() throws Exception {
         RemoteMachine m = enabled(true);
         String attempt = gw.queue();
