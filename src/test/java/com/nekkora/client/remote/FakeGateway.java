@@ -58,7 +58,7 @@ public final class FakeGateway implements AutoCloseable {
     public volatile boolean enabled;
     public volatile boolean paused;
     public volatile boolean workerTaken;
-    /** PLATFORM-LICENCIAMENTO-001: o resgate do codigo responde 409 com este motivo (por exemplo worker_limit_reached). */
+    /** O resgate do codigo responde 409 com este motivo (para o teste do motivo que o aplicativo nao conhece). */
     public volatile String redeemConflict;
     /** O nome do Worker desta maquina, como a presenca o devolve; nulo = a "Platform" nao informa (API anterior). */
     public volatile String workerName;

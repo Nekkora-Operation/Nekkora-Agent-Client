@@ -320,9 +320,6 @@ final class RemoteText {
             case CODE_FOR_RENEWAL -> "Este é um código de renovação, não de habilitação. Peça um código de habilitação a quem administra as máquinas.";
             case FEATURE_OFF -> "A execução remota não está disponível nesta Platform. Nada foi alterado.";
             case SEAT_TAKEN -> "O posto de trabalho deste código já tem uma máquina. Peça um código novo a quem administra as máquinas.";
-            case MACHINE_LIMIT -> "A organização atingiu o limite de máquinas cadastradas na Platform. É um limite de capacidade da organização. "
-                    + "Peça a quem administra a organização para arquivar, na Platform, um posto de trabalho que não é mais usado. "
-                    + "Nada foi alterado neste computador.";
             case LINK_ENDED -> "A Platform encerrou o vínculo deste computador. Remova-o para poder habilitar de novo com um código novo.";
             case NOT_ENABLED -> "Este computador não está habilitado na Platform.";
             case STORAGE -> "Este computador não conseguiu guardar a credencial da máquina com proteção. Nada ficou habilitado.";

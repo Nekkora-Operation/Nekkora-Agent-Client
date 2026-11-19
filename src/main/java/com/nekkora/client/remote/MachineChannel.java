@@ -63,8 +63,6 @@ public final class MachineChannel {
         FEATURE_OFF,
         /** O posto de trabalho do codigo ja tem uma maquina. */
         SEAT_TAKEN,
-        /** A organizacao ja tem o limite de maquinas cadastradas (capacidade; nao e licenca). */
-        MACHINE_LIMIT,
         /** A Platform nao reconhece mais a credencial desta maquina: o vinculo foi encerrado. */
         LINK_ENDED,
         /** A maquina esta vinculada, mas nao habilitada para execucao remota. */
@@ -168,8 +166,6 @@ public final class MachineChannel {
                 case "code_not_for_remote_execution" -> Problem.CODE_NOT_REMOTE;
                 case "rotation_code_for_pairing" -> Problem.CODE_FOR_RENEWAL;
                 case "remote_execution_unavailable" -> Problem.FEATURE_OFF;
-                // PLATFORM-LICENCIAMENTO-001: limite de maquinas da organizacao - nao e o posto do codigo que esta ocupado
-                case "worker_limit_reached" -> Problem.MACHINE_LIMIT;
                 default -> Problem.SEAT_TAKEN;
             });
         }

@@ -38,16 +38,4 @@ class RemoteLicenseTextTest {
             assertTrue(text.contains("O motivo aparece na Platform"), text);
         }
     }
-
-    @Test
-    void limiteDeMaquinasEDitoComoCapacidadeENaoComoPostoOcupado() {
-        String limit = RemoteText.problem(Problem.MACHINE_LIMIT);
-        assertTrue(limit.contains("limite de máquinas cadastradas"), limit);
-        assertTrue(limit.contains("limite de capacidade da organização"), limit);
-        assertFalse(limit.toLowerCase().contains("licen"), "limite de capacidade nao e dito como licenca: " + limit);
-        assertTrue(limit.contains("Nada foi alterado neste computador."), limit);
-        assertNotEquals(RemoteText.problem(Problem.SEAT_TAKEN), limit);
-        assertEquals("O posto de trabalho deste código já tem uma máquina. Peça um código novo a quem administra as máquinas.",
-                RemoteText.problem(Problem.SEAT_TAKEN));
-    }
 }

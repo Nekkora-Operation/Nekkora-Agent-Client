@@ -225,11 +225,9 @@ Quando a organização está sem vaga de execução, a Platform simplesmente nã
 "Execução remota" já aberta, sem precisar reabri-la. (Visto no executável empacotado: antes desta correção o aviso só
 aparecia quando a janela era reaberta.)
 
-**Limite de máquinas da organização.** O aplicativo tem o texto para o motivo `worker_limit_reached` ("a organização atingiu
-o limite de máquinas cadastradas"), mas **a Platform de hoje não envia esse motivo à máquina**: o limite de Workers é
-conferido quando a pessoa cria o Worker na Platform (ou gera o código já criando o Worker), e é a ela que a recusa é
-mostrada. O resgate do código num Worker que já existe não confere esse limite. O texto fica para o caso de a Platform
-passar a responder assim; no laboratório, com o executável empacotado, ele não apareceu.
+**Limite de máquinas da organização.** Não há mensagem do aplicativo para isso. O limite de Workers é conferido quando a
+pessoa cria o Worker na Platform, e é a ela que a recusa aparece, na Web. A Platform não envia esse motivo à máquina; o texto
+que o aplicativo tinha para ele, sem rota que o acionasse, foi retirado.
 
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
