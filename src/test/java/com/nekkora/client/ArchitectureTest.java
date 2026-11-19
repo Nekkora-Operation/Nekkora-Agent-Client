@@ -109,6 +109,12 @@ class ArchitectureTest {
             if (f.endsWith("RemoteText.java")) {
                 assertTrue(c.contains("\"Worker na Platform: \""), "o texto que mostra o posto desta maquina mudou");
                 c = c.replace("\"Worker na Platform: \"", "\"\"");
+                // PLATFORM-LICENCIAMENTO-001 (pedido da titular, 19/11): quando a PLATFORM recusa uma execucao por falta de licenca
+                // ou por licenca vencida, o aplicativo diz isso a pessoa. Sao DUAS frases exibidas, e so elas; o aplicativo continua
+                // sem funcao nenhuma de licenca (nao consulta, nao concede, nao confere), e a palavra continua proibida no resto
+                java.util.regex.Matcher frases = Pattern.compile("static final String DECLINED_LICENSE_(REQUIRED|EXPIRED) = \"[^\"\n]*\";").matcher(c);
+                assertEquals(2, frases.results().count(), "as duas frases de recusa por licenca mudaram de forma");
+                c = frases.replaceAll("");
             }
             boolean remota = "remote".equals(layer(f));
             if (remota) {

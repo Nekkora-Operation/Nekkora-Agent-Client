@@ -130,6 +130,12 @@ class RemoteMachineTest {
         gw.workerTaken = true;
         assertEquals(Problem.SEAT_TAKEN, refused(() -> m.enable(remote)));
         gw.workerTaken = false;
+        // PLATFORM-LICENCIAMENTO-001: o limite de maquinas da organizacao nao e "posto ocupado"
+        gw.redeemConflict = "worker_limit_reached";
+        assertEquals(Problem.MACHINE_LIMIT, refused(() -> m.enable(remote)));
+        gw.redeemConflict = "motivo_que_o_aplicativo_nao_conhece";
+        assertEquals(Problem.SEAT_TAKEN, refused(() -> m.enable(remote)));
+        gw.redeemConflict = null;
         gw.status = 503;
         assertEquals(Problem.SERVER, refused(() -> m.enable(remote)));
         gw.status = 429;

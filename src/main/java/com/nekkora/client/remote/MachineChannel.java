@@ -63,6 +63,8 @@ public final class MachineChannel {
         FEATURE_OFF,
         /** O posto de trabalho do codigo ja tem uma maquina. */
         SEAT_TAKEN,
+        /** A organizacao ja tem o limite de maquinas cadastradas (capacidade; nao e licenca). */
+        MACHINE_LIMIT,
         /** A Platform nao reconhece mais a credencial desta maquina: o vinculo foi encerrado. */
         LINK_ENDED,
         /** A maquina esta vinculada, mas nao habilitada para execucao remota. */
@@ -166,6 +168,8 @@ public final class MachineChannel {
                 case "code_not_for_remote_execution" -> Problem.CODE_NOT_REMOTE;
                 case "rotation_code_for_pairing" -> Problem.CODE_FOR_RENEWAL;
                 case "remote_execution_unavailable" -> Problem.FEATURE_OFF;
+                // PLATFORM-LICENCIAMENTO-001: limite de maquinas da organizacao - nao e o posto do codigo que esta ocupado
+                case "worker_limit_reached" -> Problem.MACHINE_LIMIT;
                 default -> Problem.SEAT_TAKEN;
             });
         }
@@ -347,7 +351,8 @@ public final class MachineChannel {
     }
 
     /** {@code proceed}: {@code false} quando a maquina NAO deve seguir (o servidor recusou o inicio ou a tentativa ja terminou). */
-    record AttemptStatus(String state, boolean proceed, boolean cancelRequested) {
+    /** {@code refusalReason}: o motivo com que a PLATFORM recusou a tentativa (estado REFUSED), ou vazio. So para dizer a pessoa. */
+    record AttemptStatus(String state, boolean proceed, boolean cancelRequested, String refusalReason) {
     }
 
     /** Pergunta o que ha para esta maquina. Entregar nao prova recebimento: so {@link #ack} confirma. */
@@ -712,7 +717,9 @@ public final class MachineChannel {
                 || !(o.get("proceed") instanceof Boolean proceed) || !(o.get("cancelRequested") instanceof Boolean cancel)) {
             throw new Refused(Problem.UNEXPECTED);
         }
-        return new AttemptStatus(state, proceed, cancel);
+        // o motivo e opcional e so informativo: fora do formato, e como se nao tivesse vindo
+        String why = o.get("refusalReason") instanceof String r0 && r0.matches("^[A-Z_]{1,40}$") ? r0 : "";
+        return new AttemptStatus(state, proceed, cancel, why);
     }
 
     private static int positive(Map<String, Object> o, String key) throws Refused {

@@ -205,6 +205,26 @@ Motivos de recusa que esta máquina dá: `BUSY` (há outra execução, local ou 
 `DISK_PRESSURE` (não conseguiu preparar as pastas ou gravar) e `CLIENT_INCOMPATIBLE` (pacote de um tipo que o aplicativo
 não executa, ou entrega sem o ambiente ou o Python).
 
+**Recusa da Platform antes do início (PLATFORM-LICENCIAMENTO-001).** A Platform reconfere as condições antes de entregar e
+antes de autorizar o início. Quando ela recusa a tentativa (estado `REFUSED`), nada é iniciado neste computador e a tela
+"Execução remota" passa a dizer isso junto do estado operacional, até uma execução nova ser recebida:
+
+| Motivo da Platform | O que a tela diz |
+|---|---|
+| `LICENSE_REQUIRED` | a automação está sem licença na organização; quem administra vincula uma licença na Platform |
+| `LICENSE_EXPIRED` | a licença da automação venceu; a renovação é feita pelo suporte da Nekkora |
+| qualquer outro | a Platform encerrou a execução antes do início; o motivo aparece na Platform |
+
+O aplicativo não tem função de licença: não consulta, não concede e não confere. Só repete o motivo que a Platform deu. O
+aviso fica na memória do aplicativo (some ao fechar). Cancelamento pedido na Platform não é recusa e não gera aviso.
+
+Quando a organização está sem vaga de execução, a Platform simplesmente não entrega a tentativa: para o aplicativo é
+"nada a fazer", e a execução continua pendente na Platform.
+
+**Habilitação com a organização no limite de máquinas.** O resgate do código responde `worker_limit_reached`. A tela diz que
+a organização atingiu o limite de máquinas cadastradas (limite de capacidade) e que nada foi alterado. Antes, esse caso
+aparecia como "o posto de trabalho deste código já tem uma máquina".
+
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.
 

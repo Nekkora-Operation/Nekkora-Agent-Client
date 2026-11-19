@@ -312,9 +312,11 @@ final class RemotePanel extends JPanel {
         seatExplained.setVisible(!seat.isEmpty());
         RemoteMachine.Activity now = machine.activity();
         String keptHere = RemoteText.kept(machine.kept());
+        // PLATFORM-LICENCIAMENTO-001: a Platform recusou a ultima execucao antes do inicio (por exemplo, sem licenca) - dito aqui
+        String declinedHere = linked ? machine.lastDeclined().map(d -> "\n" + RemoteText.declined(d.reason())).orElse("") : "";
         if (linked || now != RemoteMachine.Activity.IDLE || !keptHere.isEmpty()) {
-            activity.show(now == RemoteMachine.Activity.IDLE && keptHere.isEmpty() ? Notice.Kind.PLAIN : keptHere.isEmpty() ? Notice.Kind.INFO : Notice.Kind.WARNING,
-                    RemoteText.activity(now) + keptHere);
+            activity.show(!declinedHere.isEmpty() || !keptHere.isEmpty() ? Notice.Kind.WARNING : now == RemoteMachine.Activity.IDLE ? Notice.Kind.PLAIN : Notice.Kind.INFO,
+                    RemoteText.activity(now) + keptHere + declinedHere);
         } else {
             activity.clear();
         }
