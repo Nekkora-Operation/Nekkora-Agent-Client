@@ -1468,6 +1468,8 @@ public final class RemoteMachine implements AutoCloseable {
     private void declined(AttemptJournal.Entry e, MachineChannel.AttemptStatus s) {
         if ("REFUSED".equals(s.state())) {
             lastDeclined = new Declined(e.attemptId(), s.refusalReason(), java.time.Instant.now().getEpochSecond());
+            // a tela aberta precisa saber AGORA: sem este aviso a mensagem so aparecia quando a janela era reaberta
+            changed();
         }
     }
 

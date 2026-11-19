@@ -221,9 +221,15 @@ aviso fica na memória do aplicativo (some ao fechar). Cancelamento pedido na Pl
 Quando a organização está sem vaga de execução, a Platform simplesmente não entrega a tentativa: para o aplicativo é
 "nada a fazer", e a execução continua pendente na Platform.
 
-**Habilitação com a organização no limite de máquinas.** O resgate do código responde `worker_limit_reached`. A tela diz que
-a organização atingiu o limite de máquinas cadastradas (limite de capacidade) e que nada foi alterado. Antes, esse caso
-aparecia como "o posto de trabalho deste código já tem uma máquina".
+**Recusa avisada à janela aberta.** A recusa é avisada à tela no instante em que chega: a mensagem aparece com a janela
+"Execução remota" já aberta, sem precisar reabri-la. (Visto no executável empacotado: antes desta correção o aviso só
+aparecia quando a janela era reaberta.)
+
+**Limite de máquinas da organização.** O aplicativo tem o texto para o motivo `worker_limit_reached` ("a organização atingiu
+o limite de máquinas cadastradas"), mas **a Platform de hoje não envia esse motivo à máquina**: o limite de Workers é
+conferido quando a pessoa cria o Worker na Platform (ou gera o código já criando o Worker), e é a ela que a recusa é
+mostrada. O resgate do código num Worker que já existe não confere esse limite. O texto fica para o caso de a Platform
+passar a responder assim; no laboratório, com o executável empacotado, ele não apareceu.
 
 A camada `remote` continua sem criar processos e sem abrir pacotes: quem executa é entregue por quem monta o aplicativo
 (`RemoteWork`, no ponto de montagem), e a execução é uma **execução gerenciada** do motor.

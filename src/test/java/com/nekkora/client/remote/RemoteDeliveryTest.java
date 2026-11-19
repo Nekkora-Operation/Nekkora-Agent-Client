@@ -1127,9 +1127,14 @@ class RemoteDeliveryTest {
     void recusaDaPlatformPorLicencaNaoIniciaNadaEFicaDitaAtéAProximaExecucao() throws Exception {
         RemoteMachine m = enabled(true);
         assertTrue(m.lastDeclined().isEmpty());
+        // a tela ABERTA e avisada no instante da recusa, ja com o motivo disponivel (visto no executavel: sem o aviso, a mensagem
+        // so aparecia quando a janela era reaberta)
+        List<String> seenByTheWindow = new java.util.ArrayList<>();
+        m.addListener(() -> seenByTheWindow.add(m.lastDeclined().map(RemoteMachine.Declined::reason).orElse("-")));
         String attempt = gw.queue();
         gw.refuseStart = "LICENSE_EXPIRED";
         m.pull();
+        assertTrue(seenByTheWindow.contains("LICENSE_EXPIRED"), "a tela aberta foi avisada da recusa: " + seenByTheWindow);
         assertEquals("REFUSED", gw.attemptState);
         assertTrue(work.jobs.isEmpty(), "nada foi iniciado");
         assertFalse(Files.exists(journal()));
