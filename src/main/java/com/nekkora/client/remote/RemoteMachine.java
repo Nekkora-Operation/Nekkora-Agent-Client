@@ -677,11 +677,14 @@ public final class RemoteMachine implements AutoCloseable {
         Work w = work;
         try {
             if (!e.acked()) {
-                if (!channel.ack(credential, e.attemptId(), e.token(), e.epoch()).proceed()) {
+                MachineChannel.AttemptStatus acked = channel.ack(credential, e.attemptId(), e.token(), e.epoch());
+                if (!acked.proceed()) {
                     // a Platform ja a encerrou (cancelada ou recusada antes de chegar aqui)
+                    declined(e, acked);
                     forget(e, w);
                     return;
                 }
+                lastDeclined = null; // uma execucao nova foi recebida: o aviso da anterior ja nao e o "ultimo"
                 e = e.withAck();
                 keep(e);
             }
@@ -784,7 +787,9 @@ public final class RemoteMachine implements AutoCloseable {
         if (w.busy()) {
             return refuse(e, "BUSY");
         }
-        if (!channel.state(credential, e.attemptId(), e.token(), e.epoch(), "PREPARING", null, null).proceed()) {
+        MachineChannel.AttemptStatus preparing = channel.state(credential, e.attemptId(), e.token(), e.epoch(), "PREPARING", null, null);
+        if (!preparing.proceed()) {
+            declined(e, preparing);
             forget(e, w);
             return null;
         }
@@ -817,7 +822,9 @@ public final class RemoteMachine implements AutoCloseable {
             return refuse(e, "ENVIRONMENT_GONE");
         }
         // imediatamente antes de iniciar, a Platform reconfere; cancelamento pedido ou condicao perdida: nada e iniciado
-        if (!channel.state(credential, e.attemptId(), e.token(), e.epoch(), "STARTING", null, null).proceed()) {
+        MachineChannel.AttemptStatus starting = channel.state(credential, e.attemptId(), e.token(), e.epoch(), "STARTING", null, null);
+        if (!starting.proceed()) {
+            declined(e, starting);
             forget(e, w);
             return null;
         }
@@ -1441,6 +1448,28 @@ public final class RemoteMachine implements AutoCloseable {
                 }
                 throw x;
             }
+        }
+    }
+
+    /**
+     * PLATFORM-LICENCIAMENTO-001 - a ultima execucao que a PLATFORM recusou antes do inicio (estado REFUSED), com o motivo que ela
+     * deu: so para dizer a pessoa por que nada rodou aqui. Fica na memoria deste aplicativo, ate uma execucao nova ser recebida.
+     * Cancelamento pedido pela pessoa na Platform nao e recusa e nao entra aqui.
+     */
+    public record Declined(String attemptId, String reason, long atEpochSecond) {
+    }
+
+    private volatile Declined lastDeclined;
+
+    public Optional<Declined> lastDeclined() {
+        return Optional.ofNullable(lastDeclined);
+    }
+
+    private void declined(AttemptJournal.Entry e, MachineChannel.AttemptStatus s) {
+        if ("REFUSED".equals(s.state())) {
+            lastDeclined = new Declined(e.attemptId(), s.refusalReason(), java.time.Instant.now().getEpochSecond());
+            // a tela aberta precisa saber AGORA: sem este aviso a mensagem so aparecia quando a janela era reaberta
+            changed();
         }
     }
 

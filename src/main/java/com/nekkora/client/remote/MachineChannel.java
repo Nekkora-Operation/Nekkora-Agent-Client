@@ -347,7 +347,8 @@ public final class MachineChannel {
     }
 
     /** {@code proceed}: {@code false} quando a maquina NAO deve seguir (o servidor recusou o inicio ou a tentativa ja terminou). */
-    record AttemptStatus(String state, boolean proceed, boolean cancelRequested) {
+    /** {@code refusalReason}: o motivo com que a PLATFORM recusou a tentativa (estado REFUSED), ou vazio. So para dizer a pessoa. */
+    record AttemptStatus(String state, boolean proceed, boolean cancelRequested, String refusalReason) {
     }
 
     /** Pergunta o que ha para esta maquina. Entregar nao prova recebimento: so {@link #ack} confirma. */
@@ -712,7 +713,9 @@ public final class MachineChannel {
                 || !(o.get("proceed") instanceof Boolean proceed) || !(o.get("cancelRequested") instanceof Boolean cancel)) {
             throw new Refused(Problem.UNEXPECTED);
         }
-        return new AttemptStatus(state, proceed, cancel);
+        // o motivo e opcional e so informativo: fora do formato, e como se nao tivesse vindo
+        String why = o.get("refusalReason") instanceof String r0 && r0.matches("^[A-Z_]{1,40}$") ? r0 : "";
+        return new AttemptStatus(state, proceed, cancel, why);
     }
 
     private static int positive(Map<String, Object> o, String key) throws Refused {

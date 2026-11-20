@@ -130,6 +130,10 @@ class RemoteMachineTest {
         gw.workerTaken = true;
         assertEquals(Problem.SEAT_TAKEN, refused(() -> m.enable(remote)));
         gw.workerTaken = false;
+        // um 409 com motivo que o aplicativo nao conhece continua dito como o posto do codigo
+        gw.redeemConflict = "motivo_que_o_aplicativo_nao_conhece";
+        assertEquals(Problem.SEAT_TAKEN, refused(() -> m.enable(remote)));
+        gw.redeemConflict = null;
         gw.status = 503;
         assertEquals(Problem.SERVER, refused(() -> m.enable(remote)));
         gw.status = 429;

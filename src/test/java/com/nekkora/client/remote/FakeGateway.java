@@ -58,6 +58,8 @@ public final class FakeGateway implements AutoCloseable {
     public volatile boolean enabled;
     public volatile boolean paused;
     public volatile boolean workerTaken;
+    /** O resgate do codigo responde 409 com este motivo (para o teste do motivo que o aplicativo nao conhece). */
+    public volatile String redeemConflict;
     /** O nome do Worker desta maquina, como a presenca o devolve; nulo = a "Platform" nao informa (API anterior). */
     public volatile String workerName;
     /** Substitui a resposta de TODA rota, quando nao nulo. */
@@ -836,6 +838,10 @@ public final class FakeGateway implements AutoCloseable {
         }
         if (workerTaken) {
             respond(x, 409, "{\"error\":\"conflict\"}");
+            return;
+        }
+        if (redeemConflict != null) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"" + redeemConflict + "\"}");
             return;
         }
         codes.remove(code);

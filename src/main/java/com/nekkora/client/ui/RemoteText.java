@@ -290,6 +290,24 @@ final class RemoteText {
         };
     }
 
+    // As DUAS frases em que o aplicativo fala de licenca. Ele nao tem funcao nenhuma de licenca: nao consulta, nao concede, nao
+    // confere. So repete o motivo que a PLATFORM deu para nao iniciar uma execucao (ArchitectureTest libera exatamente estas duas)
+    static final String DECLINED_LICENSE_REQUIRED = "A Platform não iniciou a última execução solicitada a este computador: a automação está sem licença na organização. Nada foi executado aqui. Quem administra a organização vincula uma licença à automação na Platform, em Administração, Licenças e capacidade.";
+    static final String DECLINED_LICENSE_EXPIRED = "A Platform não iniciou a última execução solicitada a este computador: a licença da automação venceu. Nada foi executado aqui. A renovação é feita pelo suporte da Nekkora; depois dela, a execução pode ser solicitada de novo na Platform.";
+
+    /**
+     * PLATFORM-LICENCIAMENTO-001 - a Platform recusou, antes do inicio, a ultima execucao que tinha solicitado a este computador.
+     * Nada foi executado aqui. Licenca tem texto proprio; os outros motivos sao ditos de forma geral (o detalhe esta na Platform).
+     */
+    static String declined(String reason) {
+        return switch (reason) {
+            case "LICENSE_REQUIRED" -> DECLINED_LICENSE_REQUIRED;
+            case "LICENSE_EXPIRED" -> DECLINED_LICENSE_EXPIRED;
+            default -> "A Platform encerrou, antes do início, a última execução solicitada a este computador. Nada foi executado aqui. "
+                    + "O motivo aparece na Platform, na página da execução.";
+        };
+    }
+
     static String problem(Problem p) {
         return switch (p) {
             case NETWORK -> "Não foi possível falar com a Platform. Confira a conexão e tente de novo. Nada foi alterado.";

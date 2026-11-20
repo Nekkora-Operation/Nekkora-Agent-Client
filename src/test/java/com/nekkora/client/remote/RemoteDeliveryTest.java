@@ -1119,6 +1119,43 @@ class RemoteDeliveryTest {
         assertEquals(started, work.jobs.size());
     }
 
+    /**
+     * PLATFORM-LICENCIAMENTO-001 - a Platform reconfere a LICENCA antes de autorizar o inicio. Recusada, nada e iniciado aqui e
+     * o aplicativo guarda o motivo para dizer a pessoa; uma execucao nova recebida depois apaga esse aviso.
+     */
+    @Test
+    void recusaDaPlatformPorLicencaNaoIniciaNadaEFicaDitaAtéAProximaExecucao() throws Exception {
+        RemoteMachine m = enabled(true);
+        assertTrue(m.lastDeclined().isEmpty());
+        // a tela ABERTA e avisada no instante da recusa, ja com o motivo disponivel (visto no executavel: sem o aviso, a mensagem
+        // so aparecia quando a janela era reaberta)
+        List<String> seenByTheWindow = new java.util.ArrayList<>();
+        m.addListener(() -> seenByTheWindow.add(m.lastDeclined().map(RemoteMachine.Declined::reason).orElse("-")));
+        String attempt = gw.queue();
+        gw.refuseStart = "LICENSE_EXPIRED";
+        m.pull();
+        assertTrue(seenByTheWindow.contains("LICENSE_EXPIRED"), "a tela aberta foi avisada da recusa: " + seenByTheWindow);
+        assertEquals("REFUSED", gw.attemptState);
+        assertTrue(work.jobs.isEmpty(), "nada foi iniciado");
+        assertFalse(Files.exists(journal()));
+        assertEquals("LICENSE_EXPIRED", m.lastDeclined().orElseThrow().reason());
+        assertEquals(attempt, m.lastDeclined().orElseThrow().attemptId());
+        // sem licenca: o mesmo caminho, outro motivo
+        gw.queue();
+        gw.reported.clear();
+        gw.refuseStart = "LICENSE_REQUIRED";
+        m.pull();
+        assertEquals("LICENSE_REQUIRED", m.lastDeclined().orElseThrow().reason());
+        assertTrue(work.jobs.isEmpty());
+        // a licenca voltou e uma execucao nova foi recebida: o aviso da anterior sai
+        gw.refuseStart = null;
+        gw.queue();
+        gw.reported.clear();
+        m.pull();
+        assertTrue(m.lastDeclined().isEmpty(), "uma execucao nova foi recebida");
+        assertEquals(1, work.jobs.size());
+    }
+
     @Test
     void antesDeIniciarAPlatformReconfereESeAlgoCaiuNadaEIniciado() throws Exception {
         RemoteMachine m = enabled(true);
