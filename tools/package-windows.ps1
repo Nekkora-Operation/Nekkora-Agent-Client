@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Gera o pacote de TESTE do Nekkora Agent (Client) para Windows x64: imagem de aplicativo com runtime Java proprio.
+  Gera o pacote do Nekkora Agent (Client) para Windows x64: imagem de aplicativo com runtime Java proprio.
 
 .DESCRIPTION
   1. Construcao (mvnw clean verify; -SkipTests pula os testes).
@@ -127,7 +127,7 @@ Copy-Item 'tools\distribution\LEIA-ME.txt' $app
 Export-Entry $flat.FullName 'META-INF/LICENSE' (Join-Path $legal 'FlatLaf-LICENSE-Apache-2.0.txt')
 Export-Entry $jna.FullName 'META-INF/AL2.0' (Join-Path $legal 'JNA-LICENSE-Apache-2.0.txt')
 $release = Get-Content (Join-Path $runtime 'release') | Where-Object { $_ -match '^(JAVA_VERSION|IMPLEMENTOR|OS_ARCH|MODULES)=' }
-$lines = @("Nekkora Agent (Client) $version - pacote de TESTE (Windows x64, sem assinatura digital)",
+$lines = @("Nekkora Agent (Client) $version (Windows x64, sem assinatura digital)",
     "commit: $commit$(if ($dirty) { ' (com alteracoes locais)' })",
     "data do commit: $commitTime",
     "versao mostrada na tela de entrada: $version (do pom.xml, pelos metadados do build dentro do JAR)",
