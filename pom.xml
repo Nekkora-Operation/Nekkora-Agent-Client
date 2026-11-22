@@ -17,6 +17,11 @@
         <!-- ano do build (UTC), gravado em build.properties a cada build; a tela nao tem ano escrito no codigo -->
         <maven.build.timestamp.format>yyyy</maven.build.timestamp.format>
         <build.year>${maven.build.timestamp}</build.year>
+        <!-- LICENCIAMENTO-002: commit da pasta de trabalho, passado pelo tools/package-windows.ps1 (-Dclient.build.*).
+             Sem eles (build comum), o JAR sai sem commit e a tela nao mostra commit nenhum. -->
+        <client.build.commit>nao-informado</client.build.commit>
+        <client.build.commitShort>nao-informado</client.build.commitShort>
+        <client.build.dirty>nao-informado</client.build.dirty>
         <flatlaf.version>3.7.2</flatlaf.version>
         <jna.version>5.17.0</jna.version>
         <junit.version>5.11.4</junit.version>
@@ -56,7 +61,7 @@
                 </excludes>
             </resource>
             <resource>
-                <!-- metadados do build (versao do projeto e ano do build): UNICO arquivo filtrado; lido por BuildInfo -->
+                <!-- metadados do build (versao do projeto, ano do build e commit): UNICO arquivo filtrado; lido por BuildInfo -->
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
                 <includes>

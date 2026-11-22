@@ -146,6 +146,28 @@ public class BuildInfoTest {
     }
 
     @Test
+    void oCommitGravadoPeloPacoteApareceAbreviado() {
+        String c = "8445367d7a616c92968f6345817118b0fbf4288c";
+        BuildInfo b = BuildInfo.of(props("version", "0.1.0", "commit", c, "commitShort", c.substring(0, 12), "dirty", "false"));
+        assertEquals(Optional.of(c), b.commit());
+        assertFalse(b.dirty());
+        assertEquals("Versão 0.1.0 · commit 8445367", SignInText.version(b));
+        BuildInfo sujo = BuildInfo.of(props("version", "0.1.0", "commit", c, "dirty", "true"));
+        assertEquals("Versão 0.1.0 · commit 8445367 (com alterações locais)", SignInText.version(sujo));
+    }
+
+    @Test
+    void semCommitValidoNaoHaCommitNaTela() {
+        for (String c : List.of("", "nao-informado", "${client.build.commit}", "8445367", "8445367D7A616C92968F6345817118B0FBF4288C",
+                "8445367d7a616c92968f6345817118b0fbf4288c0", "8445367d7a616c92968f6345817118b0fbf4288c\nx")) {
+            BuildInfo b = BuildInfo.of(props("version", "0.1.0", "commit", c, "dirty", "true"));
+            assertEquals(Optional.empty(), b.commit(), c);
+            assertFalse(b.dirty(), c);
+            assertEquals("Versão 0.1.0", SignInText.version(b), c);
+        }
+    }
+
+    @Test
     void versoesValidasSaoMostradasComoVieram() {
         for (String v : List.of("0.1.0", "1.0", "2.10.3", "1.4.0-rc.1", "0.2.0-SNAPSHOT", "10.20.30.40")) {
             assertEquals(Optional.of(v), BuildInfo.of(props("version", " " + v + " ")).version());

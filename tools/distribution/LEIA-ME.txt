@@ -1,8 +1,8 @@
-Nekkora Agent (Client) - pacote de TESTE para Windows x64
-=========================================================
+Nekkora Agent (Client) para Windows x64
+=======================================
 
-Este e um pacote de teste, sem assinatura digital. Nada e instalado: e uma pasta
-com o executavel e o Java proprio do aplicativo.
+Pacote sem assinatura digital. Nada e instalado: e uma pasta com o executavel e
+o Java proprio do aplicativo. Versao e commit: rodape da janela e VERSOES.txt.
 
 Iniciar
   Abra "Nekkora Agent Client.exe".
@@ -17,7 +17,8 @@ Depois de entrar
   Importar (.zip) traz um pacote pronto para este computador; Nova automacao
   prepara um pacote a partir de um .zip de codigo. Executar abre a preparacao
   (Python escolhido por voce, pasta de saida, aprovacao) e so entao voce inicia.
-  Tudo isso e local: nada e enviado a Platform e nada e instalado.
+  Tudo isso e local: nada e enviado a Platform e nada e instalado. (O que a
+  Platform solicita a este computador e outra coisa: veja Execucao remota.)
 
 O que o aplicativo guarda (em %LOCALAPPDATA%\Nekkora\AgentClient)
   - a preferencia de tema (preferencias.properties);
@@ -32,15 +33,22 @@ O que o aplicativo guarda (em %LOCALAPPDATA%\Nekkora\AgentClient)
 
 O que ele nao faz
   Nao le nem altera o Nekkora Agent ja instalado. Nao envia a Platform nada do
-  que voce executa aqui. Nao instala Python nem dependencias.
+  que voce executa localmente. Nao instala Python nem dependencias.
 
 Execucao remota (menu da conta)
   Habilita ESTE computador a receber execucoes solicitadas pela Platform. So
   com um codigo de habilitacao criado na Platform por quem administra as
   maquinas, e com a sua confirmacao aqui. Entrar com a sua conta nao habilita
   nada. Voce pode pausar, retomar e desabilitar.
-  NESTA VERSAO o aplicativo ainda nao executa o que a Platform solicitar: ele
-  so mantem o vinculo e a presenca enquanto estiver aberto.
+  Habilitado e aberto, o aplicativo executa o que a Platform solicitar: baixa
+  e confere o pacote, executa no Python escolhido na Platform, envia os
+  registros (a saida do processo) e os arquivos de retorno gravados na pasta
+  de saida (ate 50 arquivos, 20 MiB cada, 50 MiB no total) e informa o
+  resultado. Fechado, ele nao recebe nada.
+  Depende da Platform: o login pelo aplicativo e a execucao remota precisam
+  estar habilitados no servidor, e a automacao precisa de autorizacao para
+  esta maquina e, no modelo por licenca, de licenca vigente vinculada. Quando
+  a Platform recusa, a tela diz o motivo.
   Com o computador habilitado, o aplicativo informa a Platform quais versoes
   de Python encontrou aqui. Vai so a versao de cada instalacao: nenhum caminho,
   nome de pasta ou lista de pacotes.

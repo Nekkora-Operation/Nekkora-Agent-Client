@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Gera o pacote de TESTE do Nekkora Agent (Client) para Windows x64: imagem de aplicativo com runtime Java proprio.
+  Gera o pacote do Nekkora Agent (Client) para Windows x64: imagem de aplicativo com runtime Java proprio.
 
 .DESCRIPTION
   1. Construcao (mvnw clean verify; -SkipTests pula os testes).
@@ -13,7 +13,7 @@
      empacotado e a do executavel sao a do pom.xml.
   8. ZIP e SHA-256.
 
-  Saida: target\dist\nekkora-agent-client-<versao>-windows-x64-teste.zip (+ .sha256) e target\dist\VERSOES.txt.
+  Saida: target\dist\nekkora-agent-client-<versao>-windows-x64-<commit7>.zip (+ .sha256) e target\dist\VERSOES.txt.
   Sem assinatura digital. Nao instala nada nem altera a maquina.
 #>
 param([switch]$SkipTests, [switch]$NoZip)
@@ -56,10 +56,13 @@ $commit = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'git rev-parse falhou' }
 $commitTime = (& git show -s --format=%cI HEAD).Trim()
 $dirty = [bool](& git status --porcelain --untracked-files=no)
+if ($commit -notmatch '^[0-9a-f]{40}$') { throw 'git rev-parse HEAD nao devolveu um commit: o pacote nao pode ser identificado' }
+# LICENCIAMENTO-002: o commit vai para DENTRO do JAR (build.properties), lido daqui e conferido depois
+$buildId = "-Dclient.build.commit=$commit -Dclient.build.commitShort=$($commit.Substring(0, 12)) -Dclient.build.dirty=$($dirty.ToString().ToLowerInvariant())"
 
 Write-Host '[1/8] Construcao (mvnw clean verify)'
-$mvnArgs = '-B -q clean verify'
-if ($SkipTests) { $mvnArgs = '-B -q -DskipTests clean verify' }
+$mvnArgs = "-B -q $buildId clean verify"
+if ($SkipTests) { $mvnArgs = "-B -q -DskipTests $buildId clean verify" }
 Invoke-Checked 'mvnw' { cmd.exe /d /c ".\mvnw.cmd $mvnArgs" }
 
 [xml]$pom = Get-Content -Encoding UTF8 'pom.xml'
@@ -124,7 +127,7 @@ Copy-Item 'tools\distribution\LEIA-ME.txt' $app
 Export-Entry $flat.FullName 'META-INF/LICENSE' (Join-Path $legal 'FlatLaf-LICENSE-Apache-2.0.txt')
 Export-Entry $jna.FullName 'META-INF/AL2.0' (Join-Path $legal 'JNA-LICENSE-Apache-2.0.txt')
 $release = Get-Content (Join-Path $runtime 'release') | Where-Object { $_ -match '^(JAVA_VERSION|IMPLEMENTOR|OS_ARCH|MODULES)=' }
-$lines = @("Nekkora Agent (Client) $version - pacote de TESTE (Windows x64, sem assinatura digital)",
+$lines = @("Nekkora Agent (Client) $version (Windows x64, sem assinatura digital)",
     "commit: $commit$(if ($dirty) { ' (com alteracoes locais)' })",
     "data do commit: $commitTime",
     "versao mostrada na tela de entrada: $version (do pom.xml, pelos metadados do build dentro do JAR)",
@@ -179,6 +182,12 @@ if ($shown.Count -ne 1 -or $shown[0].Trim() -ne $version) { throw "versao nos me
 $exeVersion = (Get-Item (Join-Path $app "$AppName.exe")).VersionInfo.ProductVersion
 if ($exeVersion -ne $version -and $exeVersion -ne "$version.0") { throw "versao do executavel ('$exeVersion') diferente da do pom.xml ('$version')" }
 Write-Host "      versao: pom.xml $version = metadados do JAR $($shown[0].Trim()) = executavel $exeVersion"
+# o commit dentro do JAR tem de ser o desta pasta de trabalho
+$inJar = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^commit=' }) -replace '^commit=', ''
+if ($inJar.Count -ne 1 -or $inJar[0].Trim() -ne $commit) { throw "o JAR foi identificado com o commit '$($inJar -join ',')', mas a pasta de trabalho esta em $commit - pacote recusado" }
+$dirtyInJar = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^dirty=' }) -replace '^dirty=', ''
+if ($dirtyInJar.Count -ne 1 -or $dirtyInJar[0].Trim() -ne $dirty.ToString().ToLowerInvariant()) { throw "indicacao de alteracoes locais no JAR ('$($dirtyInJar -join ',')') diferente da pasta de trabalho ($dirty)" }
+Write-Host "      commit no JAR: $commit$(if ($dirty) { ' (com alteracoes locais)' })"
 # o ano da linha de direitos e o do build (UTC), gravado nos mesmos metadados
 $builtYear = @(Get-Content -Encoding UTF8 $meta | Where-Object { $_ -match '^year=' }) -replace '^year=', ''
 $nowYear = (Get-Date).ToUniversalTime().Year
@@ -195,7 +204,8 @@ if ($NoZip) {
     exit 0
 }
 Write-Host '[8/8] ZIP e SHA-256'
-$zipName = "nekkora-agent-client-$version-windows-x64-teste.zip"
+# LICENCIAMENTO-002: o nome leva o commit (7); com alteracoes locais, o aviso. Nao usa mais o sufixo -teste
+$zipName = "nekkora-agent-client-$version-windows-x64-$($commit.Substring(0, 7))$(if ($dirty) { '-alteracoes-locais' }).zip"
 $zip = Join-Path $dist $zipName
 Copy-Item -Recurse $app (Join-Path $dist $AppName)
 [System.IO.Compression.ZipFile]::CreateFromDirectory($app, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
