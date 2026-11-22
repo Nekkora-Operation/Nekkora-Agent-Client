@@ -60,10 +60,11 @@ public final class SignInText {
 
     /**
      * Linha da versao no rodape. O numero vem dos metadados do build; sem eles, a linha diz que e uma execucao de
-     * desenvolvimento, e nunca um numero de release.
+     * desenvolvimento, e nunca um numero de release. Com o commit gravado pelo pacote, ele aparece abreviado ao lado.
      */
     public static String version(BuildInfo build) {
-        return build.version().map(v -> "Versão " + v).orElse("Versão de desenvolvimento");
+        String v = build.version().map(x -> "Versão " + x).orElse("Versão de desenvolvimento");
+        return build.commitShort().map(c -> v + " · commit " + c + (build.dirty() ? " (com alterações locais)" : "")).orElse(v);
     }
 
     /**

@@ -48,8 +48,13 @@ mesmo a um Client alterado.
 - **Executar aqui é somente local:** a tela diz isso, com o computador habilitado para execução remota ou não.
 - **Execução remota** (menu da conta): habilita **este computador** a receber execuções solicitadas pela Platform. Exige
   um código de habilitação criado na Platform por quem administra as máquinas e a confirmação explícita aqui; entrar com
-  a conta não habilita nada. Dá para desabilitar. Pausar o recebimento existe só no mecanismo interno; um computador já pausado mostra "Voltar a receber trabalhos". **Nesta versão o aplicativo ainda não
-  executa o que a Platform solicitar**: ele mantém o vínculo e a presença, e a Platform o mostra como incompatível.
+  a conta não habilita nada. Dá para desabilitar. Pausar o recebimento existe só no mecanismo interno; um computador já pausado mostra "Voltar a receber trabalhos". Habilitado e aberto, o
+  aplicativo **executa o que a Platform solicitar**: recebe a tentativa, baixa e confere o pacote, executa no Python
+  escolhido na Platform, envia os registros (a saída do processo) e os arquivos de retorno da pasta de saída (até 50
+  arquivos, 20 MiB cada, 50 MiB no total) e informa o desfecho ([`docs/execucao-remota.md`](docs/execucao-remota.md)).
+  **Depende da Platform:** só funciona com o login pelo aplicativo e a execução remota habilitados no servidor, e a
+  automação precisa estar autorizada para a máquina. No modelo por licença, a Platform só entrega trabalho de uma
+  automação com licença vigente vinculada; a recusa aparece com o motivo.
 - Com uma execução em andamento, trocar de organização ou de ambiente e terminar a sessão ficam bloqueados; sair pede
   confirmação antes de encerrar o processo.
 - Cada linha diz se o pacote está neste computador. Listar os metadados na Platform não traz o código.
@@ -118,8 +123,10 @@ Para não usar a pasta de dados padrão: `$env:NEKKORA_AGENT_CLIENT_DATA_DIR = '
 powershell -ExecutionPolicy Bypass -File tools\package-windows.ps1
 ```
 
-Gera `target\dist\nekkora-agent-client-<versão>-windows-x64-teste.zip`, o `.sha256` e `VERSOES.txt` (commit, bibliotecas
-e runtime). É um pacote de **teste**, sem assinatura digital. Nada é instalado: é uma pasta com o executável e o runtime.
+Gera `target\dist\nekkora-agent-client-<versão>-windows-x64-<commit7>.zip` (com `-alteracoes-locais` se a pasta
+tiver alterações), o `.sha256` e `VERSOES.txt` (commit, bibliotecas e runtime). A versão e o commit também vão para
+dentro do JAR (`build.properties`, lido pela tela, que mostra "Versão X · commit abc1234"); o script recusa o pacote se
+o JAR divergir do commit da pasta de trabalho. Sem assinatura digital. Nada é instalado: é uma pasta com o executável e o runtime.
 
 ## Fluxo de trabalho
 

@@ -52,9 +52,9 @@ Menu da conta → **Execução remota**. A pessoa informa o código de habilita�
 
 ## Presença, pausar, desabilitar
 
-- **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Nesta versão
-  ela **não declara nenhuma capacidade de execução remota**, então a Platform mostra o computador como *incompatível* e
-  não lhe entrega nada.
+- **Presença:** uma ao abrir e depois a cada 60 s, enquanto o aplicativo estiver aberto e houver vínculo. Ela declara o
+  inventário de Python (`PY_INVENTORY_1_0`) e, desde a T03, que executa (`REMOTE_RUN_1_0`); a Platform só entrega
+  tentativas a quem declara executar (ver "Entrega e execução de uma tentativa").
 - **Pausa (sem botão na tela desde 17/11):** "Pausar novos trabalhos" e "Voltar a receber trabalhos" foram retirados da tela a
   pedido do aceite. O mecanismo interno continua (`RemoteMachine.pause()`/`resume()` e o canal da máquina). Um computador que **já
   esteja pausado** mostra o estado e, só nele, "Voltar a receber trabalhos": a recuperação explícita, que preserva o vínculo e as
