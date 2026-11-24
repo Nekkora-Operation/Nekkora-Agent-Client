@@ -104,6 +104,19 @@ Só a fase `ENV_PREPARING` vira `REFUSED ENVIRONMENT_SETUP_INTERRUPTED`, com rel
 iniciada: o lançamento só acontece depois de o diário gravar `STARTING`. `STARTING` e `RUNNING` seguem a regra de sempre (processo
 vivo é adotado; `STARTING` sem prova vira `ENDED_UNKNOWN`).
 
+### Queda com a automação já iniciada ("ocupação incerta")
+
+Não muda com o ambiente por execução: é a regra da execução remota. Se o aplicativo cai com a automação rodando, ele não consegue
+provar ao reabrir que os processos dela acabaram (o grupo de processos do Windows era dele). A tentativa termina como "Resultado
+não confirmado" e a máquina fica em **ocupação incerta**: não recebe trabalho novo e não faz limpeza local nenhuma (nem a
+varredura), para nunca apagar arquivos em uso por um processo que pode estar vivo. "Declarar reconciliação" na Platform libera uma
+nova tentativa da solicitação, mas não a máquina.
+
+Procedimento suportado para liberar: **encerrar a sessão do Windows em que a automação rodou** (sair da conta ou reiniciar o
+computador) e abrir o aplicativo de novo. Com a sessão comprovadamente encerrada, os processos são dados por acabados, a máquina
+informa à Platform que nenhum processo continua, volta a ficar livre e a varredura tira o código, o venv e o que sobrou do preparo
+daquela tentativa. Usar outra identidade de máquina no mesmo computador não libera a primeira.
+
 ### Registro do preparo
 
 O que o `venv` e o `pip` escreveram, com linhas do aplicativo (`[Nekkora Agent] …`), sem segredos — credencial em URL
@@ -113,8 +126,15 @@ Só a falha estruturada (`failure`) vai em `FAILED`; em `READY` e `INTERRUPTED` 
 
 ## Limpeza
 
-- `ambiente\` sai no fim da tentativa (com a mesma regra do código: nunca com processo da execução vivo), depois de qualquer falha
-  do preparo e na varredura ao abrir e de hora em hora (tentativas que não são a pendente).
+- `ambiente\` (o venv temporário) sai junto com o código da tentativa, **quando a tentativa está resolvida com a Platform** (o
+  desfecho foi aceito), nunca com processo da execução vivo; também depois de qualquer falha do preparo e na varredura ao abrir e
+  de hora em hora (tentativas que não são a pendente). Sem conexão, o desfecho fica no diário e o venv fica até a entrega: ele
+  não é resultado e não é enviado.
+- A pasta de saída (os arquivos de retorno) e os registros seguem a regra da entrega, independente do venv: só saem com o
+  recebimento confirmado, ou quando vence o prazo de guarda. A varredura e o "Limpar cache" nunca tocam a tentativa pendente.
+- Pasta que ficou só com `preparo\` (sobra de uma queda): entra na varredura como o código e o ambiente. Antes de apagar, o
+  `venv`/`pip` marcado daquela tentativa (`<nome>.processo`: PID e instante de início, ao milissegundo) é encerrado; um processo
+  com outro instante (PID reaproveitado), o de outra tentativa ou qualquer Python sem marca não é tocado.
 - `resolucoes\<id>\` sai no fim de cada resolução e na varredura (nunca a de uma resolução em andamento).
 - A pasta de uma tentativa em preparo nunca é apagada por fora.
 - A remoção nunca segue junção nem ligação simbólica (`SafeTree`: a ligação some como entrada; o outro lado fica intacto).
