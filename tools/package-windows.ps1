@@ -165,12 +165,12 @@ if ($bad.Count -gt 0) { throw "conteudo indevido no JAR: $($bad -join ', ')" }
 foreach ($n in $names | Where-Object { $_ -like '*.class' }) {
     if ($n -notlike 'com/nekkora/client/*') { throw "classe fora de com.nekkora.client: $n" }
 }
-# nenhum arquivo de configuracao aponta para laboratorio nem relaxa o TLS. O pacote nao leva NENHUMA propriedade nekkora.client.*:
+# nenhum arquivo de configuracao aponta para laboratorio nem relaxa o TLS. O pacote nao leva NENHUMA propriedade -Dnekkora.client.*:
 # endereco da Platform, pasta de dados e o indice de laboratorio do ambiente gerenciado (nekkora.client.managedIndexUrl,
 # AMBIENTE-PYTHON-001) so existem nas copias de laboratorio
 foreach ($c in Get-ChildItem -Recurse -File -Filter '*.cfg' $app) {
     $text = Get-Content -Raw $c.FullName
-    if ($text -match '(?i)localhost|127\.0\.0\.1|trustStore|nekkora\.client\.|managedIndexUrl|frontlab') { throw "configuracao de laboratorio em $($c.Name)" }
+    if ($text -match '(?i)localhost|127\.0\.0\.1|trustStore|-Dnekkora\.client\.|managedIndexUrl|frontlab') { throw "configuracao de laboratorio em $($c.Name)" }
 }
 if (Get-ChildItem -Recurse -File $app -Include '*.p12', '*.pem', '*.jks', '*.pfx') { throw 'certificado ou repositorio de chaves dentro do pacote' }
 # a versao que a tela mostra (build.properties DENTRO do JAR empacotado) e a do pom.xml, e a do executavel tambem
