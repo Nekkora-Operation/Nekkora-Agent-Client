@@ -200,6 +200,13 @@ O aplicativo declara que executa (`REMOTE_RUN_1_0`) e a tela diz isso. O caminho
 | Recebimento pausado | nada novo é entregue; o que está em execução continua |
 | Sem rede no meio do envio dos resultados | o envio é retomado na próxima consulta; o desfecho não é informado de novo e nenhum arquivo é duplicado |
 
+**Ambiente gerenciado (AMBIENTE-PYTHON-001).** Uma tentativa no modo MANAGED não usa o Python escolhido como ele está: entre o
+download e o início, este computador cria um ambiente virtual temporário **a partir** dele, instala exatamente o lock aceito na
+Platform, confere e, só depois de o diário gravar "iniciando", lança a automação nesse ambiente. Nada é instalado no Python do
+computador. O passo a passo, as recusas novas (`ENVIRONMENT_SETUP_FAILED`, `DEPENDENCY_INSTALL_FAILED`,
+`ENVIRONMENT_SETUP_INTERRUPTED`, `EXTERNAL_PREREQUISITE_MISSING`), a resolução do lock, o cache do pip e a limpeza estão em
+`docs/ambiente-gerenciado.md`. Sem o campo `environment` na oferta, nada disso acontece: o modo de sempre segue igual.
+
 Motivos de recusa que esta máquina dá: `BUSY` (há outra execução, local ou não), `PACKAGE_INVALID`, `ENVIRONMENT_GONE`,
 `ENVIRONMENT_INCOMPATIBLE`, `DEPENDENCIES_MISSING`, `SESSION_UNAVAILABLE` (tela bloqueada ou sem sessão interativa),
 `DISK_PRESSURE` (não conseguiu preparar as pastas ou gravar) e `CLIENT_INCOMPATIBLE` (pacote de um tipo que o aplicativo
