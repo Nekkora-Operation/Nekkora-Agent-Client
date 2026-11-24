@@ -58,6 +58,14 @@ class ManagedEnvironmentsTest {
         return new ManagedEnvironments(tmp.resolve("remota"), indexUrl, cacheMiB::get);
     }
 
+    @Test
+    void aSaidaDoPythonChegaEmUtf8MesmoComAcentos() throws Exception {
+        EnvCommand.Ran r = EnvCommand.run(python, java.util.List.of("-c", "import sys; print(sys.flags.utf8_mode, sys.flags.isolated, 'conex\u00e3o for\u00e7ada')"),
+                tmp.resolve("utf8"), "utf8", java.time.Duration.ofSeconds(60), () -> false, 4096);
+        assertTrue(r.ok(), r.output());
+        assertEquals("1 1 conexão forçada", r.output().strip());
+    }
+
     private static String id() {
         return UUID.randomUUID().toString();
     }

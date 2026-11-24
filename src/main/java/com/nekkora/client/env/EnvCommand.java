@@ -34,7 +34,7 @@ final class EnvCommand {
     }
 
     /**
-     * Roda {@code python -I <args...>} em {@code workDir}, ate {@code timeout} ou ate {@code cancel} dizer que basta (o grupo inteiro
+     * Roda {@code python -I -X utf8 <args...>} em {@code workDir}, ate {@code timeout} ou ate {@code cancel} dizer que basta (o grupo inteiro
      * e encerrado). Bloqueia. Falha ao lancar: {@link IOException}.
      */
     static Ran run(Path python, List<String> args, Path workDir, String name, Duration timeout, BooleanSupplier cancel, int keep) throws IOException {
@@ -48,6 +48,11 @@ final class EnvCommand {
         cmd.add(python.toString());
         // modo isolado SEMPRE, e como primeiro argumento
         cmd.add("-I");
+        // modo UTF-8 (o -I ignora PYTHONIOENCODING): a saida do venv e do pip chega em UTF-8, inclusive as mensagens do Windows
+        // ("ConnectionResetError: [WinError 10054] Foi forcado...") que, na pagina de codigo do console, viravam caracteres trocados
+        // no resumo e no registro do preparo (achado na validacao de ponta a ponta)
+        cmd.add("-X");
+        cmd.add("utf8");
         cmd.addAll(args);
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(workDir.toFile()).redirectErrorStream(true).redirectOutput(out.toFile())
                 .redirectInput(ProcessBuilder.Redirect.PIPE);
