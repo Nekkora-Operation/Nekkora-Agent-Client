@@ -657,7 +657,7 @@ public final class ManagedEnvironments {
         }
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path p : ds) {
-                if (!active(p) && SafeTree.delete(p)) {
+                if (!active(p) && stopped(p) && SafeTree.delete(p)) {
                     n++;
                 }
             }
@@ -670,14 +670,24 @@ public final class ManagedEnvironments {
         return n;
     }
 
-    /** Apaga o ambiente da tentativa, se nao estiver em preparo agora. Quem chama garante que nenhum processo da tentativa vive. */
+    /**
+     * Apaga o ambiente da tentativa, se nao estiver em preparo agora. Quem chama garante que nenhum processo DA AUTOMACAO vive;
+     * um {@code venv}/{@code pip} que tenha sobrado de uma queda do aplicativo e encerrado antes ({@link EnvCommand#stopLeftovers}).
+     */
     public boolean discard(Path attemptDir) {
         Path env = environmentDir(attemptDir).toAbsolutePath().normalize();
         if (active(env)) {
             return false;
         }
+        stopped(attemptDir);
         SafeTree.delete(attemptDir.resolve("preparo"));
         return SafeTree.delete(env);
+    }
+
+    /** Encerra o que sobrou de uma queda debaixo da pasta (sempre verdadeiro: a remocao em seguida diz se deu certo). */
+    private static boolean stopped(Path dir) {
+        EnvCommand.stopLeftovers(dir);
+        return true;
     }
 
     // ------------------------------------------------------------------------------------------------ auxiliares

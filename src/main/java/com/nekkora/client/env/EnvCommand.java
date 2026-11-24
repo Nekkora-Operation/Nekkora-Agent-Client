@@ -69,6 +69,7 @@ final class EnvCommand {
         try {
             p = pb.start();
             group.add(p);
+            mark(workDir, name, p.toHandle());
             p.getOutputStream().close();
             long limit = System.nanoTime() + timeout.toNanos();
             while (!p.waitFor(50, TimeUnit.MILLISECONDS)) {
@@ -99,6 +100,84 @@ final class EnvCommand {
                 group.terminate();
             }
             group.close();
+            if (p == null || !p.isAlive()) {
+                try {
+                    Files.deleteIfExists(workDir.resolve(name + MARK));
+                } catch (IOException e) {
+                    // a marca de um processo que ja terminou nao encerra nada (o inicio nao confere)
+                }
+            }
+        }
+    }
+
+    /** A marca de um processo auxiliar em andamento: PID e instante de inicio, na pasta de trabalho dele. */
+    static final String MARK = ".processo";
+
+    private static void mark(Path workDir, String name, ProcessHandle h) {
+        java.util.Optional<java.time.Instant> start = h.info().startInstant();
+        if (start.isEmpty()) {
+            return;
+        }
+        try {
+            Files.writeString(workDir.resolve(name + MARK), h.pid() + " " + start.get().toEpochMilli(), StandardCharsets.US_ASCII);
+        } catch (IOException e) {
+            // sem a marca, uma queda do aplicativo deixa o processo seguir ate terminar (o que ele deixar sai na varredura)
+        }
+    }
+
+    /**
+     * Depois de uma queda do aplicativo, o {@code venv} ou o {@code pip} de um preparo (ou de uma resolucao) pode seguir rodando
+     * sozinho: o grupo de processos so encerra o que o aplicativo manda encerrar. Encerra os processos marcados debaixo de
+     * {@code dir} (e os descendentes deles) que AINDA SAO os mesmos: mesmo PID e mesmo instante de inicio, ao milissegundo (um PID
+     * reaproveitado por outro programa nao confere e nao e tocado). So Java, sem funcao nova do sistema. Devolve quantos encerrou.
+     */
+    static int stopLeftovers(Path dir) {
+        int[] n = {0};
+        java.util.List<Path> marks = new java.util.ArrayList<>();
+        find(dir, marks, 0);
+        for (Path m : marks) {
+            try {
+                String[] v = Files.readString(m, StandardCharsets.US_ASCII).strip().split(" ");
+                long pid = Long.parseLong(v[0]);
+                long start = Long.parseLong(v[1]);
+                ProcessHandle.of(pid).filter(h -> h.info().startInstant().map(i -> i.toEpochMilli() == start).orElse(false)).ifPresent(h -> {
+                    h.descendants().forEach(ProcessHandle::destroyForcibly);
+                    h.destroyForcibly();
+                    try {
+                        h.onExit().get(10, TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        // segue: a remocao da pasta tenta de novo na varredura seguinte
+                    }
+                    n[0]++;
+                });
+                Files.deleteIfExists(m);
+            } catch (IOException | RuntimeException e) {
+                // marca ilegivel: nao encerra nada
+            }
+        }
+        return n[0];
+    }
+
+    private static void find(Path dir, java.util.List<Path> out, int depth) {
+        if (depth > 3 || !Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            for (Path p : ds) {
+                if (Files.isSymbolicLink(p)) {
+                    continue;
+                }
+                if (Files.isDirectory(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    // so as pastas de trabalho do aplicativo; o ambiente (venv) nao tem marcas
+                    if (!p.getFileName().toString().equals("ambiente") && !p.getFileName().toString().equals("venv")) {
+                        find(p, out, depth + 1);
+                    }
+                } else if (p.getFileName().toString().endsWith(MARK)) {
+                    out.add(p);
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // fica para a proxima
         }
     }
 

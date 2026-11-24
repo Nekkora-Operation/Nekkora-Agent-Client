@@ -66,6 +66,29 @@ class ManagedEnvironmentsTest {
         assertEquals("1 1 conexão forçada", r.output().strip());
     }
 
+    @Test
+    void depoisDeUmaQuedaOPipQueSobrouEEncerradoSoSeAindaForOMesmoProcesso() throws Exception {
+        // o "pip" de um preparo de antes da queda: um Python de verdade, parado, com a marca que o aplicativo grava ao lanca-lo
+        Path attempt = tmp.resolve("remota").resolve("tentativas").resolve(id());
+        Path work = Files.createDirectories(attempt.resolve("preparo"));
+        Process sobra = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
+        Process outro = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
+        try {
+            ProcessHandle h = sobra.toHandle();
+            Files.writeString(work.resolve("pip" + EnvCommand.MARK), h.pid() + " " + h.info().startInstant().orElseThrow().toEpochMilli());
+            // a marca de outro PID com um instante que nao e o dele (PID reaproveitado): nao e tocado
+            Files.writeString(work.resolve("venv" + EnvCommand.MARK), outro.pid() + " 1");
+            Files.createDirectories(attempt.resolve("ambiente"));
+            assertTrue(environments(index.url()).discard(attempt));
+            assertTrue(sobra.waitFor(15, java.util.concurrent.TimeUnit.SECONDS), "o pip que sobrou foi encerrado");
+            assertTrue(outro.isAlive(), "um processo com outro instante de inicio nao e encerrado");
+            assertFalse(Files.exists(attempt.resolve("ambiente")));
+        } finally {
+            sobra.destroyForcibly();
+            outro.destroyForcibly();
+        }
+    }
+
     private static String id() {
         return UUID.randomUUID().toString();
     }

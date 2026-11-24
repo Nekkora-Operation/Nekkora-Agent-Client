@@ -150,8 +150,9 @@ Em "Execução remota" → "Detalhes técnicos" → **Ambientes gerenciados**: o
 
 - Com uma tentativa no diário, o aplicativo não consulta `remote/next`; um pedido de resolução espera a tentativa terminar.
 - Cada processo do pip roda no seu próprio grupo de processos do Windows (no preparo ainda não existe o grupo da execução, que só
-  nasce no lançamento). Se o aplicativo cair (não fechar), um pip em andamento pode seguir até terminar; o que ele deixar sai na
-  varredura seguinte.
+  nasce no lançamento). Se o aplicativo cair (não fechar), o `venv`/`pip` em andamento é encerrado quando o aplicativo reabre: cada
+  processo deixa uma marca (`<nome>.processo`, PID e instante de início) na pasta de trabalho, e só um processo com o MESMO PID e o
+  MESMO instante de início é encerrado (PID reaproveitado não confere). Só Java, sem função nova do sistema.
 - `NOT_FOUND` depende da linha de 404 do pip em `-vv`; um índice que responda de outro jeito aparece como `NO_COMPATIBLE_WHEEL`.
 
 ## Testes
