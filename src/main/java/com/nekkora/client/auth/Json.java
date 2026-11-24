@@ -45,8 +45,9 @@ public final class Json {
         return object(text, 16_384);
     }
 
+    /** O mesmo, com outro tamanho maximo (em caracteres): o canal da maquina recebe listas maiores (o lock de um ambiente gerenciado). */
     @SuppressWarnings("unchecked")
-    static Map<String, Object> object(String text, int max) {
+    public static Map<String, Object> object(String text, int max) {
         Object v = parse(text, max);
         if (!(v instanceof Map)) {
             throw new IllegalArgumentException("json");

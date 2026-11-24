@@ -143,9 +143,25 @@ public final class Runner implements AutoCloseable {
         }
     }
 
-    /** O que quem pede uma execucao gerenciada entrega. {@code dir}: a pasta dela, de {@link #managedDir}. */
+    /**
+     * O que quem pede uma execucao gerenciada entrega. {@code dir}: a pasta dela, de {@link #managedDir}. {@code environmentPython}
+     * (AMBIENTE-PYTHON-001): o interpretador do ambiente preparado PARA ESTA tentativa, dentro de {@code dir/ambiente}; nulo no modo de
+     * sempre, em que o Python escolhido ({@code pythonId}) e usado como esta.
+     */
     public record ManagedJob(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, Path zip, String sha256, String fingerprint,
-                             List<String> dependencies, String pythonId, Path dir) {
+                             List<String> dependencies, String pythonId, Path dir, Path environmentPython) {
+
+        public ManagedJob(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, Path zip, String sha256, String fingerprint,
+                          List<String> dependencies, String pythonId, Path dir) {
+            this(organizationId, workspaceId, automationId, automationVersionId, zip, sha256, fingerprint, dependencies, pythonId, dir, null);
+        }
+
+        /** O mesmo, com o ambiente preparado ({@code environmentPython} nulo ou vazio: o modo de sempre). */
+        public static ManagedJob of(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, String zip, String sha256,
+                                    String fingerprint, List<String> dependencies, String pythonId, String dir, String environmentPython) {
+            return new ManagedJob(organizationId, workspaceId, automationId, automationVersionId, Path.of(zip), sha256, fingerprint, dependencies, pythonId,
+                    Path.of(dir), environmentPython == null || environmentPython.isEmpty() ? null : Path.of(environmentPython));
+        }
 
         /** O mesmo, com os caminhos em texto (para quem monta o aplicativo, que nao toca em disco). */
         public static ManagedJob of(UUID organizationId, UUID workspaceId, UUID automationId, UUID automationVersionId, String zip, String sha256,
@@ -294,6 +310,38 @@ public final class Runner implements AutoCloseable {
         return startManaged(job, null);
     }
 
+    /**
+     * O interpretador do ambiente gerenciado da tentativa: so vale o que esta em {@code dir/ambiente} (a pasta preparada para ESTA
+     * tentativa), arquivo comum, sem ligacao no caminho. Qualquer outra coisa: o ambiente nao esta mais aqui.
+     */
+    private static Path preparedPython(ManagedJob job) throws ManagedRefused {
+        try {
+            Path env = job.dir().toAbsolutePath().normalize().resolve("ambiente");
+            Path p = job.environmentPython().toAbsolutePath().normalize();
+            if (!p.startsWith(env) || !Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS) || !p.toRealPath().startsWith(env.toRealPath())) {
+                throw new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE);
+            }
+            return p;
+        } catch (java.io.IOException | RuntimeException e) {
+            throw new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE);
+        }
+    }
+
+    /**
+     * AMBIENTE-PYTHON-001: quem diz se a pasta de ambiente de uma tentativa esta EM PREPARO agora (nao pode ser apagada). Sem quem
+     * diga, nenhuma esta.
+     */
+    private volatile java.util.function.Predicate<Path> environmentBusy = p -> false;
+
+    public void setEnvironmentBusy(java.util.function.Predicate<Path> busy) {
+        environmentBusy = busy == null ? p -> false : busy;
+    }
+
+    /** O executavel de uma instalacao de {@link #installedPythons}, pelo identificador dela, se ainda existe. */
+    public Optional<Path> installedPython(String id) {
+        return installedPath(id);
+    }
+
     /** O mesmo, entregando a saida do processo, linha a linha, a {@code output} (nulo: lida e desprezada). */
     public String startManaged(ManagedJob job, OutputLines.Sink output) throws ManagedRefused {
         if (managedRoot == null || job.dir() == null || !job.dir().toAbsolutePath().normalize().startsWith(managedRoot)) {
@@ -308,7 +356,9 @@ public final class Runner implements AutoCloseable {
             throw new ManagedRefused(e.detail().filter(com.nekkora.client.pack.ErrorCode.EXEC_PACKAGE_UNSUPPORTED.code()::equals).isPresent() ? ManagedRefusal.PACKAGE_UNSUPPORTED
                     : e.code() == com.nekkora.client.pack.ImportProblem.Code.DOWNLOAD_STORE_FAILED ? ManagedRefusal.STORAGE : ManagedRefusal.PACKAGE_INVALID);
         }
-        Path python = installedPath(job.pythonId()).orElseThrow(() -> new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE));
+        Path python = job.environmentPython() == null ? installedPath(job.pythonId()).orElseThrow(() -> new ManagedRefused(ManagedRefusal.ENVIRONMENT_GONE))
+                : preparedPython(job);
+        // a lista efetiva e conferida no interpretador que vai executar (no ambiente preparado, de novo, depois da conferencia do preparo)
         requireListed(python, job.dependencies());
         try {
             Path out = Files.createDirectories(job.dir().resolve("saida"));
@@ -431,7 +481,10 @@ public final class Runner implements AutoCloseable {
         return false;
     }
 
-    /** O mesmo, e tambem a copia que foi EXECUTADA ({@code id}: a execucao, terminada). O registro da execucao fica. */
+    /**
+     * O mesmo, e tambem a copia que foi EXECUTADA ({@code id}: a execucao, terminada). O registro da execucao fica. O ambiente
+     * gerenciado da tentativa ({@code ambiente}) sai junto - nunca com processo vivo, nunca durante o preparo, e sem seguir ligacoes.
+     */
     public void discardManaged(String key, String id) {
         if (inUse(key)) return;
         managedDir(key).ifPresent(dir -> {
@@ -441,6 +494,7 @@ public final class Runner implements AutoCloseable {
                 // tentado de novo na proxima vez
             }
             RunStore.deleteTree(dir.resolve("pacote"));
+            discardEnvironment(dir);
             removeIfEmpty(dir);
         });
         if (id != null && ExecutionId.valid(id)) controller.discardManagedCopy(new ExecutionId(id));
@@ -583,7 +637,9 @@ public final class Runner implements AutoCloseable {
                 String key = String.valueOf(dir.getFileName());
                 if (key.equals(keepKey) || managedDir(key).isEmpty() || !Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
                 boolean code = Files.exists(dir.resolve("pacote.zip"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
-                        || Files.exists(dir.resolve("pacote"), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                        || Files.exists(dir.resolve("pacote"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        || Files.exists(dir.resolve("ambiente"), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+
                 if (code) {
                     discardManaged(key, null);
                     n++;
@@ -603,6 +659,19 @@ public final class Runner implements AutoCloseable {
             // fica para a proxima abertura
         }
         return n;
+    }
+
+    /** O ambiente gerenciado da tentativa e a pasta de trabalho do preparo, se nao estao em preparo agora. Sem seguir ligacoes. */
+    private void discardEnvironment(Path dir) {
+        Path env = dir.resolve("ambiente");
+        if (!Files.exists(env, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.exists(dir.resolve("preparo"), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        try {
+            if (environmentBusy.test(env.toAbsolutePath().normalize())) return;
+        } catch (RuntimeException e) {
+            return;
+        }
+        SafeTree.delete(dir.resolve("preparo"));
+        SafeTree.delete(env);
     }
 
     private static void removeIfEmpty(Path dir) {

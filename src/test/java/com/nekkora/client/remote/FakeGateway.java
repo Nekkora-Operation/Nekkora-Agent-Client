@@ -446,6 +446,75 @@ public final class FakeGateway implements AutoCloseable {
         return (UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", "").substring(0, 43);
     }
 
+    // ---- AMBIENTE-PYTHON-001
+    /** A presenca responde {@code managedEnvironments: true} (a chave ligada na Platform). */
+    public volatile boolean managedEnvironments;
+    /** A ultima presenca declarou MANAGED_ENV_1_0? */
+    public volatile boolean declaredManaged;
+    /** O objeto {@code environment} da oferta (JSON), quando nao nulo: a tentativa e MANAGED. */
+    public volatile String offerEnvironment;
+    /** As etapas recebidas ({@code ENV_CREATING}, {@code DEPS_INSTALLING}), na ordem, com repeticoes. */
+    public final List<String> stages = new CopyOnWriteArrayList<>();
+    /** Os relatorios do preparo recebidos (corpo), na ordem; o primeiro e o gravado. */
+    public final List<String> environmentReports = new CopyOnWriteArrayList<>();
+    /** Um pedido de resolucao pendente (o objeto JSON); some quando a resposta chega. */
+    public volatile String environmentResolution;
+    /** As respostas de resolucao recebidas: {@code pedido|corpo}. */
+    public final List<String> resolutionAnswers = new CopyOnWriteArrayList<>();
+    /** Respostas 503 para as proximas respostas de resolucao. */
+    public volatile int failResolutionAnswers;
+
+    private String withResolution(String json) {
+        String r = environmentResolution;
+        if (r == null) {
+            return json;
+        }
+        return json.equals("{}") ? "{\"environmentResolution\":" + r + "}" : json.substring(0, json.length() - 1) + ",\"environmentResolution\":" + r + "}";
+    }
+
+    private void stage(HttpExchange x, String path, String text) throws IOException {
+        String id = path.substring("/agent/api/v1/remote/attempts/".length()).split("/")[0];
+        if (!id.equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        java.util.regex.Matcher epoch = java.util.regex.Pattern.compile("\"epoch\":(\\d+)").matcher(text);
+        if (attemptToken == null || !attemptToken.equals(field(text, "token")) || !epoch.find() || Integer.parseInt(epoch.group(1)) != attemptEpoch) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        if (offerEnvironment == null) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_transition\"}");
+            return;
+        }
+        boolean preparing = attemptState.equals("PREPARING");
+        if (preparing) {
+            stages.add(field(text, "stage"));
+        }
+        respond(x, 200, "{\"attemptId\":\"" + attemptId + "\",\"state\":\"" + attemptState + "\",\"proceed\":" + preparing
+                + ",\"cancelRequested\":" + cancelRequested + ",\"leaseSeconds\":90}");
+    }
+
+    private void environmentReport(HttpExchange x, String path, String text) throws IOException {
+        String id = path.substring("/agent/api/v1/remote/attempts/".length()).split("/")[0];
+        if (!id.equals(attemptId)) {
+            respond(x, 404, "{\"error\":\"not_found\"}");
+            return;
+        }
+        if (attemptToken == null || !attemptToken.equals(field(text, "token"))) {
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"remote_attempt_stale\"}");
+            return;
+        }
+        String outcome = field(text, "outcome");
+        if (!environmentReports.isEmpty() && !environmentReports.get(0).equals(text)) {
+            environmentReports.add(text);
+            respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"managed_environment_report_conflict\"}");
+            return;
+        }
+        environmentReports.add(text);
+        respond(x, 200, "{\"outcome\":\"" + outcome + "\"}");
+    }
+
     /** Um pedido de verificacao de dependencias pendente (o objeto JSON, como a Platform o entrega); nulo = nao ha. */
     public volatile String dependencyCheck;
     /** As respostas de verificacao recebidas: {@code verificacao|corpo}. */
@@ -467,7 +536,7 @@ public final class FakeGateway implements AutoCloseable {
             return;
         }
         if (attemptId == null) {
-            respond(x, 200, withCheck("{}"));
+            respond(x, 200, withResolution(withCheck("{}")));
             return;
         }
         if (attemptState.equals("QUEUED") || attemptState.equals("OFFERED")) {
@@ -488,11 +557,12 @@ public final class FakeGateway implements AutoCloseable {
                     + "c".repeat(64) + "\",\"packageFingerprintRule\":\"" + offerRule + "\",\"dependencies\":[\"requests==2.32.3\"],"
                     + (offerWorkspace ? "\"workspaceId\":\"" + workspaceId + "\"," : "")
                     + (offerPython == null ? "" : "\"pythonEnvironmentId\":\"" + offerPython + "\",")
+                    + (offerEnvironment == null ? "" : "\"environment\":" + offerEnvironment + ",")
                     + "\"token\":\"" + (malformedOffer ? "nao e um token" : attemptToken) + "\",\"epoch\":" + attemptEpoch + ",\"leaseSeconds\":90}}"));
             return;
         }
         boolean live = List.of("RECEIVED", "PREPARING", "STARTING", "RUNNING").contains(attemptState);
-        respond(x, 200, withCheck(live && cancelRequested ? "{\"cancel\":{\"attemptId\":\"" + attemptId + "\"}}" : "{}"));
+        respond(x, 200, withResolution(withCheck(live && cancelRequested ? "{\"cancel\":{\"attemptId\":\"" + attemptId + "\"}}" : "{}")));
     }
 
     private void attempt(HttpExchange x, String path, String text) throws IOException {
@@ -690,6 +760,37 @@ public final class FakeGateway implements AutoCloseable {
             }
             return;
         }
+        if (path.startsWith("/agent/api/v1/remote/environment-resolutions/") && path.endsWith("/answer") && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                if (failResolutionAnswers > 0) {
+                    failResolutionAnswers--;
+                    respond(x, 503, "{\"error\":\"unavailable\"}");
+                    return;
+                }
+                String id = path.substring("/agent/api/v1/remote/environment-resolutions/".length(), path.length() - "/answer".length());
+                String pending = environmentResolution;
+                if (pending == null || !pending.contains(id)) {
+                    respond(x, 409, "{\"error\":\"conflict\",\"reason\":\"managed_environment_resolution_closed\"}");
+                    return;
+                }
+                resolutionAnswers.add(id + "|" + text);
+                environmentResolution = null;
+                respond(x, 200, "{\"resolutionId\":\"" + id + "\",\"outcome\":\"" + field(text, "outcome") + "\"}");
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/stage") && "POST".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                stage(x, path, text);
+            }
+            return;
+        }
+        if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/environment-report") && "PUT".equals(x.getRequestMethod())) {
+            if (authenticated(x, auth)) {
+                environmentReport(x, path, text);
+            }
+            return;
+        }
         if (path.startsWith("/agent/api/v1/remote/attempts/") && path.endsWith("/package") && "GET".equals(x.getRequestMethod())) {
             if (authenticated(x, auth)) {
                 pack(x, path);
@@ -759,8 +860,11 @@ public final class FakeGateway implements AutoCloseable {
             case "/agent/api/v1/heartbeat" -> {
                 if (authenticated(x, auth)) {
                     declaredRun = text.contains("\"REMOTE_RUN_1_0\"");
+                    declaredManaged = text.contains("\"MANAGED_ENV_1_0\"");
                     lastHeartbeat = text;
                     respond(x, 200, "{\"serverTime\":\"2026-11-15T12:00:00Z\",\"credentialExpiresAt\":\"" + credentialExpiresAt + "\",\"contractVersion\":\"1.0\""
+                            + (managedEnvironments ? ",\"managedEnvironments\":true" : "")
+
                             + (enabled ? ",\"remote\":{\"receiving\":\"" + (paused ? "PAUSED" : "ENABLED") + "\""
                                     + (workerName == null ? "" : ",\"workerName\":" + com.nekkora.client.auth.Json.quote(workerName)) + "}" : "") + "}");
                 }

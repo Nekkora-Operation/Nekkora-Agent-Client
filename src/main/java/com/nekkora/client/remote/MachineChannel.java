@@ -45,6 +45,12 @@ public final class MachineChannel {
     static final String NEXT = "/agent/api/v1/remote/next";
     /** Entrega (T02): confirmar o recebimento ({@code <tentativa>/ack}) e informar o estado ({@code <tentativa>/state}). */
     static final String ATTEMPTS = "/agent/api/v1/remote/attempts/";
+    /** AMBIENTE-PYTHON-001: a resposta da maquina a um pedido de resolucao ({@code <pedido>/answer}). */
+    static final String RESOLUTIONS = "/agent/api/v1/remote/environment-resolutions/";
+    /** A capacidade do ambiente gerenciado: so declarada depois de a presenca dizer que a Platform a oferece. */
+    static final String MANAGED_ENV = "MANAGED_ENV_1_0";
+    /** Tamanho maximo da resposta da consulta de trabalho (o lock de um ambiente gerenciado tem ate 400 itens). */
+    static final int MAX_NEXT_CHARS = 1024 * 1024;
     /** A intencao declarada no resgate: habilitar ESTE computador para execucao remota. */
     static final String INTENT = "pair-remote";
 
@@ -113,7 +119,11 @@ public final class MachineChannel {
 
     /** {@code paused}: o recebimento segundo o servidor. */
     /** {@code workerName}: o nome atual, na Platform, do Worker desta maquina; nulo se a Platform nao o informou. */
-    record Presence(boolean paused, String credentialExpiresAt, String workerName) {
+    /** {@code managedEnvironments}: a Platform oferece o ambiente gerenciado (AMBIENTE-PYTHON-001); falso se nao disse nada. */
+    record Presence(boolean paused, String credentialExpiresAt, String workerName, boolean managedEnvironments) {
+        Presence(boolean paused, String credentialExpiresAt, String workerName) {
+            this(paused, credentialExpiresAt, workerName, false);
+        }
     }
 
     /** O nome do Worker como veio, sem caracteres de controle e com ate 120 caracteres; nulo se ausente ou vazio. So para exibir. */
@@ -192,15 +202,28 @@ public final class MachineChannel {
      * dizer por que - nada identifica o que o esta ocupando (execucao da Platform ou iniciada aqui).
      */
     Presence heartbeat(String credential, String appVersion, boolean declaresRun, boolean busy, boolean diskPressure) throws Refused {
+        return heartbeat(credential, appVersion, declaresRun, busy, diskPressure, false);
+    }
+
+    /**
+     * {@code declaresManaged}: declara {@link #MANAGED_ENV} - so depois de uma presenca ter dito que a Platform oferece o ambiente
+     * gerenciado. Sem ela, o corpo e exatamente o de antes: um Client novo nunca manda a uma Platform antiga uma capacidade que ela
+     * nao conhece.
+     */
+    Presence heartbeat(String credential, String appVersion, boolean declaresRun, boolean busy, boolean diskPressure, boolean declaresManaged)
+            throws Refused {
         String body = "{\"agentVersion\":" + Json.quote(appVersion) + ",\"contractVersion\":\"" + CONTRACT + "\",\"capabilities\":[\"PY_INVENTORY_1_0\""
-                + (declaresRun ? ",\"REMOTE_RUN_1_0\"" : "") + "],\"remote\":{\"busy\":" + busy + ",\"diskPressure\":" + diskPressure + "}}";
+                + (declaresRun ? ",\"REMOTE_RUN_1_0\"" : "") + (declaresManaged ? ",\"" + MANAGED_ENV + "\"" : "") + "],\"remote\":{\"busy\":" + busy
+                + ",\"diskPressure\":" + diskPressure + "}}";
         HttpResponse<String> r = send(request(HEARTBEAT, credential).POST(HttpRequest.BodyPublishers.ofString(body)));
         Map<String, Object> o = ok(authenticated(r));
         if (!(o.get("remote") instanceof Map<?, ?> remote)) {
             // vinculada, mas a Platform nao a tem como habilitada
             throw new Refused(Problem.NOT_ENABLED);
         }
-        return new Presence(paused(remote.get("receiving")), text(o, "credentialExpiresAt"), workerName(remote.get("workerName")));
+        // a oferta do ambiente gerenciado vem na raiz da resposta; aceita tambem dentro de "remote". Ausente: nao e oferecido
+        boolean managed = Boolean.TRUE.equals(o.get("managedEnvironments")) || Boolean.TRUE.equals(remote.get("managedEnvironments"));
+        return new Presence(paused(remote.get("receiving")), text(o, "credentialExpiresAt"), workerName(remote.get("workerName")), managed);
     }
 
     /** Pausa ou retoma; devolve o recebimento que ficou valendo no servidor ({@code true} = pausado). */
@@ -279,7 +302,15 @@ public final class MachineChannel {
     /** A tentativa entregue. O token so existe nesta resposta: o servidor guarda apenas o hash. */
     record Offer(String attemptId, String remoteExecutionId, int attemptNumber, String workspaceId, String automationId, String automationVersionId,
                  String packageFingerprint, String packageFingerprintRule, java.util.List<String> dependencies, String pythonEnvironmentId, String token,
-                 int epoch) {
+                 int epoch, Managed environment) {
+
+        /** Modo PREPARED (o de sempre): sem ambiente gerenciado. */
+        Offer(String attemptId, String remoteExecutionId, int attemptNumber, String workspaceId, String automationId, String automationVersionId,
+              String packageFingerprint, String packageFingerprintRule, java.util.List<String> dependencies, String pythonEnvironmentId, String token,
+              int epoch) {
+            this(attemptId, remoteExecutionId, attemptNumber, workspaceId, automationId, automationVersionId, packageFingerprint, packageFingerprintRule,
+                    dependencies, pythonEnvironmentId, token, epoch, null);
+        }
 
         @Override
         public String toString() {
@@ -288,7 +319,189 @@ public final class MachineChannel {
     }
 
     /** O que ha para esta maquina: uma tentativa a receber, ou o aviso de cancelamento de uma ja recebida, ou nada (os dois nulos). */
-    record Next(Offer offer, String cancelAttemptId, Check check) {
+    record Next(Offer offer, String cancelAttemptId, Check check, Resolution resolution) {
+        Next(Offer offer, String cancelAttemptId, Check check) {
+            this(offer, cancelAttemptId, check, null);
+        }
+    }
+
+    /**
+     * AMBIENTE-PYTHON-001 - a tentativa no modo MANAGED: o lock aceito (o que sera instalado, exatamente), o hash dele e as
+     * verificacoes externas escolhidas. Ausente no modo PREPARED.
+     */
+    record Managed(String lockSha256, java.util.List<RemoteMachine.LockItem> lock, java.util.List<String> checks) {
+        Managed {
+            lock = java.util.List.copyOf(lock);
+            checks = java.util.List.copyOf(checks);
+        }
+    }
+
+    /**
+     * AMBIENTE-PYTHON-001 - um pedido de RESOLUCAO: a lista efetiva ({@code nome==versao}) a resolver no Python indicado pelo
+     * identificador opaco que esta maquina publicou. So o indice publico.
+     */
+    record Resolution(String resolutionId, String pythonEnvironmentId, java.util.List<String> dependencies) {
+    }
+
+    static final int MAX_LOCK = 400;
+    private static final Pattern WORD = Pattern.compile("^[A-Z_]{1,40}$");
+    private static final Pattern HEX64 = Pattern.compile("^[0-9a-f]{64}$");
+
+    /** O pedido de resolucao que veio na consulta, se veio e esta no formato; fora do formato (ou outro indice), e como se nao viesse. */
+    private static Resolution resolution(Object raw) {
+        if (!(raw instanceof Map<?, ?> m) || !(m.get("resolutionId") instanceof String id) || !UUID.matcher(id).matches()
+                || !(m.get("pythonEnvironmentId") instanceof String env) || !AttemptJournal.ENVIRONMENT.matcher(env).matches()
+                || !(m.get("dependencies") instanceof java.util.List<?> list) || list.size() > AttemptJournal.MAX_DEPENDENCIES
+                || (m.get("index") != null && !"PYPI".equals(m.get("index")))) {
+            return null;
+        }
+        java.util.List<String> deps = new java.util.ArrayList<>();
+        for (Object d : list) {
+            if (!(d instanceof String t) || t.isBlank() || t.length() > 512) {
+                return null;
+            }
+            deps.add(t);
+        }
+        return new Resolution(id, env, java.util.List.copyOf(deps));
+    }
+
+    /** O ambiente gerenciado da oferta: nulo no modo PREPARED (campo ausente ou {@code mode} diferente de MANAGED). */
+    private static Managed managed(Object raw) throws Refused {
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof Map<?, ?> m)) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        if (!"MANAGED".equals(m.get("mode"))) {
+            return null;
+        }
+        if ((m.get("index") != null && !"PYPI".equals(m.get("index"))) || !(m.get("lockSha256") instanceof String sha) || !HEX64.matcher(sha).matches()
+                || !(m.get("lock") instanceof java.util.List<?> lock) || lock.size() > MAX_LOCK
+                || (m.get("checks") != null && !(m.get("checks") instanceof java.util.List<?>))) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        java.util.List<RemoteMachine.LockItem> items = new java.util.ArrayList<>();
+        for (Object o : lock) {
+            if (!(o instanceof Map<?, ?> i) || !(i.get("name") instanceof String n) || !(i.get("version") instanceof String v)
+                    || !(i.get("sha256") instanceof String h) || !(i.get("fileName") instanceof String f)) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            RemoteMachine.LockItem item = new RemoteMachine.LockItem(n, v, h, f);
+            if (!item.valid()) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            items.add(item);
+        }
+        java.util.List<String> checks = new java.util.ArrayList<>();
+        if (m.get("checks") instanceof java.util.List<?> list) {
+            if (list.size() > 16) {
+                throw new Refused(Problem.UNEXPECTED);
+            }
+            for (Object c : list) {
+                if (!(c instanceof String t) || !WORD.matcher(t).matches()) {
+                    throw new Refused(Problem.UNEXPECTED);
+                }
+                checks.add(t);
+            }
+        }
+        return new Managed(sha, items, checks);
+    }
+
+    /**
+     * Responde o pedido de resolucao (so uma vez, dentro do prazo; repetir igual devolve o gravado). Volta sem erro quando a Platform
+     * tem a resposta, ou quando o pedido ja esta fechado la (respondido, vencido, desconhecido) e nao ha o que repetir. Falha
+     * passageira: lanca, e a resposta e repetida na proxima consulta.
+     */
+    void answerResolution(String credential, String resolutionId, RemoteMachine.Resolved answer) throws Refused {
+        if (!UUID.matcher(resolutionId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        StringBuilder b = new StringBuilder("{\"outcome\":").append(Json.quote(answer.outcome()));
+        optional(b, "pythonVersion", answer.pythonVersion());
+        optional(b, "pipVersion", answer.pipVersion());
+        // o lock so existe numa resposta RESOLVED; nas outras ele vai nulo, e a falha so falta em RESOLVED e ENVIRONMENT_GONE
+        if ("RESOLVED".equals(answer.outcome())) {
+            b.append(",\"lock\":[");
+            for (int k = 0; k < answer.lock().size(); k++) {
+                RemoteMachine.LockItem i = answer.lock().get(k);
+                b.append(k == 0 ? "" : ",").append("{\"name\":").append(Json.quote(i.name())).append(",\"version\":").append(Json.quote(i.version()))
+                        .append(",\"sha256\":").append(Json.quote(i.sha256())).append(",\"fileName\":").append(Json.quote(i.fileName())).append('}');
+            }
+            b.append("],\"failure\":null");
+        } else {
+            b.append(",\"lock\":null,\"failure\":");
+            failure(b, "ENVIRONMENT_GONE".equals(answer.outcome()) ? null : answer.failure());
+        }
+        HttpResponse<String> r = send(request(RESOLUTIONS + resolutionId + "/answer", credential).POST(HttpRequest.BodyPublishers.ofString(b.append('}').toString())));
+        if (r.statusCode() == 409 || r.statusCode() == 404 || r.statusCode() == 400) {
+            return;
+        }
+        ok(authenticated(r));
+    }
+
+    /** Informa a etapa do preparo do ambiente ({@code ENV_CREATING}, {@code DEPS_INSTALLING}); renova o prazo da comunicacao. */
+    AttemptStatus stage(String credential, String attemptId, String token, int epoch, String stage) throws Refused {
+        return attempt(credential, attemptId, "/stage", "{\"token\":" + Json.quote(token) + ",\"epoch\":" + epoch + ",\"stage\":" + Json.quote(stage) + "}");
+    }
+
+    /**
+     * O relatorio do preparo do ambiente da tentativa (READY, FAILED ou INTERRUPTED), com o registro ja sem segredos. Gravado uma vez
+     * na Platform: repetir igual devolve o mesmo; diferente (409 {@code managed_environment_report_conflict}) ou fora do formato (400)
+     * nao tem o que repetir e volta sem erro. Token ou epoca que nao valem mais, tentativa que a Platform nao tem: lanca.
+     */
+    void environmentReport(String credential, String attemptId, String token, int epoch, RemoteMachine.EnvironmentReport report) throws Refused {
+        if (!UUID.matcher(attemptId).matches()) {
+            throw new Refused(Problem.UNEXPECTED);
+        }
+        StringBuilder b = new StringBuilder("{\"token\":").append(Json.quote(token)).append(",\"epoch\":").append(epoch).append(",\"outcome\":")
+                .append(Json.quote(report.outcome()));
+        optional(b, "pythonVersion", report.pythonVersion());
+        optional(b, "pipVersion", report.pipVersion());
+        b.append(",\"installed\":[");
+        for (int k = 0; k < report.installed().size(); k++) {
+            RemoteMachine.LockItem i = report.installed().get(k);
+            b.append(k == 0 ? "" : ",").append("{\"name\":").append(Json.quote(i.name())).append(",\"version\":").append(Json.quote(i.version()))
+                    .append(",\"sha256\":").append(Json.quote(i.sha256())).append('}');
+        }
+        b.append("],\"failure\":");
+        failure(b, report.failure());
+        b.append(",\"createMs\":").append(Math.max(0, report.createMs())).append(",\"installMs\":").append(Math.max(0, report.installMs()));
+        optional(b, "log", report.log());
+        HttpResponse<String> r = send(request(ATTEMPTS + attemptId + "/environment-report", credential)
+                .PUT(HttpRequest.BodyPublishers.ofString(b.append('}').toString())));
+        if (r.statusCode() == 409) {
+            switch (reason(r)) {
+                case "remote_attempt_stale" -> throw new Refused(Problem.ATTEMPT_STALE);
+                case "remote_attempt_transition" -> throw new Refused(Problem.ATTEMPT_TRANSITION);
+                default -> {
+                    // managed_environment_report_conflict: a Platform ja tem um relatorio desta tentativa; nao ha o que repetir
+                    return;
+                }
+            }
+        }
+        if (r.statusCode() == 404 && json(r)) {
+            throw new Refused(Problem.ATTEMPT_GONE);
+        }
+        if (r.statusCode() == 400) {
+            return;
+        }
+        ok(authenticated(r));
+    }
+
+    private static void optional(StringBuilder b, String key, String value) {
+        if (value != null) {
+            b.append(",\"").append(key).append("\":").append(Json.quote(value));
+        }
+    }
+
+    private static void failure(StringBuilder b, RemoteMachine.EnvFailure f) {
+        if (f == null) {
+            b.append("null");
+            return;
+        }
+        b.append("{\"requirement\":").append(f.requirement() == null ? "null" : Json.quote(f.requirement())).append(",\"phase\":").append(Json.quote(f.phase()))
+                .append(",\"summary\":").append(f.summary() == null ? "null" : Json.quote(f.summary())).append('}');
     }
 
     /**
@@ -357,7 +570,7 @@ public final class MachineChannel {
         if (r.statusCode() == 409) {
             throw new Refused("remote_execution_not_enabled".equals(reason(r)) ? Problem.NOT_ENABLED : Problem.UNEXPECTED);
         }
-        Map<String, Object> o = ok(authenticated(r));
+        Map<String, Object> o = ok(authenticated(r), MAX_NEXT_CHARS);
         Offer offer = null;
         if (o.get("attempt") instanceof Map<?, ?> raw) {
             @SuppressWarnings("unchecked")
@@ -382,7 +595,7 @@ public final class MachineChannel {
             }
             offer = new Offer(uuid(a, "attemptId"), uuid(a, "remoteExecutionId"), positive(a, "attemptNumber"),
                     a.get("workspaceId") == null ? null : uuid(a, "workspaceId"), uuid(a, "automationId"), uuid(a, "automationVersionId"), fp, rule,
-                    java.util.List.copyOf(deps), python, token, positive(a, "epoch"));
+                    java.util.List.copyOf(deps), python, token, positive(a, "epoch"), managed(a.get("environment")));
         } else if (o.get("attempt") != null) {
             throw new Refused(Problem.UNEXPECTED);
         }
@@ -394,7 +607,7 @@ public final class MachineChannel {
         } else if (o.get("cancel") != null) {
             throw new Refused(Problem.UNEXPECTED);
         }
-        return new Next(offer, cancel, check(o.get("dependencyCheck")));
+        return new Next(offer, cancel, check(o.get("dependencyCheck")), resolution(o.get("environmentResolution")));
     }
 
     /** Confirma que a tentativa foi RECEBIDA (ja gravada no diario daqui). Repetir com o mesmo token e epoca nao muda nada. */
@@ -765,6 +978,11 @@ public final class MachineChannel {
     }
 
     private static Map<String, Object> ok(HttpResponse<String> r) throws Refused {
+        return ok(r, 16_384);
+    }
+
+    /** {@code max}: o tamanho maximo da resposta, em caracteres (a consulta de trabalho pode trazer o lock de um ambiente gerenciado). */
+    private static Map<String, Object> ok(HttpResponse<String> r, int max) throws Refused {
         int s = r.statusCode();
         if (s == 429) {
             throw new Refused(Problem.RATE_LIMITED);
@@ -776,7 +994,7 @@ public final class MachineChannel {
             throw new Refused(Problem.UNEXPECTED);
         }
         try {
-            return Json.object(r.body());
+            return Json.object(r.body(), max);
         } catch (IllegalArgumentException e) {
             throw new Refused(Problem.UNEXPECTED);
         }

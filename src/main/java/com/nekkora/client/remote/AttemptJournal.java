@@ -28,7 +28,8 @@ import com.nekkora.client.auth.Json;
 final class AttemptJournal {
 
     static final String FILE = "tentativa.json";
-    private static final int MAX_FILE = 64 * 1024;
+    /** O diario guarda o lock de uma tentativa MANAGED (ate 400 itens): maior que o de antes. */
+    private static final int MAX_FILE = 512 * 1024;
     static final int MAX_DEPENDENCIES = 512;
     private static final Pattern UUID = Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     static final Pattern TOKEN = Pattern.compile("^[A-Za-z0-9_-]{20,128}$");
@@ -41,6 +42,12 @@ final class AttemptJournal {
     enum Phase {
         /** Gravada; o recebimento pode ainda nao estar confirmado. Nada foi baixado nem iniciado. */
         RECEIVED,
+        /**
+         * AMBIENTE-PYTHON-001: o ambiente gerenciado da tentativa esta sendo PREPARADO (gravado ANTES de o ambiente ser criado).
+         * Nada da automacao foi lancado: o lancamento so acontece DEPOIS de o diario gravar {@link #STARTING}. Se o aplicativo
+         * fechar aqui, a tentativa e recusada como {@code ENVIRONMENT_SETUP_INTERRUPTED} - com certeza nao iniciada.
+         */
+        ENV_PREPARING,
         /**
          * O inicio foi pedido ao motor e o identificador da execucao ainda nao foi gravado. Se o aplicativo fechar aqui, nao da
          * para saber se o processo foi lancado: a tentativa termina sem prova do resultado, e NADA e lancado de novo.
@@ -62,10 +69,26 @@ final class AttemptJournal {
     record Entry(String agentId, String attemptId, String remoteExecutionId, int attemptNumber, String workspaceId, String automationId,
                  String automationVersionId, String packageFingerprint, String packageFingerprintRule, List<String> dependencies,
                  String pythonEnvironmentId, String token, int epoch, boolean acked, Phase phase, String run, String report, String reason,
-                 Integer exitCode) {
+                 Integer exitCode, MachineChannel.Managed environment) {
+
+        /** Modo PREPARED: sem ambiente gerenciado. */
+        Entry(String agentId, String attemptId, String remoteExecutionId, int attemptNumber, String workspaceId, String automationId,
+              String automationVersionId, String packageFingerprint, String packageFingerprintRule, List<String> dependencies,
+              String pythonEnvironmentId, String token, int epoch, boolean acked, Phase phase, String run, String report, String reason,
+              Integer exitCode) {
+            this(agentId, attemptId, remoteExecutionId, attemptNumber, workspaceId, automationId, automationVersionId, packageFingerprint,
+                    packageFingerprintRule, dependencies, pythonEnvironmentId, token, epoch, acked, phase, run, report, reason, exitCode, null);
+        }
 
         Entry {
             dependencies = List.copyOf(dependencies);
+            if (environment != null && (!HEX.matcher(environment.lockSha256()).matches() || environment.lock().size() > MachineChannel.MAX_LOCK
+                    || environment.lock().stream().anyMatch(i -> i == null || !i.valid()) || environment.checks().stream().anyMatch(c -> !WORD.matcher(c).matches()))) {
+                throw new IllegalArgumentException("tentativa");
+            }
+            if (phase == Phase.ENV_PREPARING && environment == null) {
+                throw new IllegalArgumentException("tentativa");
+            }
             if (!UUID.matcher(agentId).matches() || !UUID.matcher(attemptId).matches() || !UUID.matcher(remoteExecutionId).matches()
                     || !UUID.matcher(automationId).matches() || !UUID.matcher(automationVersionId).matches() || attemptNumber < 1 || epoch < 1
                     || (workspaceId != null && !UUID.matcher(workspaceId).matches())
@@ -84,12 +107,17 @@ final class AttemptJournal {
         static Entry received(String agentId, MachineChannel.Offer o) {
             return new Entry(agentId, o.attemptId(), o.remoteExecutionId(), o.attemptNumber(), o.workspaceId(), o.automationId(), o.automationVersionId(),
                     o.packageFingerprint(), o.packageFingerprintRule(), o.dependencies(), o.pythonEnvironmentId(), o.token(), o.epoch(), false,
-                    Phase.RECEIVED, null, null, null, null);
+                    Phase.RECEIVED, null, null, null, null, o.environment());
         }
 
         private Entry with(boolean ack, Phase p, String r, String state, String why, Integer exit) {
             return new Entry(agentId, attemptId, remoteExecutionId, attemptNumber, workspaceId, automationId, automationVersionId, packageFingerprint,
-                    packageFingerprintRule, dependencies, pythonEnvironmentId, token, epoch, ack, p, r, state, why, exit);
+                    packageFingerprintRule, dependencies, pythonEnvironmentId, token, epoch, ack, p, r, state, why, exit, environment);
+        }
+
+        /** O ambiente gerenciado da tentativa vai ser preparado (gravado ANTES de criar o ambiente). */
+        Entry preparingEnvironment() {
+            return with(acked, Phase.ENV_PREPARING, null, report, reason, exitCode);
         }
 
         Entry withAck() {
@@ -140,7 +168,7 @@ final class AttemptJournal {
             if (!Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS) || Files.size(f) > MAX_FILE) {
                 return Optional.empty();
             }
-            Map<String, Object> o = Json.object(Files.readString(f, StandardCharsets.UTF_8));
+            Map<String, Object> o = Json.object(Files.readString(f, StandardCharsets.UTF_8), MAX_FILE);
             if (!(o.get("versao") instanceof Double v) || v != 2.0 || !agentId.equals(o.get("agente")) || !(o.get("confirmada") instanceof Boolean acked)
                     || !(o.get("dependencias") instanceof List<?> list)) {
                 return Optional.empty();
@@ -157,7 +185,8 @@ final class AttemptJournal {
                 return Optional.of(new Entry(agentId, text(o, "tentativa"), text(o, "solicitacao"), integer(o, "numero"), optional(o, "ambiente"),
                         text(o, "automacao"), text(o, "versaoDaAutomacao"), text(o, "impressao"), text(o, "regra"), deps, optional(o, "python"),
                         new String(plain, StandardCharsets.US_ASCII), integer(o, "epoca"), acked, Phase.valueOf(text(o, "fase")), optional(o, "execucao"),
-                        optional(o, "informar"), optional(o, "motivo"), o.get("codigoDeSaida") == null ? null : signed(o, "codigoDeSaida")));
+                        optional(o, "informar"), optional(o, "motivo"), o.get("codigoDeSaida") == null ? null : signed(o, "codigoDeSaida"),
+                        managed(o.get("ambienteGerenciado"))));
             } finally {
                 Arrays.fill(plain, (byte) 0);
             }
@@ -195,6 +224,20 @@ final class AttemptJournal {
         if (e.exitCode() != null) {
             b.append(",\"codigoDeSaida\":").append(e.exitCode());
         }
+        if (e.environment() != null) {
+            MachineChannel.Managed m = e.environment();
+            b.append(",\"ambienteGerenciado\":{\"lockSha256\":").append(Json.quote(m.lockSha256())).append(",\"lock\":[");
+            for (int k = 0; k < m.lock().size(); k++) {
+                RemoteMachine.LockItem i = m.lock().get(k);
+                b.append(k == 0 ? "" : ",").append('[').append(Json.quote(i.name())).append(',').append(Json.quote(i.version())).append(',')
+                        .append(Json.quote(i.sha256())).append(',').append(Json.quote(i.fileName())).append(']');
+            }
+            b.append("],\"verificacoes\":[");
+            for (int k = 0; k < m.checks().size(); k++) {
+                b.append(k == 0 ? "" : ",").append(Json.quote(m.checks().get(k)));
+            }
+            b.append("]}");
+        }
         b.append(",\"token\":").append(Json.quote(blob)).append('}');
         Files.createDirectories(dir);
         Path tmp = dir.resolve(FILE + ".novo");
@@ -208,7 +251,35 @@ final class AttemptJournal {
         Files.deleteIfExists(dir.resolve(FILE));
     }
 
+    /** O ambiente gerenciado gravado (nulo: modo PREPARED). Fora do formato: o diario inteiro nao vale. */
+    private static MachineChannel.Managed managed(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof Map<?, ?> m) || !(m.get("lockSha256") instanceof String sha) || !(m.get("lock") instanceof List<?> lock)
+                || !(m.get("verificacoes") instanceof List<?> checks)) {
+            throw new IllegalArgumentException("ambienteGerenciado");
+        }
+        List<RemoteMachine.LockItem> items = new ArrayList<>();
+        for (Object x : lock) {
+            if (!(x instanceof List<?> l) || l.size() != 4 || !(l.get(0) instanceof String n) || !(l.get(1) instanceof String v)
+                    || !(l.get(2) instanceof String h) || !(l.get(3) instanceof String f)) {
+                throw new IllegalArgumentException("ambienteGerenciado");
+            }
+            items.add(new RemoteMachine.LockItem(n, v, h, f));
+        }
+        List<String> names = new ArrayList<>();
+        for (Object c : checks) {
+            if (!(c instanceof String s)) {
+                throw new IllegalArgumentException("ambienteGerenciado");
+            }
+            names.add(s);
+        }
+        return new MachineChannel.Managed(sha, items, names);
+    }
+
     private static void field(StringBuilder b, String key, String value) {
+
         if (value != null) {
             b.append(",\"").append(key).append("\":").append(Json.quote(value));
         }
