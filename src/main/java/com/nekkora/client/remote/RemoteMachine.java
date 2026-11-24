@@ -2287,9 +2287,15 @@ public final class RemoteMachine implements AutoCloseable {
                 // AMBIENTE-PYTHON-001: a capacidade so e declarada depois de uma presenca dizer que a Platform oferece o ambiente
                 // gerenciado; sem isso o corpo e o de sempre
                 boolean managed = managedOffered && w != null && w.managesEnvironments();
-                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, w != null,
-                        journal.load(current.agentId()).isPresent() || (w != null && w.busy()), kept().spaceLow(), managed);
+                boolean busy = journal.load(current.agentId()).isPresent() || (w != null && w.busy());
+                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, w != null, busy, kept().spaceLow(), managed);
                 managedOffered = p.managedEnvironments();
+                if (managedOffered && !managed && w != null && w.managesEnvironments()) {
+                    // a oferta acabou de chegar (aplicativo recem-aberto ou chave recem-ligada): a capacidade vai ja, numa segunda
+                    // presenca, e a maquina nao aparece como "nao compativel" ate o minuto seguinte (achado na validacao de ponta a ponta)
+                    p = channel.heartbeat(current.credential(), appVersion, true, busy, kept().spaceLow(), true);
+                    managedOffered = p.managedEnvironments();
+                }
                 MachineVault.Link next = current.withPaused(p.paused());
                 boolean renamed;
                 synchronized (this) {

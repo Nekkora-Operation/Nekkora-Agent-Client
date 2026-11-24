@@ -218,11 +218,15 @@ class ManagedEnvironmentDeliveryTest {
         assertFalse(gw.declaredManaged);
         assertEquals("{\"agentVersion\":\"0.1.0+client\",\"contractVersion\":\"1.0\",\"capabilities\":[\"PY_INVENTORY_1_0\",\"REMOTE_RUN_1_0\"],"
                 + "\"remote\":{\"busy\":false,\"diskPressure\":false}}", gw.lastHeartbeat);
-        // a Platform passa a oferecer: a presenca que VE isso ainda nao declara; a seguinte declara
+        // a Platform passa a oferecer: a presenca que VE isso nao declara; o aplicativo manda logo uma segunda, ja com a capacidade
+        // (sem esperar o minuto seguinte); daí em diante, uma presenca por vez
         gw.managedEnvironments = true;
+        long antes = gw.count("/agent/api/v1/heartbeat");
         m.beat();
-        assertFalse(gw.declaredManaged, "a capacidade so vai depois de uma resposta dizer que a Platform a oferece");
+        assertEquals(antes + 2, gw.count("/agent/api/v1/heartbeat"));
+        assertTrue(gw.declaredManaged, "a capacidade vai na presenca logo depois da resposta que oferece");
         m.beat();
+        assertEquals(antes + 3, gw.count("/agent/api/v1/heartbeat"));
         assertTrue(gw.declaredManaged);
         assertTrue(gw.lastHeartbeat.contains("\"capabilities\":[\"PY_INVENTORY_1_0\",\"REMOTE_RUN_1_0\",\"MANAGED_ENV_1_0\"]"), gw.lastHeartbeat);
         // a chave desligada de novo: depois da resposta sem o campo, a capacidade deixa de ir

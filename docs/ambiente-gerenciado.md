@@ -20,12 +20,12 @@ uma instalação de Python daqui, recebe exatamente a lista de pacotes aceita na
 
 O `ArchitectureTest` prova o estreitamento: os argumentos de instalação (`-m`, `pip`, `install`, `venv`, `ensurepip`, `--target`,
 `uv`, `virtualenv`, `conda`, `poetry`) só aparecem em `env`; `pack`, `run` e `nav` continuam proibidas, e todas as outras também.
-Em `env`, todo processo nasce em `EnvCommand`, com `-I` como primeiro argumento, e todo `pip install` leva `--isolated --no-input`.
+Em `env`, todo processo nasce em `EnvCommand`, com `-I` como primeiro argumento (seguido de `-X utf8`, para a saída chegar em UTF-8), e todo `pip install` leva `--isolated --no-input`.
 
 ## Capacidade
 
 A presença só declara `MANAGED_ENV_1_0` **depois** de uma resposta de presença trazer `managedEnvironments: true` (na raiz; também
-aceito dentro de `remote`). Sem isso o corpo da presença é exatamente o de antes. Se a Platform deixar de oferecer, a capacidade
+aceito dentro de `remote`). Sem isso o corpo da presença é exatamente o de antes. Quando a oferta aparece (aplicativo recém-aberto ou chave recém-ligada), uma segunda presença sai na hora, já com a capacidade, para a máquina não aparecer como "não compatível" até o minuto seguinte. Se a Platform deixar de oferecer, a capacidade
 deixa de ir na presença seguinte.
 
 ## Resolução (D1)
