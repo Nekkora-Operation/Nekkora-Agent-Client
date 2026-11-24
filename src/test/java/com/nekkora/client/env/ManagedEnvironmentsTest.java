@@ -73,7 +73,13 @@ class ManagedEnvironmentsTest {
         Path work = Files.createDirectories(attempt.resolve("preparo"));
         Process sobra = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
         Process outro = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
+        // o pip de OUTRA tentativa (marca certa, na pasta dela) e um Python qualquer deste computador, sem marca: nenhum e tocado
+        Path vizinha = Files.createDirectories(tmp.resolve("remota").resolve("tentativas").resolve(id()).resolve("preparo"));
+        Process daVizinha = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
+        Process qualquer = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").start();
         try {
+            Files.writeString(vizinha.resolve("pip" + EnvCommand.MARK),
+                    daVizinha.pid() + " " + daVizinha.toHandle().info().startInstant().orElseThrow().toEpochMilli());
             ProcessHandle h = sobra.toHandle();
             Files.writeString(work.resolve("pip" + EnvCommand.MARK), h.pid() + " " + h.info().startInstant().orElseThrow().toEpochMilli());
             // a marca de outro PID com um instante que nao e o dele (PID reaproveitado): nao e tocado
@@ -82,10 +88,15 @@ class ManagedEnvironmentsTest {
             assertTrue(environments(index.url()).discard(attempt));
             assertTrue(sobra.waitFor(15, java.util.concurrent.TimeUnit.SECONDS), "o pip que sobrou foi encerrado");
             assertTrue(outro.isAlive(), "um processo com outro instante de inicio nao e encerrado");
+            assertTrue(daVizinha.isAlive(), "o pip de outra tentativa nao e encerrado");
+            assertTrue(qualquer.isAlive(), "um Python sem marca nao e encerrado");
+            assertTrue(Files.exists(vizinha.resolve("pip" + EnvCommand.MARK)), "a marca da outra tentativa fica");
             assertFalse(Files.exists(attempt.resolve("ambiente")));
         } finally {
             sobra.destroyForcibly();
             outro.destroyForcibly();
+            daVizinha.destroyForcibly();
+            qualquer.destroyForcibly();
         }
     }
 

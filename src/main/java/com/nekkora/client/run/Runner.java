@@ -650,7 +650,9 @@ public final class Runner implements AutoCloseable {
                 if (key.equals(keepKey) || managedDir(key).isEmpty() || !Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue;
                 boolean code = Files.exists(dir.resolve("pacote.zip"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
                         || Files.exists(dir.resolve("pacote"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
-                        || Files.exists(dir.resolve("ambiente"), java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                        || Files.exists(dir.resolve("ambiente"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        // AMBIENTE-PYTHON-001: so a pasta de trabalho do preparo (um registro do pip que estava preso quando o ambiente saiu)
+                        || Files.exists(dir.resolve("preparo"), java.nio.file.LinkOption.NOFOLLOW_LINKS);
 
                 if (code) {
                     discardManaged(key, null);

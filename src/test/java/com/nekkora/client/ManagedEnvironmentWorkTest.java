@@ -196,8 +196,13 @@ class ManagedEnvironmentWorkTest {
         String leftover = UUID.randomUUID().toString();
         Path env = Files.createDirectories(Path.of(work.dir(leftover).orElseThrow()).resolve("ambiente").resolve("Lib"));
         Files.writeString(env.resolve("x.py"), "sobra");
-        assertTrue(work.sweep(null) >= 1);
+        // e a de uma tentativa que so ficou com a pasta de trabalho do preparo (o registro do pip estava preso quando o ambiente saiu)
+        String soPreparo = UUID.randomUUID().toString();
+        Path prep = Files.createDirectories(Path.of(work.dir(soPreparo).orElseThrow()).resolve("preparo"));
+        Files.writeString(prep.resolve("pip.saida"), "registro");
+        assertTrue(work.sweep(null) >= 2);
         assertFalse(Files.exists(env.getParent()));
+        assertFalse(Files.exists(prep));
         // a tentativa pendente (a do diario) nunca entra na varredura
         String kept = UUID.randomUUID().toString();
         Path keptEnv = Files.createDirectories(Path.of(work.dir(kept).orElseThrow()).resolve("ambiente"));
