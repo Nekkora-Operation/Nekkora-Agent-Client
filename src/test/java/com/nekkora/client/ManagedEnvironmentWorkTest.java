@@ -172,6 +172,25 @@ class ManagedEnvironmentWorkTest {
     }
 
     @Test
+    void depoisDeUmaQuedaODescarteDaTentativaEncerraOPipQueSobrouEApagaOAmbiente() throws Exception {
+        // a tentativa em preparo quando o aplicativo caiu: o "pip" (um Python de verdade, parado) segue vivo, com a marca gravada
+        String attempt = UUID.randomUUID().toString();
+        Path dir = Path.of(work.dir(attempt).orElseThrow());
+        Path env = Files.createDirectories(dir.resolve("ambiente").resolve("Lib"));
+        Path prep = Files.createDirectories(dir.resolve("preparo"));
+        Process sobra = new ProcessBuilder(python.toString(), "-I", "-c", "import time; time.sleep(120)").directory(prep.toFile()).start();
+        try {
+            Files.writeString(prep.resolve("pip.processo"), sobra.pid() + " " + sobra.toHandle().info().startInstant().orElseThrow().toEpochMilli());
+            // o caminho da recuperacao (ENV_PREPARING -> recusa) e o da varredura: o descarte da tentativa pela ponte
+            work.discard(attempt, null);
+            assertTrue(sobra.waitFor(15, java.util.concurrent.TimeUnit.SECONDS), "o pip que sobrou da queda foi encerrado");
+            assertFalse(Files.exists(env.getParent()), "o ambiente da tentativa saiu");
+        } finally {
+            sobra.destroyForcibly();
+        }
+    }
+
+    @Test
     void aVarreduraTiraOAmbienteQueSobrouMasNuncaOQueEstaEmPreparoEOLimiteDoCacheEGravado() throws Exception {
         // sobra de uma queda: a pasta de ambiente de uma tentativa que nao e a pendente sai na varredura
         String leftover = UUID.randomUUID().toString();

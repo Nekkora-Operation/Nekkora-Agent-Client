@@ -36,6 +36,7 @@ final class RemoteWork implements RemoteMachine.Work {
         if (environments != null) {
             // a pasta de ambiente de uma tentativa em preparo nunca e apagada pela limpeza do motor
             runner.setEnvironmentBusy(environments::active);
+            runner.setEnvironmentLeftovers(environments::stopLeftovers);
         }
     }
 

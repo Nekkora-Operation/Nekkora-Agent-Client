@@ -690,6 +690,16 @@ public final class ManagedEnvironments {
         return true;
     }
 
+    /**
+     * Encerra o {@code venv}/{@code pip} que sobrou de uma queda do aplicativo debaixo da pasta de uma tentativa (so os processos
+     * marcados que ainda conferem: mesmo PID e mesmo instante de inicio). Nada se a pasta estiver em preparo agora.
+     */
+    public void stopLeftovers(Path attemptDir) {
+        if (!active(environmentDir(attemptDir).toAbsolutePath().normalize())) {
+            EnvCommand.stopLeftovers(attemptDir);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------ auxiliares
 
     private static void files(Path dir, java.util.function.BiConsumer<Path, BasicFileAttributes> each) {

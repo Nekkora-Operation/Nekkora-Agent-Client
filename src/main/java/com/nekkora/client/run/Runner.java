@@ -337,6 +337,18 @@ public final class Runner implements AutoCloseable {
         environmentBusy = busy == null ? p -> false : busy;
     }
 
+    /**
+     * AMBIENTE-PYTHON-001: quem encerra, antes de apagar a pasta de uma tentativa, o {@code venv}/{@code pip} que tenha sobrado de
+     * uma queda do aplicativo (a camada {@code env}, que lancou e marcou esses processos). Sem quem faca, nada.
+     */
+    private volatile java.util.function.Consumer<Path> environmentLeftovers = p -> {
+    };
+
+    public void setEnvironmentLeftovers(java.util.function.Consumer<Path> stop) {
+        environmentLeftovers = stop == null ? p -> {
+        } : stop;
+    }
+
     /** O executavel de uma instalacao de {@link #installedPythons}, pelo identificador dela, se ainda existe. */
     public Optional<Path> installedPython(String id) {
         return installedPath(id);
@@ -667,6 +679,7 @@ public final class Runner implements AutoCloseable {
         if (!Files.exists(env, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.exists(dir.resolve("preparo"), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
         try {
             if (environmentBusy.test(env.toAbsolutePath().normalize())) return;
+            environmentLeftovers.accept(dir);
         } catch (RuntimeException e) {
             return;
         }
