@@ -308,6 +308,29 @@ final class RemoteText {
         };
     }
 
+    // ------------------------------------------------------------------ AMBIENTE-PYTHON-001: ambientes gerenciados
+
+    static final String ENV_TITLE = "Ambientes gerenciados";
+    static final String ENV_EXPLAINED = "Quando a Platform pede uma execução com ambiente gerenciado, este computador cria um ambiente Python temporário "
+            + "só para ela, a partir de uma instalação de Python daqui, instala exatamente a lista de pacotes aceita na Platform e apaga o ambiente no fim. "
+            + "Nada é instalado no Python deste computador. Os pacotes baixados ficam num cache, para as próximas vezes.";
+    static final String ENV_LIMIT_FIELD = "Limite do cache, em MiB (0 a 20480; 0 desliga o cache)";
+    static final String ENV_SAVE_LIMIT = "Salvar limite";
+    static final String ENV_CLEAR = "Limpar cache";
+    static final String ENV_LIMIT_INVALID = "Informe um número inteiro de 0 a 20480.";
+    static final String ENV_LIMIT_SAVED = "Limite do cache gravado. Os arquivos mais antigos saem quando o cache passar de 80% do limite.";
+    static final String ENV_LIMIT_NOT_SAVED = "O limite do cache não pôde ser gravado neste computador.";
+    static final String ENV_CLEARED = "O cache de pacotes foi apagado.";
+    static final String ENV_NOT_CLEARED = "O cache não pôde ser apagado agora: só com nenhum ambiente em preparo. Tente de novo depois.";
+
+    /** Quanto o cache ocupa, com o limite; e se ele pode ser limpo agora. */
+    static String environmentCache(long bytes, int limitMiB, boolean idle) {
+        String used = String.format(java.util.Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0)).replace('.', ',');
+        String text = limitMiB == 0 ? "Cache de pacotes desligado (limite 0): nada fica guardado entre as execuções. Em uso agora: " + used + " MiB."
+                : "Cache de pacotes: " + used + " MiB em uso, de um limite de " + limitMiB + " MiB.";
+        return idle ? text : text + " Há um ambiente em preparo agora: o cache só pode ser limpo depois.";
+    }
+
     static String problem(Problem p) {
         return switch (p) {
             case NETWORK -> "Não foi possível falar com a Platform. Confira a conexão e tente de novo. Nada foi alterado.";
