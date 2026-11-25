@@ -78,6 +78,17 @@ final class RemotePanel extends JPanel {
     private final JPanel detailsSection = column();
     private final WrappedText seatExplained = new WrappedText(WIDTH).alignLeft();
     private boolean detailsOpen;
+    // AMBIENTE-PYTHON-001: o cache do pip dos ambientes gerenciados (dentro dos detalhes tecnicos)
+    private final JPanel environmentSection = column();
+    private final JLabel environmentTitle = new JLabel(RemoteText.ENV_TITLE);
+    private final WrappedText environmentExplained = new WrappedText(WIDTH).alignLeft();
+    private final WrappedText environmentUsage = new WrappedText(WIDTH).alignLeft();
+    private final JLabel limitLabel = new JLabel(RemoteText.ENV_LIMIT_FIELD);
+    private final JTextField limitField = new JTextField(6);
+    private final GhostButton saveLimit = GhostButton.text(RemoteText.ENV_SAVE_LIMIT);
+    private final GhostButton clearCache = GhostButton.text(RemoteText.ENV_CLEAR);
+    /** O limite mostrado da ultima vez: o campo so e reescrito se a pessoa nao o mudou. */
+    private String limitShown = "";
     private final JPanel enableSection = column();
     private final JPanel enabledSection = column();
     private final JPanel disableSection = column();
@@ -135,7 +146,18 @@ final class RemotePanel extends JPanel {
         // detalhes tecnicos, recolhidos por padrao: o que o posto significa, o que este aplicativo executa, o que fica local, onde
         // ver o conteudo, a validade da credencial e os ambientes Python informados
         JComponent refreshRow = row(refreshPython);
-        for (JComponent c : new JComponent[] {seatExplained, notYet, local, seeOnPlatform, validity, reportsPython, pythonReported, pythonHere, refreshRow}) {
+        environmentExplained.setText(RemoteText.ENV_EXPLAINED);
+        limitLabel.setLabelFor(limitField);
+        limitField.getAccessibleContext().setAccessibleName(RemoteText.ENV_LIMIT_FIELD);
+        limitField.setMaximumSize(new java.awt.Dimension(120, limitField.getPreferredSize().height + 8));
+        for (JComponent c : new JComponent[] {environmentTitle, environmentExplained, environmentUsage, limitLabel, row(limitField, saveLimit), row(clearCache)}) {
+            c.setAlignmentX(Component.LEFT_ALIGNMENT);
+            environmentSection.add(c);
+            environmentSection.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
+        }
+        environmentSection.getAccessibleContext().setAccessibleName(RemoteText.ENV_TITLE);
+        for (JComponent c : new JComponent[] {seatExplained, notYet, local, seeOnPlatform, validity, reportsPython, pythonReported, pythonHere, refreshRow,
+                environmentSection}) {
             c.setAlignmentX(Component.LEFT_ALIGNMENT);
             detailsSection.add(c);
             detailsSection.add(Box.createVerticalStrut(ClientTheme.SPACE_2));
@@ -182,6 +204,19 @@ final class RemotePanel extends JPanel {
         });
         disableConfirm.addActionListener(e -> attempt(disableConfirm, machine::disable, RemoteText.DISABLED_NOW));
         refreshPython.addActionListener(e -> attempt(null, machine::publishInventory, RemoteText.PYTHON_REFRESHED));
+        limitField.addActionListener(e -> submitLimit());
+        saveLimit.addActionListener(e -> submitLimit());
+        clearCache.addActionListener(e -> {
+            // a acao confere de novo: so com a maquina parada para o ambiente gerenciado
+            if (machine.environmentsIdle()) {
+                environmentAction(machine::clearEnvironmentCache, RemoteText.ENV_CLEARED, RemoteText.ENV_NOT_CLEARED);
+            } else {
+                result.show(Notice.Kind.ERROR, RemoteText.ENV_NOT_CLEARED);
+                relayout();
+            }
+        });
+        // o cache e medido fora da linha da tela; a tela e avisada quando o retrato chegar
+        background.execute(machine::refreshEnvironmentCache);
         close.addActionListener(e -> onClose.run());
         machine.addListener(() -> SwingUtilities.invokeLater(() -> {
             if (!disposed && !busy) {
@@ -196,6 +231,53 @@ final class RemotePanel extends JPanel {
         });
         restyle();
         render();
+    }
+
+    /** O limite digitado: inteiro de 0 a 20480; senao, a tela diz e nada e gravado. */
+    private void submitLimit() {
+        if (busy) {
+            return;
+        }
+        String typed = limitField.getText().strip();
+        int mib = typed.matches("[0-9]{1,5}") ? Integer.parseInt(typed) : -1;
+        if (mib < 0 || mib > 20480) {
+            result.show(Notice.Kind.ERROR, RemoteText.ENV_LIMIT_INVALID);
+            relayout();
+            return;
+        }
+        environmentAction(() -> {
+            boolean ok = machine.environmentCacheLimit(mib);
+            machine.refreshEnvironmentCache();
+            return ok;
+        }, RemoteText.ENV_LIMIT_SAVED, RemoteText.ENV_LIMIT_NOT_SAVED);
+    }
+
+    /** Uma acao do cache, fora da linha da tela; o resultado aparece no aviso de sempre. */
+    private void environmentAction(java.util.function.BooleanSupplier call, String ok, String failed) {
+        if (busy) {
+            return;
+        }
+        busy = true;
+        result.clear();
+        render();
+        background.execute(() -> {
+            boolean done;
+            try {
+                done = call.getAsBoolean();
+            } catch (RuntimeException | LinkageError e) {
+                done = false;
+            }
+            boolean d = done;
+            SwingUtilities.invokeLater(() -> {
+                busy = false;
+                if (disposed) {
+                    return;
+                }
+                limitShown = "";
+                result.show(d ? Notice.Kind.SUCCESS : Notice.Kind.ERROR, d ? ok : failed);
+                render();
+            });
+        });
     }
 
     /** Abre ou recolhe os detalhes tecnicos; a janela acompanha a altura. */
@@ -335,6 +417,17 @@ final class RemotePanel extends JPanel {
         pythonReported.setText(reported);
         pythonReported.setVisible(!reported.isEmpty());
         refreshPython.setVisible(linked);
+        // AMBIENTE-PYTHON-001: o cache dos ambientes gerenciados, com o computador habilitado e o retrato ja medido
+        java.util.Optional<RemoteMachine.CacheView> cache = linked ? machine.environmentCache() : java.util.Optional.empty();
+        environmentSection.setVisible(cache.isPresent());
+        cache.ifPresent(c -> {
+            environmentUsage.setText(RemoteText.environmentCache(c.bytes(), c.limitMiB(), c.idle()));
+            String limit = String.valueOf(c.limitMiB());
+            if (limitField.getText().strip().equals(limitShown) || limitShown.isEmpty()) {
+                limitField.setText(limit);
+                limitShown = limit;
+            }
+        });
         // pendencia visivel em qualquer estado da habilitacao: o que ficou neste computador sem confirmacao de recebimento
         // a data e o motivo da remocao sao ditos ANTES de ela acontecer: o prazo de guarda vigente e o dia em que ele vence
         int keepDays = machine.retentionDays();
@@ -378,9 +471,11 @@ final class RemotePanel extends JPanel {
         // desabilitar impede de vez o envio do que ainda nao foi confirmado: dito ANTES de a pessoa confirmar
         boolean sending = pending.stream().anyMatch(h -> "SENDING".equals(h.reason())) || queues.stream().anyMatch(q -> "SENDING".equals(q.reason()));
         disableWarning.show(Notice.Kind.WARNING, sending ? RemoteText.DISABLE_WARNING_SENDING : RemoteText.DISABLE_WARNING);
-        for (JComponent c : new JComponent[] {code, confirm, enable, resume, disable, disableConfirm, keep, refreshPython}) {
+        for (JComponent c : new JComponent[] {code, confirm, enable, resume, disable, disableConfirm, keep, refreshPython, limitField, saveLimit}) {
             c.setEnabled(!busy);
         }
+        // limpar o cache so com a maquina parada para o ambiente gerenciado (nada em resolucao nem em preparo)
+        clearCache.setEnabled(!busy && cache.map(RemoteMachine.CacheView::idle).orElse(false));
         enable.setEnabled(!busy && confirm.isSelected());
         relayout();
     }
@@ -433,10 +528,16 @@ final class RemotePanel extends JPanel {
         setBackground(Themes.color(t.bg()));
         title.setFont(Themes.font(ClientTheme.FONT_SIZE_LG, true));
         title.setForeground(Themes.color(t.text()));
-        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere, link, seatExplained}) {
+        for (WrappedText w : new WrappedText[] {what, local, validity, reportsPython, pythonReported, organization, seeOnPlatform, pythonHere, link, seatExplained,
+                environmentExplained, environmentUsage}) {
             w.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
             w.setForeground(Themes.color(t.textSecondary()));
         }
+        environmentTitle.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, true));
+        environmentTitle.setForeground(Themes.color(t.text()));
+        limitLabel.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
+        limitLabel.setForeground(Themes.color(t.text()));
+        limitField.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
         codeLabel.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, true));
         codeLabel.setForeground(Themes.color(t.text()));
         code.setFont(Themes.font(ClientTheme.FONT_SIZE_SM, false));
@@ -566,4 +667,26 @@ final class RemotePanel extends JPanel {
     boolean busy() {
         return busy;
     }
+
+    JTextField cacheLimitField() {
+        return limitField;
+    }
+
+    GhostButton saveLimitButton() {
+        return saveLimit;
+    }
+
+    GhostButton clearCacheButton() {
+        return clearCache;
+    }
+
+    /** O texto do uso do cache, se a parte dos ambientes gerenciados esta na tela. */
+    String cacheUsageText() {
+        return environmentSection.isVisible() ? environmentUsage.getText() : "";
+    }
+
+    boolean environmentSectionVisible() {
+        return environmentSection.isVisible();
+    }
+
 }

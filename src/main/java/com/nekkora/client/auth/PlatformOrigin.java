@@ -51,6 +51,19 @@ public record PlatformOrigin(String browser, String api) {
         return v == null || v.isBlank() ? null : v.trim();
     }
 
+    /**
+     * AMBIENTE-PYTHON-001: a API configurada e DESTE computador ({@code localhost} ou {@code 127.0.0.1})? So entao o aplicativo aceita
+     * um indice de pacotes de laboratorio para o ambiente gerenciado.
+     */
+    public boolean apiOnThisComputer() {
+        try {
+            String host = URI.create(api).getHost();
+            return host != null && (host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1"));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     public boolean production() {
         return PRODUCTION.equals(browser) && PRODUCTION.equals(api);
     }

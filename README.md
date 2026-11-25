@@ -76,6 +76,7 @@ A sessão dura 15 minutos, sem renovação, e fica só em memória.
 | `com.nekkora.client.nav` | o que a pessoa vê depois de entrar (perfil, organizações, escolha) e a porta das consultas | nada de interface nem de rede |
 | `com.nekkora.client.pack` | área local de pacotes: validação de ZIP, validador e impressão digital do pacote, empacotador, guarda por organização e ambiente | arquivos; nada de interface nem de rede |
 | `com.nekkora.client.run` | execução local: sondagem do Python, aprovações, lançamento sem shell, cancelamento, registros | processos e arquivos; nada de interface nem de rede |
+| `com.nekkora.client.env` | ambiente gerenciado por execução (AMBIENTE-PYTHON-001): a ÚNICA camada que cria ambiente virtual e chama o pip; ver `docs/ambiente-gerenciado.md` | processos (sempre `-I`, sem shell) e arquivos; nada de interface nem de rede própria |
 | `com.nekkora.client.ui` | janela, tela de entrada, seletor de organizações, avatar e menu, componentes | Swing e FlatLaf |
 
 O teste `ArchitectureTest` confere essas fronteiras, a dependência única de execução (FlatLaf) e a ausência de código

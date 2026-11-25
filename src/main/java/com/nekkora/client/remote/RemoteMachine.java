@@ -367,6 +367,54 @@ public final class RemoteMachine implements AutoCloseable {
         default Verified verify(String pythonLocalId, List<String> dependencies) {
             return new Verified("NOT_VERIFIED", List.of());
         }
+
+        /**
+         * AMBIENTE-PYTHON-001: este aplicativo sabe RESOLVER e PREPARAR ambientes gerenciados por execucao. Sem isso a capacidade nao
+         * e declarada e uma tentativa MANAGED e recusada como {@code CLIENT_INCOMPATIBLE}.
+         */
+        default boolean managesEnvironments() {
+            return false;
+        }
+
+        /**
+         * Resolve a lista efetiva no Python de {@code pythonLocalId} (uma instalacao deste computador), num ambiente TEMPORARIO, so com
+         * wheels, no indice publico. Bloqueia (minutos): roda no executor proprio do ambiente gerenciado. Nunca lanca.
+         */
+        default Resolved resolveEnvironment(String resolutionId, String pythonLocalId, List<String> dependencies, java.util.function.BooleanSupplier cancel) {
+            return new Resolved("NOT_RESOLVED", null, null, List.of(), new EnvFailure(null, "OTHER", "Este aplicativo não resolve ambientes gerenciados."));
+        }
+
+        /**
+         * Prepara o ambiente da tentativa (cria, instala EXATAMENTE o lock, confere, verifica). {@code stage} recebe cada etapa
+         * alcancada. Bloqueia (minutos): roda no executor proprio do ambiente gerenciado. Nunca lanca. Fora de READY, o ambiente ja foi
+         * apagado quando volta.
+         */
+        default Prepared prepareEnvironment(PrepareJob job, java.util.function.Consumer<String> stage, java.util.function.BooleanSupplier cancel) {
+            return new Prepared("FAILED", "ENVIRONMENT_SETUP_FAILED", null, null, List.of(), new EnvFailure(null, "OTHER", "Este aplicativo não prepara ambientes."),
+                    0, 0, "", null);
+        }
+
+        /**
+         * Com o executor do ambiente gerenciado PARADO (nada em resolucao nem em preparo): a poda do cache do pip e a limpeza das
+         * pastas de resolucao que sobraram de uma queda.
+         */
+        default void environmentsIdle() {
+        }
+
+        /** O cache do pip: quanto ocupa e o limite vigente. Nulo: este aplicativo nao tem cache de ambiente. */
+        default long[] environmentCache() {
+            return null;
+        }
+
+        /** Grava o novo limite do cache (MiB, 0 a 20480). {@code false}: fora da faixa, ou nao gravou. */
+        default boolean environmentCacheLimit(int mib) {
+            return false;
+        }
+
+        /** Apaga o cache do pip. So e chamado com o executor parado. */
+        default boolean clearEnvironmentCache() {
+            return false;
+        }
     }
 
     /**
@@ -499,9 +547,18 @@ public final class RemoteMachine implements AutoCloseable {
     public record ResultFile(String name, String file, long size) {
     }
 
-    /** {@code pythonLocalId}: a identidade LOCAL do Python escolhido (com o caminho); nunca sai deste computador. */
+    /**
+     * {@code pythonLocalId}: a identidade LOCAL do Python escolhido (com o caminho); nunca sai deste computador.
+     * {@code environmentPython}: no modo MANAGED, o interpretador do ambiente PREPARADO para esta tentativa (dentro da pasta dela);
+     * nulo no modo PREPARED, em que o Python escolhido e usado como esta.
+     */
     public record Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
-                      String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir, LogSink log) {
+                      String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir, LogSink log, String environmentPython) {
+
+        public Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
+                   String sha256, String fingerprint, List<String> dependencies, String pythonLocalId, String dir, LogSink log) {
+            this(attemptId, organizationId, workspaceId, automationId, automationVersionId, zip, sha256, fingerprint, dependencies, pythonLocalId, dir, log, null);
+        }
 
         /** Sem quem receba a saida do processo. */
         public Job(String attemptId, String organizationId, String workspaceId, String automationId, String automationVersionId, String zip,
@@ -509,6 +566,59 @@ public final class RemoteMachine implements AutoCloseable {
             this(attemptId, organizationId, workspaceId, automationId, automationVersionId, zip, sha256, fingerprint, dependencies, pythonLocalId, dir, null);
         }
     }
+
+    // ------------------------------------------------------------------ AMBIENTE-PYTHON-001: ambiente gerenciado por execucao
+
+    private static final Pattern LOCK_NAME = Pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$");
+    private static final Pattern LOCK_VERSION = Pattern.compile("^[0-9][0-9A-Za-z.+!_-]{0,63}$");
+    private static final Pattern LOCK_SHA = Pattern.compile("^[0-9a-f]{64}$");
+
+    /** Um item do lock: nome, versao, SHA-256 do wheel e o nome do arquivo (sem pasta). */
+    public record LockItem(String name, String version, String sha256, String fileName) {
+        /** Dentro do formato do contrato. */
+        public boolean valid() {
+            return name != null && LOCK_NAME.matcher(name).matches() && version != null && LOCK_VERSION.matcher(version).matches() && sha256 != null
+                    && LOCK_SHA.matcher(sha256).matches() && fileName != null && fileName.length() <= 200 && fileName.endsWith(".whl")
+                    && !fileName.contains("/") && !fileName.contains("\\") && !fileName.contains("..");
+        }
+    }
+
+    /** Uma falha de resolucao ou de preparo: o item (pode ser nulo), a fase do contrato e um resumo de ate 500 caracteres, sem segredos. */
+    public record EnvFailure(String requirement, String phase, String summary) {
+    }
+
+    /** A resposta a um pedido de resolucao. {@code outcome}: RESOLVED, INCOMPATIBLE, ENVIRONMENT_GONE ou NOT_RESOLVED. */
+    public record Resolved(String outcome, String pythonVersion, String pipVersion, List<LockItem> lock, EnvFailure failure) {
+        public Resolved {
+            lock = lock == null ? List.of() : List.copyOf(lock);
+        }
+    }
+
+    /** O que preparar: a pasta da tentativa, o Python-base (identidade local), o lock aceito, a lista efetiva e as verificacoes. */
+    public record PrepareJob(String attemptId, String dir, String pythonLocalId, List<LockItem> lock, List<String> dependencies, List<String> checks) {
+    }
+
+    /**
+     * O preparo terminou. {@code outcome}: READY, FAILED ou CANCELLED; {@code refusal}: o motivo de recusa quando FAILED
+     * ({@code ENVIRONMENT_SETUP_FAILED}, {@code DEPENDENCY_INSTALL_FAILED}, {@code EXTERNAL_PREREQUISITE_MISSING}). {@code python}: o
+     * interpretador do ambiente pronto (so em READY; nunca sai deste computador). {@code log}: ja sem segredos, ate 64 KiB.
+     */
+    public record Prepared(String outcome, String refusal, String pythonVersion, String pipVersion, List<LockItem> installed, EnvFailure failure, long createMs,
+                           long installMs, String log, String python) {
+        public Prepared {
+            installed = installed == null ? List.of() : List.copyOf(installed);
+        }
+    }
+
+    /** O relatorio do preparo enviado a Platform. {@code outcome}: READY, FAILED ou INTERRUPTED. */
+    public record EnvironmentReport(String outcome, String pythonVersion, String pipVersion, List<LockItem> installed, EnvFailure failure, long createMs,
+                                    long installMs, String log) {
+    }
+
+    /** O cache do pip do ambiente gerenciado: quanto ocupa, o limite vigente (MiB) e se a maquina esta parada (nada em preparo). */
+    public record CacheView(long bytes, int limitMiB, boolean idle) {
+    }
+
 
     /**
      * Quem recebe a saida do processo da tentativa, linha a linha, enquanto ele roda. Tem de voltar logo e nao lanca: e a fila
@@ -550,6 +660,407 @@ public final class RemoteMachine implements AutoCloseable {
         this.work = work;
     }
 
+    // ------------------------------------------------------------------ AMBIENTE-PYTHON-001: o executor do ambiente gerenciado
+
+    /** Durante o preparo, a etapa (ou PREPARING) e repetida a cada 30 s: renova o prazo da comunicacao. */
+    static final long ENVIRONMENT_RENEW_MILLIS = 30_000;
+
+    /**
+     * Resolucao e preparo rodam AQUI, um por vez, numa thread propria: a presenca (60 s) e a consulta (15 s) seguem na thread
+     * delas e nunca esperam o pip. A conversa com a Platform continua sendo feita pela consulta (sob a trava das operacoes).
+     */
+    private final java.util.concurrent.ThreadPoolExecutor environments = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>(), r -> {
+                Thread t = new Thread(r, "ambiente-gerenciado");
+                t.setDaemon(true);
+                return t;
+            });
+    /** Quantas tarefas do executor estao na fila ou rodando. Zero: o executor esta parado. */
+    private final java.util.concurrent.atomic.AtomicInteger environmentTasks = new java.util.concurrent.atomic.AtomicInteger();
+    /** A ultima presenca aceita disse que a Platform oferece o ambiente gerenciado: so entao a capacidade e declarada. */
+    private volatile boolean managedOffered;
+
+    /** Um pedido de resolucao recebido nesta abertura do aplicativo; {@code result} nulo enquanto roda. */
+    private static final class ResolutionTask {
+        final String id;
+        volatile Resolved result;
+        volatile boolean cancel;
+
+        ResolutionTask(String id) {
+            this.id = id;
+        }
+    }
+
+    /** Resolucoes recebidas e ainda nao respondidas (a resposta que nao chegou a Platform e repetida na consulta seguinte). */
+    private final java.util.Map<String, ResolutionTask> resolutions = new java.util.concurrent.ConcurrentHashMap<>();
+    /** As ultimas respondidas: um pedido repetido antes de a Platform registrar a resposta nao recomeca a resolucao. */
+    private final java.util.Set<String> answered = java.util.Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+            return size() > 64;
+        }
+    });
+
+    /** O preparo do ambiente da tentativa em andamento NESTE processo (nulo: nenhum). So em memoria. */
+    private static final class PreparationTask {
+        final String attemptId;
+        final String zip;
+        final String sha;
+        final String dir;
+        final String python;
+        /** As etapas alcancadas, na ordem, e quantas ja foram informadas a Platform. */
+        final List<String> stages = new java.util.concurrent.CopyOnWriteArrayList<>();
+        int stagesSent;
+        long renewedAt;
+        volatile Prepared result;
+        volatile boolean cancel;
+        /** Por que a Platform mandou parar: CANCEL (cancelamento pedido) ou ENDED (ela nao quer mais); nulo: nao mandou. */
+        volatile String stop;
+
+        PreparationTask(String attemptId, String zip, String sha, String dir, String python) {
+            this.attemptId = attemptId;
+            this.zip = zip;
+            this.sha = sha;
+            this.dir = dir;
+            this.python = python;
+        }
+    }
+
+    private volatile PreparationTask preparation;
+
+    /** O executor do ambiente gerenciado esta parado: nada em resolucao, nada em preparo, nada na fila. */
+    public boolean environmentsIdle() {
+        return environmentTasks.get() == 0 && preparation == null;
+    }
+
+    /** Poe uma tarefa no executor. Quando a ultima termina (executor parado), vem a manutencao: poda do cache e sobras de resolucao. */
+    private void onEnvironments(Runnable task) {
+        environmentTasks.incrementAndGet();
+        try {
+            environments.execute(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException | LinkageError x) {
+                    // a tarefa ja registrou o que pode; o executor segue
+                } finally {
+                    if (environmentTasks.decrementAndGet() == 0) {
+                        // nada na fila: a poda nunca acontece durante um preparo ou uma resolucao (mesma thread, um por vez)
+                        Work w = work;
+                        try {
+                            if (w != null && w.managesEnvironments()) {
+                                w.environmentsIdle();
+                                cacheSeen = w.environmentCache();
+                            }
+                        } catch (RuntimeException | LinkageError x) {
+                            // fica para a proxima
+                        }
+                        changed();
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException x) {
+            environmentTasks.decrementAndGet();
+        }
+    }
+
+    /** Pede uma consulta JA (na thread da presenca), para levar a Platform a etapa nova ou o resultado que acabou de sair. */
+    private void kick() {
+        ScheduledExecutorService b;
+        synchronized (this) {
+            b = beats;
+        }
+        if (b == null) {
+            return;
+        }
+        try {
+            b.execute(() -> {
+                try {
+                    pull();
+                } catch (RuntimeException | LinkageError x) {
+                    // a consulta periodica tenta de novo
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException x) {
+            // o aplicativo esta fechando
+        }
+    }
+
+    /**
+     * Um pedido de RESOLUCAO que veio na consulta: roda no executor proprio (um por vez) e a resposta vai na consulta seguinte. O
+     * Python e localizado pelo identificador opaco; se nao esta mais aqui, ENVIRONMENT_GONE - nenhum outro e escolhido.
+     */
+    private void resolve(MachineChannel.Resolution r) {
+        Work w = work;
+        if (r == null || w == null) {
+            return;
+        }
+        synchronized (answered) {
+            if (answered.contains(r.resolutionId())) {
+                return;
+            }
+        }
+        ResolutionTask t = new ResolutionTask(r.resolutionId());
+        if (resolutions.putIfAbsent(r.resolutionId(), t) != null) {
+            return;
+        }
+        onEnvironments(() -> {
+            Resolved out;
+            try {
+                PythonSeen seen = localSeen(r.pythonEnvironmentId());
+                if (seen == null) {
+                    out = new Resolved("ENVIRONMENT_GONE", null, null, List.of(), null);
+                } else if (!w.managesEnvironments()) {
+                    out = new Resolved("NOT_RESOLVED", null, null, List.of(), new EnvFailure(null, "OTHER", "Este aplicativo não resolve ambientes gerenciados."));
+                } else {
+                    out = w.resolveEnvironment(r.resolutionId(), seen.localId(), r.dependencies(), () -> t.cancel);
+                }
+            } catch (RuntimeException | LinkageError x) {
+                out = null;
+            }
+            if (out == null || !List.of("RESOLVED", "INCOMPATIBLE", "ENVIRONMENT_GONE", "NOT_RESOLVED").contains(out.outcome())) {
+                out = new Resolved("NOT_RESOLVED", null, null, List.of(), new EnvFailure(null, "OTHER", "A resolução falhou neste computador."));
+            }
+            t.result = out;
+            kick();
+        });
+    }
+
+    /** As resolucoes terminadas vao a Platform. Falha passageira: fica para a proxima consulta. Credencial recusada: sobe. */
+    private void answerResolutions(MachineVault.Link current) throws Refused {
+        for (ResolutionTask t : List.copyOf(resolutions.values())) {
+            Resolved r = t.result;
+            if (r == null) {
+                continue;
+            }
+            try {
+                channel.answerResolution(current.credential(), t.id, r);
+            } catch (Refused x) {
+                if (x.problem() == Problem.LINK_ENDED || x.problem() == Problem.NOT_ENABLED) {
+                    throw x;
+                }
+                continue;
+            }
+            resolutions.remove(t.id);
+            synchronized (answered) {
+                answered.add(t.id);
+            }
+        }
+    }
+
+    /**
+     * Comeca o PREPARO do ambiente de uma tentativa MANAGED: o diario passa a ENV_PREPARING ANTES de qualquer coisa ser criada, e o
+     * preparo vai para o executor proprio. A consulta segue com a tentativa a cada vez ({@link #preparing}).
+     */
+    private AttemptJournal.Entry startPreparation(AttemptJournal.Entry e, Work w, Path zip, String sha, String python, Path dir) {
+        AttemptJournal.Entry preparing = e.preparingEnvironment();
+        try {
+            journal.save(preparing);
+            unsavedEntry = null;
+        } catch (IOException x) {
+            // sem gravar a fase, nada e criado: um reinicio nao saberia que havia um preparo
+            return refuse(e, "DISK_PRESSURE");
+        }
+        PreparationTask t = new PreparationTask(e.attemptId(), zip.toString(), sha, dir.toString(), python);
+        t.renewedAt = clock.millis();
+        preparation = t;
+        MachineChannel.Managed m = e.environment();
+        PrepareJob job = new PrepareJob(e.attemptId(), dir.toString(), python, m.lock(), e.dependencies(), m.checks());
+        onEnvironments(() -> {
+            Prepared out;
+            try {
+                out = w.prepareEnvironment(job, s -> {
+                    if (s != null && !t.stages.contains(s)) {
+                        t.stages.add(s);
+                        kick();
+                    }
+                }, () -> t.cancel);
+            } catch (RuntimeException | LinkageError x) {
+                out = null;
+            }
+            if (out == null || !List.of("READY", "FAILED", "CANCELLED").contains(out.outcome())) {
+                out = new Prepared("FAILED", "ENVIRONMENT_SETUP_FAILED", null, null, List.of(), new EnvFailure(null, "OTHER", "O preparo falhou neste computador."),
+                        0, 0, "", null);
+            }
+            t.result = out;
+            kick();
+        });
+        changed();
+        return preparing;
+    }
+
+    /**
+     * A tentativa em ENV_PREPARING, a cada consulta:
+     * <ul>
+     * <li>sem preparo deste processo para ela: o aplicativo foi fechado no meio. Como o lancamento so acontece DEPOIS de o diario
+     * gravar STARTING, a automacao com certeza nao foi iniciada: relatorio INTERRUPTED e recusa ENVIRONMENT_SETUP_INTERRUPTED;</li>
+     * <li>preparo em andamento: a etapa nova vai ja; senao, a cada 30 s a etapa (ou PREPARING) e repetida para renovar o prazo. Se a
+     * Platform mandar parar (cancelamento ou fim), o pip e o que ele abriu sao encerrados;</li>
+     * <li>preparo pronto: relatorio READY, a Platform reconfere (STARTING), o diario grava STARTING e SO ENTAO a automacao e lancada
+     * com o interpretador do ambiente;</li>
+     * <li>preparo que falhou: primeiro o relatorio FAILED; depois a recusa com o motivo. A automacao nao e iniciada.</li>
+     * </ul>
+     */
+    private AttemptJournal.Entry preparing(MachineVault.Link current, AttemptJournal.Entry e, Work w) throws Refused {
+        String credential = current.credential();
+        PreparationTask t = preparation;
+        if (t == null || !t.attemptId.equals(e.attemptId())) {
+            // sem falha estruturada (o contrato so a tem em FAILED): o registro diz o que houve
+            channel.environmentReport(credential, e.attemptId(), e.token(), e.epoch(), new EnvironmentReport("INTERRUPTED", null, null, List.of(), null, 0, 0,
+                    "[Nekkora Agent] O aplicativo deste computador foi fechado durante o preparo do ambiente; a automação não foi iniciada."));
+            return refuse(e, "ENVIRONMENT_SETUP_INTERRUPTED");
+        }
+        Prepared r = t.result;
+        // as etapas alcancadas e ainda nao informadas vao primeiro, na ordem (o preparo pode ter andado entre duas consultas)
+        MachineChannel.AttemptStatus said = null;
+        while (t.stagesSent < t.stages.size()) {
+            said = channel.stage(credential, e.attemptId(), e.token(), e.epoch(), t.stages.get(t.stagesSent));
+            t.stagesSent++;
+            t.renewedAt = clock.millis();
+        }
+        if (r == null) {
+            if (!t.cancel && said == null && clock.millis() - t.renewedAt >= ENVIRONMENT_RENEW_MILLIS) {
+                // nada novo a dizer ha 30 s: a ultima etapa (ou PREPARING) e repetida, e isso renova o prazo da comunicacao
+                said = t.stages.isEmpty() ? channel.state(credential, e.attemptId(), e.token(), e.epoch(), "PREPARING", null, null)
+                        : channel.stage(credential, e.attemptId(), e.token(), e.epoch(), t.stages.get(t.stages.size() - 1));
+                t.renewedAt = clock.millis();
+            }
+            MachineChannel.AttemptStatus s = said;
+            if (s != null && !t.cancel) {
+                if (!s.proceed() || s.cancelRequested()) {
+                    // o pip e o que ele abriu sao encerrados pelo grupo de processos; o resultado (CANCELLED) vem na proxima consulta
+                    // cancelamento pedido: a tentativa termina CANCELLED, informada daqui; senao a Platform ja a encerrou
+                    t.stop = s.cancelRequested() ? "CANCEL" : "ENDED";
+                    t.cancel = true;
+                    if (!s.cancelRequested()) {
+                        declined(e, s);
+                    }
+                }
+            }
+            return e;
+        }
+        if ("CANCELLED".equals(r.outcome())) {
+            if (t.stop == null) {
+                // parado pelo fechamento do aplicativo: a proxima abertura trata como interrompido
+                return e;
+            }
+            channel.environmentReport(credential, e.attemptId(), e.token(), e.epoch(), report("INTERRUPTED", r));
+            if ("CANCEL".equals(t.stop)) {
+                AttemptJournal.Entry cancelled = e.reporting("CANCELLED", null, null);
+                keep(cancelled);
+                preparation = null;
+                return cancelled;
+            }
+            // a Platform ja encerrou a tentativa: nao ha estado a informar
+            forget(e, w);
+            return null;
+        }
+        if (!"READY".equals(r.outcome())) {
+            // primeiro o relatorio (dependencia, fase, resumo e registro sem segredos); depois a recusa com o motivo
+            channel.environmentReport(credential, e.attemptId(), e.token(), e.epoch(), report("FAILED", r));
+            AttemptJournal.Entry refused = refuse(e, r.refusal() == null ? "ENVIRONMENT_SETUP_FAILED" : r.refusal());
+            preparation = null;
+            return refused;
+        }
+        channel.environmentReport(credential, e.attemptId(), e.token(), e.epoch(), report("READY", r));
+        // imediatamente antes de iniciar, a Platform reconfere (aceite revogado: AUTHORIZATION_REVOKED); nada e iniciado se ela recusar
+        MachineChannel.AttemptStatus starting = channel.state(credential, e.attemptId(), e.token(), e.epoch(), "STARTING", null, null);
+        if (!starting.proceed()) {
+            declined(e, starting);
+            forget(e, w);
+            return null;
+        }
+        AttemptJournal.Entry s = e.starting();
+        try {
+            journal.save(s);
+        } catch (IOException x) {
+            preparation = null;
+            return refuse(s.reporting(null, null, null), "DISK_PRESSURE");
+        }
+        preparation = null;
+        // SO AGORA, com o diario em STARTING, a automacao e lancada - com o interpretador do ambiente preparado
+        return launch(current, s, w, Path.of(t.zip), t.sha, t.python, Path.of(t.dir), r.python());
+    }
+
+    private static EnvironmentReport report(String outcome, Prepared r) {
+        return new EnvironmentReport(outcome, r.pythonVersion(), r.pipVersion(), "READY".equals(outcome) ? r.installed() : List.of(),
+                "FAILED".equals(outcome) ? r.failure() : null, r.createMs(), r.installMs(), r.log());
+    }
+
+    /** O ultimo retrato do cache (bytes, limite); nulo antes do primeiro. Medir o cache percorre a pasta: nunca na linha da tela. */
+    private volatile long[] cacheSeen;
+
+    /**
+     * O cache do pip do ambiente gerenciado, para a tela: o ultimo retrato medido e se a maquina esta parada AGORA. Vazio: este
+     * aplicativo nao tem ambiente gerenciado, ou o cache ainda nao foi medido ({@link #refreshEnvironmentCache}). Nunca lanca e nao
+     * toca no disco.
+     */
+    public Optional<CacheView> environmentCache() {
+        Work w = work;
+        long[] c = cacheSeen;
+        return w == null || !w.managesEnvironments() || c == null ? Optional.empty() : Optional.of(new CacheView(c[0], (int) c[1], environmentsIdle()));
+    }
+
+    /** Mede o cache agora (percorre a pasta: fora da linha da tela) e avisa a tela. Nunca lanca. */
+    public void refreshEnvironmentCache() {
+        Work w = work;
+        try {
+            long[] c = w == null || !w.managesEnvironments() ? null : w.environmentCache();
+            if (c != null) {
+                cacheSeen = c;
+                changed();
+            }
+        } catch (RuntimeException x) {
+            // fica o retrato anterior
+        }
+    }
+
+    /** Muda o limite do cache (MiB, 0 a 20480; 0 desliga). A poda roda em seguida, com o executor parado. */
+    public boolean environmentCacheLimit(int mib) {
+        Work w = work;
+        if (w == null || mib < 0 || mib > 20480) {
+            return false;
+        }
+        boolean ok;
+        try {
+            ok = w.environmentCacheLimit(mib);
+        } catch (RuntimeException x) {
+            ok = false;
+        }
+        if (ok) {
+            onEnvironments(() -> {
+            });
+        }
+        changed();
+        return ok;
+    }
+
+    /** "Limpar cache": so com a maquina parada para o ambiente gerenciado (nada em resolucao nem em preparo). Bloqueia. */
+    public boolean clearEnvironmentCache() {
+        Work w = work;
+        if (w == null || !w.managesEnvironments() || !environmentsIdle()) {
+            return false;
+        }
+        java.util.concurrent.CompletableFuture<Boolean> done = new java.util.concurrent.CompletableFuture<>();
+        onEnvironments(() -> {
+            done.complete(w.clearEnvironmentCache());
+            cacheSeen = w.environmentCache();
+        });
+
+        try {
+            return done.get(60, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException | RuntimeException x) {
+            return false;
+        } catch (InterruptedException x) {
+            Thread.currentThread().interrupt();
+            return false;
+        } finally {
+            changed();
+        }
+    }
+
+
     /**
      * Uma consulta de entrega. Nunca lanca. Com uma tentativa no diario, segue com ela (mesmo com o recebimento pausado); sem
      * tentativa no diario, so pergunta a Platform se este aplicativo executa ({@link #setWork}).
@@ -586,6 +1097,8 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
+                // AMBIENTE-PYTHON-001: as resolucoes que terminaram vao primeiro (falha passageira: na proxima consulta)
+                answerResolutions(current);
                 deliver(current, pending);
                 if (pending != null) {
                     // com uma tentativa no diario a maquina nao pergunta por trabalho: o pedido de conferencia vem pela rota propria.
@@ -662,6 +1175,8 @@ public final class RemoteMachine implements AutoCloseable {
             MachineChannel.Next next = channel.next(credential);
             // o pedido de conferencia de dependencias vem junto com a consulta de trabalho e nao depende dela
             verify(current, next.check(), work);
+            // AMBIENTE-PYTHON-001: o pedido de resolucao tambem (vai para o executor proprio; nao segura a consulta)
+            resolve(next.resolution());
             MachineChannel.Offer o = next.offer();
             if (o == null) {
                 return;
@@ -687,6 +1202,13 @@ public final class RemoteMachine implements AutoCloseable {
                 lastDeclined = null; // uma execucao nova foi recebida: o aviso da anterior ja nao e o "ultimo"
                 e = e.withAck();
                 keep(e);
+            }
+            if (e.report() == null && e.phase() == AttemptJournal.Phase.ENV_PREPARING) {
+                // AMBIENTE-PYTHON-001: o ambiente da tentativa esta sendo preparado (ou o aplicativo fechou no meio do preparo)
+                e = preparing(current, e, w);
+                if (e == null || e.report() == null) {
+                    return;
+                }
             }
             if (e.report() == null && e.phase() == AttemptJournal.Phase.STARTING) {
                 // o aplicativo fechou entre pedir o inicio e gravar a execucao: nao ha prova de nada, e nada e lancado de novo
@@ -781,7 +1303,8 @@ public final class RemoteMachine implements AutoCloseable {
      */
     private AttemptJournal.Entry begin(MachineVault.Link current, AttemptJournal.Entry e, Work w) throws Refused {
         String credential = current.credential();
-        if (w == null || !RUNNABLE_RULE.equals(e.packageFingerprintRule()) || e.workspaceId() == null || e.pythonEnvironmentId() == null) {
+        if (w == null || !RUNNABLE_RULE.equals(e.packageFingerprintRule()) || e.workspaceId() == null || e.pythonEnvironmentId() == null
+                || (e.environment() != null && !w.managesEnvironments())) {
             return refuse(e, "CLIENT_INCOMPATIBLE");
         }
         if (w.busy()) {
@@ -821,6 +1344,10 @@ public final class RemoteMachine implements AutoCloseable {
             // o Python escolhido nao esta mais neste computador: nenhum outro e escolhido
             return refuse(e, "ENVIRONMENT_GONE");
         }
+        if (e.environment() != null) {
+            // AMBIENTE-PYTHON-001: o ambiente da tentativa e preparado ANTES de pedir o inicio; a automacao so e lancada depois
+            return startPreparation(e, w, zip, sha, python, dir);
+        }
         // imediatamente antes de iniciar, a Platform reconfere; cancelamento pedido ou condicao perdida: nada e iniciado
         MachineChannel.AttemptStatus starting = channel.state(credential, e.attemptId(), e.token(), e.epoch(), "STARTING", null, null);
         if (!starting.proceed()) {
@@ -835,12 +1362,22 @@ public final class RemoteMachine implements AutoCloseable {
             // sem conseguir gravar a intencao, nao inicia: um reinicio nao saberia que algo foi lancado
             return refuse(e.reporting(null, null, null), "DISK_PRESSURE");
         }
+        return launch(current, e, w, zip, sha, python, dir, null);
+    }
+
+    /**
+     * Com o diario ja em STARTING: quem executa confere e inicia. {@code environmentPython}: o interpretador do ambiente gerenciado
+     * preparado para a tentativa (nulo no modo PREPARED: o Python escolhido, como esta).
+     */
+    private AttemptJournal.Entry launch(MachineVault.Link current, AttemptJournal.Entry e, Work w, Path zip, String sha, String python, Path dir,
+                                        String environmentPython) throws Refused {
+        String credential = current.credential();
         String run;
         // a fila local dos registros desta tentativa: o que o processo escrever entra nela (ja sem segredos) e vai a Platform
         LogQueue q = queue(current, e);
         try {
             run = w.start(new Job(e.attemptId(), current.organizationId(), e.workspaceId(), e.automationId(), e.automationVersionId(),
-                    zip.toString(), sha, e.packageFingerprint(), e.dependencies(), python, dir.toString(), q == null ? null : q::add));
+                    zip.toString(), sha, e.packageFingerprint(), e.dependencies(), python, dir.toString(), q == null ? null : q::add, environmentPython));
         } catch (WorkRefused x) {
             dropQueue(true);
             return refuse(e, x.reason());
@@ -974,6 +1511,12 @@ public final class RemoteMachine implements AutoCloseable {
 
     /** A identidade local do Python cujo identificador opaco e o indicado, se ele ainda esta neste computador. */
     private String localPython(String environmentId) {
+        PythonSeen s = localSeen(environmentId);
+        return s == null ? null : s.localId();
+    }
+
+    /** O Python deste computador cujo identificador opaco e o indicado (com o tipo), se ele ainda esta aqui. */
+    private PythonSeen localSeen(String environmentId) {
         PythonFinder finder = pythons;
         if (finder == null) {
             return null;
@@ -984,7 +1527,7 @@ public final class RemoteMachine implements AutoCloseable {
             for (PythonSeen s : finder.find()) {
                 if (s != null && s.localId() != null && environmentId.equals(
                         Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(s.localId().getBytes(java.nio.charset.StandardCharsets.UTF_8))))) {
-                    return s.localId();
+                    return s;
                 }
             }
         } catch (IOException | java.security.GeneralSecurityException | RuntimeException | LinkageError x) {
@@ -1478,6 +2021,12 @@ public final class RemoteMachine implements AutoCloseable {
             dropQueue(false);
         }
         unsavedEntry = null;
+        PreparationTask t = preparation;
+        if (t != null && t.attemptId.equals(e.attemptId())) {
+            // a tentativa acabou com o ambiente ainda em preparo: o pip e o que ele abriu sao encerrados; o ambiente sai no fim dele
+            t.cancel = true;
+            preparation = null;
+        }
         try {
             journal.clear();
         } catch (IOException x) {
@@ -1734,8 +2283,19 @@ public final class RemoteMachine implements AutoCloseable {
                 return;
             }
             try {
-                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, work != null,
-                        journal.load(current.agentId()).isPresent() || (work != null && work.busy()), kept().spaceLow());
+                Work w = work;
+                // AMBIENTE-PYTHON-001: a capacidade so e declarada depois de uma presenca dizer que a Platform oferece o ambiente
+                // gerenciado; sem isso o corpo e o de sempre
+                boolean managed = managedOffered && w != null && w.managesEnvironments();
+                boolean busy = journal.load(current.agentId()).isPresent() || (w != null && w.busy());
+                MachineChannel.Presence p = channel.heartbeat(current.credential(), appVersion, w != null, busy, kept().spaceLow(), managed);
+                managedOffered = p.managedEnvironments();
+                if (managedOffered && !managed && w != null && w.managesEnvironments()) {
+                    // a oferta acabou de chegar (aplicativo recem-aberto ou chave recem-ligada): a capacidade vai ja, numa segunda
+                    // presenca, e a maquina nao aparece como "nao compativel" ate o minuto seguinte (achado na validacao de ponta a ponta)
+                    p = channel.heartbeat(current.credential(), appVersion, true, busy, kept().spaceLow(), true);
+                    managedOffered = p.managedEnvironments();
+                }
                 MachineVault.Link next = current.withPaused(p.paused());
                 boolean renamed;
                 synchronized (this) {
@@ -1945,6 +2505,11 @@ public final class RemoteMachine implements AutoCloseable {
                 // fica para a proxima limpeza
             }
             reportLosses(current, ledger, now);
+            if (w.managesEnvironments()) {
+                // as sobras de resolucao e a poda do cache: no executor proprio, so quando ele estiver parado
+                onEnvironments(() -> {
+                });
+            }
             return cleaned;
         }
     }
@@ -2006,7 +2571,21 @@ public final class RemoteMachine implements AutoCloseable {
             beats.shutdownNow();
             beats = null;
         }
+        // o preparo ou a resolucao em andamento param: o pip e o que ele abriu sao encerrados. Um preparo interrompido assim e
+        // informado na proxima abertura (ENVIRONMENT_SETUP_INTERRUPTED)
+        PreparationTask t = preparation;
+        if (t != null) {
+            t.cancel = true;
+        }
+        resolutions.values().forEach(r -> r.cancel = true);
+        environments.shutdownNow();
+        try {
+            environments.awaitTermination(3, TimeUnit.SECONDS);
+        } catch (InterruptedException x) {
+            Thread.currentThread().interrupt();
+        }
     }
+
 
     private synchronized MachineVault.Link usable() {
         return ended ? null : link;

@@ -96,7 +96,14 @@ public final class ClientMain {
                     .map(p -> new com.nekkora.client.remote.RemoteMachine.PythonSeen(p.id(), p.virtual(), p.version())).toList());
             // execucao do que a Platform solicitar: o canal da maquina recebe e baixa; quem confere e executa e o motor, numa
             // execucao gerenciada (mesma vaga da local, registro proprio, sem as aprovacoes locais). So esta ponte ve os dois
-            remote.setWork(new RemoteWork(runner));
+            // AMBIENTE-PYTHON-001: o ambiente gerenciado por execucao (venv temporario a partir de uma instalacao deste computador; o
+            // Python da maquina nunca recebe nada). Indice: o PyPI publico; o de laboratorio so com a API deste computador
+            com.nekkora.client.env.ManagedEnvironments environments = new com.nekkora.client.env.ManagedEnvironments(data.remoteDir(),
+                    com.nekkora.client.env.ManagedEnvironments.index(origin.apiOnThisComputer(),
+                            System.getProperty(com.nekkora.client.env.ManagedEnvironments.LAB_INDEX_PROPERTY)),
+                    preferences::managedCacheMiB);
+            remote.setWork(new RemoteWork(runner, environments, preferences::saveManagedCacheMiB));
+
             // a vaga do computador mudou (execucao local ou da Platform): a tela e a disponibilidade informada sao atualizadas ja
             runner.onOccupancy(remote::occupancyChanged);
             // sobra de uma queda entre o desfecho e a limpeza: o codigo de tentativas antigas sai; pasta de saida nunca

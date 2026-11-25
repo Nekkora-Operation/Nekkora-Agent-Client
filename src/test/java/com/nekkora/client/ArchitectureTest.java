@@ -44,13 +44,20 @@ class ArchitectureTest {
     private static final Path RESOURCES = Path.of("src/main/resources");
 
     /** Camadas sem interface grafica. */
-    private static final Set<String> NO_SCREEN = Set.of("theme", "storage", "signin", "auth", "pack", "run", "nav", "remote");
+    private static final Set<String> NO_SCREEN = Set.of("theme", "storage", "signin", "auth", "pack", "run", "nav", "remote", "env");
     /** Camadas que falam com a rede: a da pessoa e a da maquina. */
     private static final Set<String> NETWORK = Set.of("auth", "remote");
     /** Nucleo local: nem rede, nem tela. */
     private static final Set<String> LOCAL_CORE = Set.of("pack", "run", "nav");
     /** Camadas que podem ler e gravar arquivos. */
-    private static final Set<String> DISK = Set.of("storage", "pack", "run", "remote");
+    private static final Set<String> DISK = Set.of("storage", "pack", "run", "remote", "env");
+    /**
+     * AMBIENTE-PYTHON-001: a UNICA camada que cria um ambiente virtual e chama o pip (o ambiente gerenciado por execucao). Fora dela,
+     * em qualquer camada, continua proibido.
+     */
+    private static final String ENV = "env";
+    /** O que caracteriza instalar dependencias ou criar ambiente: os argumentos do pip e do venv, e outros instaladores. */
+    private static final Pattern INSTALL = Pattern.compile("(?i)\"-m\"|\"pip\"|\"pip3\"|ensurepip|\"install\"|\"--target\"|\"conda\"|\"uv\"|\"poetry\"|\"virtualenv\"|\"venv\"");
 
     private static List<Path> javaFiles(Path root) throws IOException {
         try (Stream<Path> s = Files.walk(root)) {
@@ -116,6 +123,10 @@ class ArchitectureTest {
                 assertEquals(2, frases.results().count(), "as duas frases de recusa por licenca mudaram de forma");
                 c = frases.replaceAll("");
             }
+            if (ENV.equals(layer(f))) {
+                // AMBIENTE-PYTHON-001: a camada env e a unica em que "venv" e o pip existem (ver soACamadaEnvCriaAmbienteEChamaOPip)
+                c = Pattern.compile("(?iu)\\bvenv\\w*|pip install").matcher(c).replaceAll("");
+            }
             boolean remota = "remote".equals(layer(f));
             if (remota) {
                 // campo do contrato da maquina (lista sempre vazia nesta versao), nao a classe do Agent administrativo
@@ -150,7 +161,9 @@ class ArchitectureTest {
                 // verificacao de dependencias sob demanda (plano 5.9): o pedido pendente e a resposta
                 "/agent/api/v1/remote/dependency-checks/",
                 // T02, entrega: perguntar o que ha, confirmar o recebimento e informar o estado. Nenhuma de download, registro ou resultado
-                "/agent/api/v1/remote/next", "/agent/api/v1/remote/attempts/")), rotas);
+                "/agent/api/v1/remote/next", "/agent/api/v1/remote/attempts/",
+                // AMBIENTE-PYTHON-001: a resposta da maquina a um pedido de resolucao do ambiente gerenciado
+                "/agent/api/v1/remote/environment-resolutions/")), rotas);
     }
 
     /**
@@ -229,7 +242,7 @@ class ArchitectureTest {
         }
         Set<String> permitidos = Set.of("com.nekkora.client", "com.nekkora.client.theme", "com.nekkora.client.storage", "com.nekkora.client.signin",
                 "com.nekkora.client.auth", "com.nekkora.client.ui", "com.nekkora.client.pack", "com.nekkora.client.run", "com.nekkora.client.nav",
-                "com.nekkora.client.remote");
+                "com.nekkora.client.remote", "com.nekkora.client.env");
         for (String p : pacotes) {
             assertTrue(permitidos.contains(p), "pacote fora da lista: " + p);
         }
@@ -326,6 +339,12 @@ class ArchitectureTest {
             if ("run".equals(layer(f))) {
                 runTemProcesso |= c.contains("ProcessBuilder");
                 achados.addAll(matches(f, c, shell, "shell na execucao"));
+            } else if (ENV.equals(layer(f))) {
+                // AMBIENTE-PYTHON-001: a camada env tambem cria processos (o venv e o pip), so por EnvCommand, nunca por shell
+                achados.addAll(matches(f, c, shell, "shell no ambiente gerenciado"));
+                if (!f.endsWith("EnvCommand.java")) {
+                    achados.addAll(matches(f, c, Pattern.compile("ProcessBuilder|Runtime\\.getRuntime"), "processo no ambiente gerenciado fora de EnvCommand"));
+                }
             } else {
                 achados.addAll(matches(f, c, processo, "processo fora de run"));
             }
@@ -393,7 +412,57 @@ class ArchitectureTest {
     }
 
     /**
+     * AMBIENTE-PYTHON-001 - o estreitamento PROVADO: criar ambiente virtual e chamar o pip existe numa camada so, {@code env}.
+     * <ul>
+     * <li>os argumentos de instalacao (pip, venv, install, -m e os outros instaladores) aparecem em {@code env} e em NENHUMA outra
+     * camada - nem no nucleo local ({@code pack}, {@code run}, {@code nav}), nem no canal da maquina, na tela, na entrada ou na raiz;</li>
+     * <li>em {@code env}, todo processo nasce em {@code EnvCommand}: argumentos em lista, {@code -I} sempre como primeiro argumento,
+     * ambiente reduzido, grupo de processos proprio; e todo {@code pip install} e {@code --isolated --no-input};</li>
+     * <li>{@code env} nao fala com a rede, nao tem tela e nao conhece o canal da maquina, a entrada nem a navegacao.</li>
+     * </ul>
+     */
+    @Test
+    void soACamadaEnvCriaAmbienteEChamaOPip() throws IOException {
+        List<String> achados = new ArrayList<>();
+        int env = 0;
+        boolean temPip = false;
+        boolean temVenv = false;
+        for (Path f : javaFiles(MAIN)) {
+            String c = code(f);
+            if (f.endsWith("ExecutionPackage.java")) {
+                // a lista fechada de pastas que nunca entram num pacote (uma recusa, nao um uso; ver nenhumCodigoNemIntegracaoDoAgentAdministrativo)
+                c = c.replace("List.of(\".venv\", \"venv\", \"env\", \"__pycache__\"", "");
+            }
+            if (!ENV.equals(layer(f))) {
+                achados.addAll(matches(f, c, INSTALL, "instalacao fora da camada env"));
+
+                continue;
+            }
+            env++;
+            temPip |= c.contains("\"-m\", \"pip\", \"install\"");
+            temVenv |= c.contains("\"-m\", \"venv\"");
+            Matcher install = Pattern.compile("\"pip\", \"install\"(.{0,80})").matcher(c);
+            while (install.find()) {
+                if (!install.group(1).startsWith(", \"--isolated\", \"--no-input\"")) {
+                    achados.add(f.getFileName() + ": pip install sem --isolated --no-input");
+                }
+            }
+            achados.addAll(matches(f, c, Pattern.compile("java\\.net\\.|javax\\.net\\.|HttpClient|URLConnection|\\bSocket|javax\\.swing|java\\.awt"),
+                    "rede ou tela no ambiente gerenciado"));
+            achados.addAll(matches(f, c, Pattern.compile("com\\.nekkora\\.client\\.(remote|auth|signin|ui|nav)\\b"), "o ambiente gerenciado nao conhece o canal nem a tela"));
+            if (f.endsWith("EnvCommand.java")) {
+                assertTrue(c.contains("cmd.add(\"-I\");") && c.indexOf("cmd.add(\"-I\");") < c.indexOf("cmd.addAll(args);"), "-I e sempre o primeiro argumento");
+                assertTrue(c.contains("PythonRuntime.minimalEnvironment(pb.environment())"), "o ambiente do processo e o reduzido");
+                assertTrue(c.contains("ProcessContainer.create()") && c.contains("group.add(p)"), "o processo entra num grupo proprio");
+            }
+        }
+        assertEquals(List.of(), achados);
+        assertTrue(env > 0 && temPip && temVenv, "a camada env existe e e nela que o ambiente e criado e o pip e chamado");
+    }
+
+    /**
      * O aplicativo nao registra nem imprime nada: sem log e sem saida de console, em nenhuma camada. Disco so em
+
      * {@code storage} (pasta de dados, tema, instancia unica), {@code pack} (pacotes) e {@code run} (registros da execucao);
      * a entrada nao grava nada. Nao pede nem le credencial: sem campo de senha, sem cookie, sem area de transferencia; campo
      * de texto comum so na camada de tela (nome local de um pacote).

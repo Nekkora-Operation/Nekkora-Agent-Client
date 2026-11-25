@@ -42,7 +42,7 @@ class RemoteDeliveryTest {
     private static final String LOCAL_PYTHON = "computador:c:\\python312\\python.exe";
 
     /** Quem executa, simulado: guarda o que recebeu e devolve o que o teste mandar. */
-    static final class FakeWork implements RemoteMachine.Work {
+    static class FakeWork implements RemoteMachine.Work {
         final Path root;
         final List<RemoteMachine.Job> jobs = new ArrayList<>();
         final List<String> cancelled = new ArrayList<>();
